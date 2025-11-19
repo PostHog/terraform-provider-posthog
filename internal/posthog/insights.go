@@ -122,7 +122,13 @@ func (c *DefaultClient) DeleteInsight(ctx context.Context, id int64) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, http.NoBody)
+	payload := map[string]any{"deleted": true}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
