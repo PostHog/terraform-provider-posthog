@@ -56,6 +56,7 @@ func (m InsightResourceModel) ToInsightRequest(ctx context.Context) (posthog.Ins
 
 	request := posthog.InsightRequest{
 		Query: query,
+		Saved: true,
 	}
 	if !m.Name.IsNull() && !m.Name.IsUnknown() {
 		request.Name = m.Name.ValueString()

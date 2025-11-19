@@ -24,7 +24,7 @@ type InsightRequest struct {
 	Description    string          `json:"description,omitempty"`
 	Query          json.RawMessage `json:"query"`
 	Tags           []string        `json:"tags,omitempty"`
-	Saved          bool            `json:"saved,default=1"`
+	Saved          bool            `json:"saved"`
 	CreateInFolder string          `json:"_create_in_folder,omitempty"`
 }
 
