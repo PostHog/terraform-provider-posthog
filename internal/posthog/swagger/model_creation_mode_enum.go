@@ -20,10 +20,10 @@ type CreationModeEnum string
 
 // List of CreationModeEnum
 const (
-	DEFAULT CreationModeEnum = "default"
-	TEMPLATE CreationModeEnum = "template"
-	DUPLICATE CreationModeEnum = "duplicate"
-	UNLISTED CreationModeEnum = "unlisted"
+	CREATIONMODEENUM_DEFAULT CreationModeEnum = "default"
+	CREATIONMODEENUM_TEMPLATE CreationModeEnum = "template"
+	CREATIONMODEENUM_DUPLICATE CreationModeEnum = "duplicate"
+	CREATIONMODEENUM_UNLISTED CreationModeEnum = "unlisted"
 )
 
 // All allowed values of CreationModeEnum enum

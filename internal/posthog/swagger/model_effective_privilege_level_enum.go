@@ -20,8 +20,8 @@ type EffectivePrivilegeLevelEnum int32
 
 // List of EffectivePrivilegeLevelEnum
 const (
-	_21 EffectivePrivilegeLevelEnum = 21
-	_37 EffectivePrivilegeLevelEnum = 37
+	EFFECTIVEPRIVILEGELEVELENUM__21 EffectivePrivilegeLevelEnum = 21
+	EFFECTIVEPRIVILEGELEVELENUM__37 EffectivePrivilegeLevelEnum = 37
 )
 
 // All allowed values of EffectivePrivilegeLevelEnum enum

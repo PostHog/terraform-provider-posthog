@@ -51073,6 +51073,9 @@ components:
           type: string
         hedgehog_config:
           nullable: true
+        allow_sidebar_suggestions:
+          nullable: true
+          type: boolean
         role_at_organization:
           $ref: "#/components/schemas/RoleAtOrganizationEnum"
       type: object
@@ -51390,9 +51393,11 @@ components:
       description: |-
         * `home` - Home
         * `pinned` - Pinned
+        * `custom_products` - Custom Products
       enum:
       - home
       - pinned
+      - custom_products
       type: string
     Person:
       properties:
@@ -63246,6 +63251,9 @@ components:
           type: string
         hedgehog_config:
           nullable: true
+        allow_sidebar_suggestions:
+          nullable: true
+          type: boolean
         role_at_organization:
           $ref: "#/components/schemas/RoleAtOrganizationEnum"
       required:

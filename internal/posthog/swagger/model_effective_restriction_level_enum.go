@@ -20,8 +20,8 @@ type EffectiveRestrictionLevelEnum int32
 
 // List of EffectiveRestrictionLevelEnum
 const (
-	_21 EffectiveRestrictionLevelEnum = 21
-	_37 EffectiveRestrictionLevelEnum = 37
+	EFFECTIVERESTRICTIONLEVELENUM__21 EffectiveRestrictionLevelEnum = 21
+	EFFECTIVERESTRICTIONLEVELENUM__37 EffectiveRestrictionLevelEnum = 37
 )
 
 // All allowed values of EffectiveRestrictionLevelEnum enum

@@ -20,8 +20,8 @@ type DashboardRestrictionLevel int32
 
 // List of DashboardRestrictionLevel
 const (
-	_21 DashboardRestrictionLevel = 21
-	_37 DashboardRestrictionLevel = 37
+	DASHBOARDRESTRICTIONLEVEL__21 DashboardRestrictionLevel = 21
+	DASHBOARDRESTRICTIONLEVEL__37 DashboardRestrictionLevel = 37
 )
 
 // All allowed values of DashboardRestrictionLevel enum

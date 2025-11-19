@@ -72,6 +72,8 @@ swagger-generate:
 		--git-user-id posthog \
 		--git-repo-id terraform-provider \
 		--output /local/$(POSTHOG_SWAGGER_DIR) \
+		--global-property models="Insight:DashboardTileBasic:UserBasic:EffectiveRestrictionLevelEnum:PaginatedInsightList:Dashboard:PatchedDashboard:DashboardCollaborator:PatchedInsight:SharingConfiguration:DashboardRestrictionLevel:CreationModeEnum:EffectivePrivilegeLevelEnum:PaginatedDashboardBasicList:DashboardBasic",apis,supportingFiles \
+		--additional-properties=enumClassPrefix=true,structPrefix=false \
 		--openapi-normalizer "FILTER=tag:insights|dashboards"
 	@rm -f "$(POSTHOG_SWAGGER_DIR)/go.mod" "$(POSTHOG_SWAGGER_DIR)/go.sum"
 	@echo "✓ Generated client at $(POSTHOG_SWAGGER_DIR)/"
