@@ -45,7 +45,44 @@ Then commit the changes to `go.mod` and `go.sum`.
 
 ## Using the provider
 
-Fill this in for each provider
+Configure the provider with your PostHog host, personal API key, and default project/environment ID. All resources inherit this project scope.
+
+```hcl
+provider "posthog" {
+  host       = "https://us.posthog.com"
+  api_key    = var.posthog_api_key
+  project_id = var.posthog_project_id
+}
+
+resource "posthog_insight" "weekly_signups" {
+  name        = "Weekly signups"
+  description = "Tracks sign up volume per week"
+  derived_name = "Weekly signups"
+
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind= "EventsNode"
+        name = "$pageview"
+        event = "$pageview"
+        math= "total"
+      }]
+      version = 2
+      trendsFilter = {}
+    }
+  })
+  tags = ["managed-by:terraform"]
+  create_in_folder = "Unfiled/Insights"
+}
+```
+
+To import an existing insight, run:
+
+```shell
+terraform import posthog_insight.weekly_signups "<insight_id>"
+```
 
 ## Developing the Provider
 
