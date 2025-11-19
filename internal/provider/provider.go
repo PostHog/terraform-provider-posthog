@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -127,11 +128,11 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 	config := posthogapi.NewConfiguration()
 	config.HTTPClient = httpClient
-	config.Host = host
+	// Remove scheme from host - swagger config expects just hostname
+	config.Host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
 	config.Scheme = "https"
 	config.UserAgent = "posthog/terraform-provider v0.0.0"
-	config.AddDefaultHeader("Content-Type", "application/json")
-	config.AddDefaultHeader("Accept", "application/json")
+	// Only set Authorization header - Content-Type and Accept are set per-request by swagger client
 	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
 	providerData := internaldata.ProviderData{

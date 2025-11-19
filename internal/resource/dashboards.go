@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -12,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/internal/data"
-	"github.com/posthog/terraform-provider/internal/posthog"
+	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 )
 
 var (
@@ -25,7 +26,8 @@ func NewDashboard() resource.Resource {
 }
 
 type DashboardResource struct {
-	client posthog.Client
+	client    *posthogapi.APIClient
+	projectID string
 }
 
 type DashboardResourceModel struct {
@@ -91,7 +93,8 @@ func (r *DashboardResource) Configure(ctx context.Context, req resource.Configur
 		return
 	}
 
-	r.client = providerData.Client
+	r.client = providerData.SwaggerClient
+	r.projectID = providerData.ProjectID
 }
 
 func (r *DashboardResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -102,18 +105,17 @@ func (r *DashboardResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	params := posthog.CreateDashboardParams{
-		Name: data.Name.ValueString(),
-	}
+	dashboard := posthogapi.NewDashboardWithDefaults()
+	dashboard.SetName(data.Name.ValueString())
 
 	if !data.Description.IsNull() {
 		desc := data.Description.ValueString()
-		params.Description = &desc
+		dashboard.SetDescription(desc)
 	}
 
 	if !data.Pinned.IsNull() {
 		pinned := data.Pinned.ValueBool()
-		params.Pinned = &pinned
+		dashboard.SetPinned(pinned)
 	}
 
 	if !data.Tags.IsNull() {
@@ -122,18 +124,21 @@ func (r *DashboardResource) Create(ctx context.Context, req resource.CreateReque
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		tagStrings := make([]string, len(tags))
+		tagInterfaces := make([]interface{}, len(tags))
 		for i, tag := range tags {
-			tagStrings[i] = tag.ValueString()
+			tagInterfaces[i] = tag.ValueString()
 		}
-		params.Tags = tagStrings
+		dashboard.SetTags(tagInterfaces)
 	}
 
 	tflog.Debug(ctx, "Creating PostHog dashboard", map[string]interface{}{
 		"name": data.Name.ValueString(),
 	})
 
-	dashboard, err := r.client.CreateDashboard(params)
+	apiReq := r.client.DashboardsAPI.DashboardsCreate(ctx, r.projectID)
+	apiReq = apiReq.Dashboard(*dashboard)
+
+	created, httpResp, err := apiReq.Execute()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating dashboard",
@@ -141,32 +146,44 @@ func (r *DashboardResource) Create(ctx context.Context, req resource.CreateReque
 		)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.ID = types.StringValue(fmt.Sprintf("%d", dashboard.ID))
-	if dashboard.Name != nil {
-		data.Name = types.StringValue(*dashboard.Name)
+	data.ID = types.StringValue(strconv.Itoa(int(created.Id)))
+
+	if created.Name.IsSet() {
+		name := created.Name.Get()
+		data.Name = types.StringValue(*name)
 	}
-	if dashboard.Description != nil {
-		data.Description = types.StringValue(*dashboard.Description)
-	} else {
+
+	// Only set description if it was provided in plan or if API returns non-empty value
+	if created.Description != nil && *created.Description != "" {
+		data.Description = types.StringValue(*created.Description)
+	} else if data.Description.IsNull() {
 		data.Description = types.StringNull()
 	}
-	if dashboard.Pinned != nil {
-		data.Pinned = types.BoolValue(*dashboard.Pinned)
-	} else {
+
+	// Only set pinned if it was provided in plan or if API returns true
+	if created.Pinned != nil && *created.Pinned {
+		data.Pinned = types.BoolValue(*created.Pinned)
+	} else if data.Pinned.IsNull() {
 		data.Pinned = types.BoolNull()
 	}
 
-	if len(dashboard.Tags) > 0 {
-		tagTypes := make([]types.String, len(dashboard.Tags))
-		for i, tag := range dashboard.Tags {
-			tagTypes[i] = types.StringValue(tag)
+	// Only set tags if there are actual tags
+	if len(created.Tags) > 0 {
+		tagTypes := make([]types.String, len(created.Tags))
+		for i, tag := range created.Tags {
+			if tagStr, ok := tag.(string); ok {
+				tagTypes[i] = types.StringValue(tagStr)
+			}
 		}
 		tagsSet, diags := types.SetValueFrom(ctx, types.StringType, tagTypes)
 		resp.Diagnostics.Append(diags...)
 		if !resp.Diagnostics.HasError() {
 			data.Tags = tagsSet
 		}
+	} else if data.Tags.IsNull() {
+		data.Tags = types.SetNull(types.StringType)
 	}
 
 	tflog.Debug(ctx, "Created PostHog dashboard", map[string]interface{}{
@@ -188,7 +205,17 @@ func (r *DashboardResource) Read(ctx context.Context, req resource.ReadRequest, 
 		"id": data.ID.ValueString(),
 	})
 
-	dashboard, err := r.client.GetDashboard(data.ID.ValueString())
+	dashboardID, err := strconv.ParseInt(data.ID.ValueString(), 10, 32)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid dashboard ID",
+			fmt.Sprintf("Could not parse dashboard ID %s: %s", data.ID.ValueString(), err.Error()),
+		)
+		return
+	}
+
+	apiReq := r.client.DashboardsAPI.DashboardsRetrieve(ctx, int32(dashboardID), r.projectID)
+	dashboard, httpResp, err := apiReq.Execute()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error reading dashboard",
@@ -196,10 +223,13 @@ func (r *DashboardResource) Read(ctx context.Context, req resource.ReadRequest, 
 		)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.ID = types.StringValue(fmt.Sprintf("%d", dashboard.ID))
-	if dashboard.Name != nil {
-		data.Name = types.StringValue(*dashboard.Name)
+	data.ID = types.StringValue(strconv.Itoa(int(dashboard.Id)))
+
+	if dashboard.Name.IsSet() {
+		name := dashboard.Name.Get()
+		data.Name = types.StringValue(*name)
 	} else {
 		data.Name = types.StringNull()
 	}
@@ -225,7 +255,9 @@ func (r *DashboardResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if len(dashboard.Tags) > 0 {
 		tagTypes := make([]types.String, len(dashboard.Tags))
 		for i, tag := range dashboard.Tags {
-			tagTypes[i] = types.StringValue(tag)
+			if tagStr, ok := tag.(string); ok {
+				tagTypes[i] = types.StringValue(tagStr)
+			}
 		}
 		tagsSet, diags := types.SetValueFrom(ctx, types.StringType, tagTypes)
 		resp.Diagnostics.Append(diags...)
@@ -245,21 +277,30 @@ func (r *DashboardResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	params := posthog.UpdateDashboardParams{}
+	dashboardID, err := strconv.ParseInt(data.ID.ValueString(), 10, 32)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid dashboard ID",
+			fmt.Sprintf("Could not parse dashboard ID %s: %s", data.ID.ValueString(), err.Error()),
+		)
+		return
+	}
+
+	patchedDashboard := posthogapi.NewPatchedDashboard()
 
 	if !data.Name.IsNull() {
 		name := data.Name.ValueString()
-		params.Name = &name
+		patchedDashboard.SetName(name)
 	}
 
 	if !data.Description.IsNull() {
 		desc := data.Description.ValueString()
-		params.Description = &desc
+		patchedDashboard.SetDescription(desc)
 	}
 
 	if !data.Pinned.IsNull() {
 		pinned := data.Pinned.ValueBool()
-		params.Pinned = &pinned
+		patchedDashboard.SetPinned(pinned)
 	}
 
 	if !data.Tags.IsNull() {
@@ -268,23 +309,26 @@ func (r *DashboardResource) Update(ctx context.Context, req resource.UpdateReque
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		tagStrings := make([]string, len(tags))
+		tagInterfaces := make([]interface{}, len(tags))
 		for i, tag := range tags {
-			tagStrings[i] = tag.ValueString()
+			tagInterfaces[i] = tag.ValueString()
 		}
-		params.Tags = tagStrings
+		patchedDashboard.SetTags(tagInterfaces)
 	}
 
 	if !data.Deleted.IsNull() {
 		deleted := data.Deleted.ValueBool()
-		params.Deleted = &deleted
+		patchedDashboard.SetDeleted(deleted)
 	}
 
 	tflog.Debug(ctx, "Updating PostHog dashboard", map[string]interface{}{
 		"id": data.ID.ValueString(),
 	})
 
-	dashboard, err := r.client.UpdateDashboard(data.ID.ValueString(), params)
+	apiReq := r.client.DashboardsAPI.DashboardsPartialUpdate(ctx, int32(dashboardID), r.projectID)
+	apiReq = apiReq.PatchedDashboard(*patchedDashboard)
+
+	updated, httpResp, err := apiReq.Execute()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating dashboard",
@@ -292,16 +336,21 @@ func (r *DashboardResource) Update(ctx context.Context, req resource.UpdateReque
 		)
 		return
 	}
+	defer httpResp.Body.Close()
 
-	data.ID = types.StringValue(fmt.Sprintf("%d", dashboard.ID))
-	if dashboard.Name != nil {
-		data.Name = types.StringValue(*dashboard.Name)
+	data.ID = types.StringValue(strconv.Itoa(int(updated.Id)))
+
+	if updated.Name.IsSet() {
+		name := updated.Name.Get()
+		data.Name = types.StringValue(*name)
 	}
-	if dashboard.Description != nil {
-		data.Description = types.StringValue(*dashboard.Description)
+
+	if updated.Description != nil {
+		data.Description = types.StringValue(*updated.Description)
 	}
-	if dashboard.Pinned != nil {
-		data.Pinned = types.BoolValue(*dashboard.Pinned)
+
+	if updated.Pinned != nil {
+		data.Pinned = types.BoolValue(*updated.Pinned)
 	}
 
 	tflog.Debug(ctx, "Updated PostHog dashboard", map[string]interface{}{
@@ -323,7 +372,23 @@ func (r *DashboardResource) Delete(ctx context.Context, req resource.DeleteReque
 		"id": data.ID.ValueString(),
 	})
 
-	err := r.client.DeleteDashboard(data.ID.ValueString())
+	dashboardID, err := strconv.ParseInt(data.ID.ValueString(), 10, 32)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid dashboard ID",
+			fmt.Sprintf("Could not parse dashboard ID %s: %s", data.ID.ValueString(), err.Error()),
+		)
+		return
+	}
+
+	// Soft delete by updating with deleted=true
+	patchedDashboard := posthogapi.NewPatchedDashboard()
+	patchedDashboard.SetDeleted(true)
+
+	apiReq := r.client.DashboardsAPI.DashboardsPartialUpdate(ctx, int32(dashboardID), r.projectID)
+	apiReq = apiReq.PatchedDashboard(*patchedDashboard)
+
+	_, httpResp, err := apiReq.Execute()
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting dashboard",
@@ -331,6 +396,7 @@ func (r *DashboardResource) Delete(ctx context.Context, req resource.DeleteReque
 		)
 		return
 	}
+	defer httpResp.Body.Close()
 
 	tflog.Debug(ctx, "Deleted PostHog dashboard", map[string]interface{}{
 		"id": data.ID.ValueString(),
