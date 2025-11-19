@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -129,47 +128,19 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 	config := posthogapi.NewConfiguration()
 	config.HTTPClient = httpClient
-	swaggerHost, swaggerScheme, basePath := normalizeSwaggerHost(host)
-	config.Host = swaggerHost
-	config.Scheme = swaggerScheme
-	if basePath != "" {
-		config.Servers = posthogapi.ServerConfigurations{
-			{
-				URL:         basePath,
-				Description: "Custom PostHog base path",
-			},
-		}
-	}
+	// Remove scheme from host - swagger config expects just hostname
+	config.Host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+	config.Scheme = "https"
 	config.UserAgent = "posthog/terraform-provider v0.0.0"
+	// Only set Authorization header - Content-Type and Accept are set per-request by swagger client
 	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
 	providerData := internaldata.ProviderData{
-		Client:        posthog.NewDefaultClient(logger, host, apiKey, projectID),
 		SwaggerClient: posthogapi.NewAPIClient(config),
 		ProjectID:     projectID,
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
-}
-
-func normalizeSwaggerHost(raw string) (host string, scheme string, basePath string) {
-	scheme = "https"
-	host = raw
-
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return host, scheme, ""
-	}
-
-	host = parsed.Host
-	if parsed.Scheme != "" {
-		scheme = parsed.Scheme
-	}
-	basePath = strings.TrimSuffix(parsed.Path, "/")
-	if basePath == "/" {
-		basePath = ""
-	}
-	return host, scheme, basePath
 }
 
 func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
