@@ -1,7 +1,7 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
-package provider
+package examples
 
 import (
 	"regexp"
@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
+	"github.com/hashicorp/terraform-provider-scaffolding-framework/internal/provider"
 )
 
 func TestExampleFunction_Known(t *testing.T) {
@@ -18,7 +19,7 @@ func TestExampleFunction_Known(t *testing.T) {
 		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
 			tfversion.SkipBelow(tfversion.Version1_8_0),
 		},
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		ProtoV6ProviderFactories: provider.testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: `
@@ -42,7 +43,7 @@ func TestExampleFunction_Null(t *testing.T) {
 		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
 			tfversion.SkipBelow(tfversion.Version1_8_0),
 		},
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		ProtoV6ProviderFactories: provider.testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: `
@@ -62,7 +63,7 @@ func TestExampleFunction_Unknown(t *testing.T) {
 		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
 			tfversion.SkipBelow(tfversion.Version1_8_0),
 		},
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		ProtoV6ProviderFactories: provider.testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: `
