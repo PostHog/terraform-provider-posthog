@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -127,11 +129,18 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 	config := posthogapi.NewConfiguration()
 	config.HTTPClient = httpClient
-	config.Host = host
-	config.Scheme = "https"
+	swaggerHost, swaggerScheme, basePath := normalizeSwaggerHost(host)
+	config.Host = swaggerHost
+	config.Scheme = swaggerScheme
+	if basePath != "" {
+		config.Servers = posthogapi.ServerConfigurations{
+			{
+				URL:         basePath,
+				Description: "Custom PostHog base path",
+			},
+		}
+	}
 	config.UserAgent = "posthog/terraform-provider v0.0.0"
-	config.AddDefaultHeader("Content-Type", "application/json")
-	config.AddDefaultHeader("Accept", "application/json")
 	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
 	providerData := internaldata.ProviderData{
@@ -141,6 +150,26 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
+}
+
+func normalizeSwaggerHost(raw string) (host string, scheme string, basePath string) {
+	scheme = "https"
+	host = raw
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return host, scheme, ""
+	}
+
+	host = parsed.Host
+	if parsed.Scheme != "" {
+		scheme = parsed.Scheme
+	}
+	basePath = strings.TrimSuffix(parsed.Path, "/")
+	if basePath == "/" {
+		basePath = ""
+	}
+	return host, scheme, basePath
 }
 
 func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {

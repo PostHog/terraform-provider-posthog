@@ -2,7 +2,6 @@ package posthog
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,10 +22,6 @@ type Client interface {
 	GetDashboard(id string) (Dashboard, error)
 	UpdateDashboard(id string, params UpdateDashboardParams) (Dashboard, error)
 	DeleteDashboard(id string) error
-	CreateInsight(ctx context.Context, input InsightRequest) (Insight, error)
-	GetInsight(ctx context.Context, id int64) (Insight, error)
-	UpdateInsight(ctx context.Context, id int64, input InsightRequest) (Insight, error)
-	DeleteInsight(ctx context.Context, id int64) error
 }
 
 type DefaultClient struct {
@@ -246,11 +241,6 @@ func (c *DefaultClient) DeleteDashboard(id string) error {
 	}
 
 	return nil
-}
-
-// Helper functions for creating pointers
-func ptrString(s string) *string {
-	return &s
 }
 
 func ptrBool(b bool) *bool {

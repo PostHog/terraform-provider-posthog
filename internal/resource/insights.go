@@ -1,11 +1,26 @@
+// Package resource provides Terraform resource implementations for PostHog entities.
+//
+// Architecture:
+// This package implements Terraform resources using the Plugin Framework and directly
+// leverages Swagger-generated API clients for type safety and consistency. The implementation
+// follows these principles:
+//
+//   - Direct usage of Swagger-generated types (posthogapi.Insight, posthogapi.PatchedInsight)
+//     eliminates custom intermediate models and reduces maintenance burden
+//   - Clean separation between Terraform's type system (types.String, types.Int64) and
+//     Swagger's nullable types (NullableString, pointers)
+//   - Idiomatic error handling with proper context propagation
+//   - Comprehensive logging for observability
+//   - Server-side query normalization to prevent state drift
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -16,25 +31,28 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
-	"github.com/posthog/terraform-provider/internal/posthog"
+	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 )
 
-// Ensure provider defined types fully satisfy framework interfaces.
+// Compile-time assertions to ensure provider types fully satisfy framework interfaces.
 var (
 	_ resource.Resource                = &Insight{}
 	_ resource.ResourceWithImportState = &Insight{}
 )
 
+// NewInsight creates a new Insight resource.
 func NewInsight() resource.Resource {
 	return &Insight{}
 }
 
+// Insight implements the PostHog insight resource.
 type Insight struct {
-	client    posthog.Client
-	projectId string
+	swaggerClient *posthogapi.APIClient
+	projectId     string
 }
 
-// InsightResourceModel describes the resource data model.
+// InsightResourceModel describes the Terraform resource schema for a PostHog insight.
+// This model maps 1:1 with the Terraform configuration and state.
 type InsightResourceModel struct {
 	ID             types.Int64  `tfsdk:"id"`
 	Name           types.String `tfsdk:"name"`
@@ -45,47 +63,24 @@ type InsightResourceModel struct {
 	CreateInFolder types.String `tfsdk:"create_in_folder"`
 }
 
-func (m InsightResourceModel) ToInsightRequest(ctx context.Context) (posthog.InsightRequest, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	query, err := parseQueryJSON(m.QueryJSON)
-	if err != nil {
-		diags.AddError("Invalid query_json", err.Error())
-		return posthog.InsightRequest{}, diags
-	}
-
-	request := posthog.InsightRequest{
-		Query: query,
-		Saved: true,
-	}
-	if !m.Name.IsNull() && !m.Name.IsUnknown() {
-		request.Name = m.Name.ValueString()
-	}
-	if !m.DerivedName.IsNull() && !m.DerivedName.IsUnknown() {
-		request.DerivedName = m.DerivedName.ValueString()
-	}
-	if !m.Description.IsNull() && !m.Description.IsUnknown() {
-		request.Description = m.Description.ValueString()
-	}
-	if !m.Tags.IsNull() && !m.Tags.IsUnknown() {
-		var tags []string
-		diags.Append(m.Tags.ElementsAs(ctx, &tags, false)...)
-		if diags.HasError() {
-			return posthog.InsightRequest{}, diags
-		}
-		request.Tags = tags
-	}
-	if !m.CreateInFolder.IsNull() && !m.CreateInFolder.IsUnknown() {
-		request.CreateInFolder = m.CreateInFolder.ValueString()
-	}
-
-	return request, diags
+// insightAPIResponse represents the actual API response from PostHog.
+// The Swagger spec has type mismatches, so we need this intermediate model.
+type insightAPIResponse struct {
+	ID             int64                  `json:"id"`
+	Name           string                 `json:"name"`
+	DerivedName    string                 `json:"derived_name"`
+	Description    string                 `json:"description"`
+	Query          map[string]interface{} `json:"query"`
+	Tags           []string               `json:"tags"`
+	CreateInFolder string                 `json:"_create_in_folder"`
 }
 
+// Metadata returns the resource type name.
 func (r *Insight) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_insight"
 }
 
+// Schema defines the schema for the insight resource.
 func (r *Insight) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manage PostHog insights via the insights endpoints.",
@@ -123,6 +118,7 @@ func (r *Insight) Schema(ctx context.Context, req resource.SchemaRequest, resp *
 	}
 }
 
+// Configure initializes the resource with provider-level data.
 func (r *Insight) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -132,85 +128,110 @@ func (r *Insight) Configure(ctx context.Context, req resource.ConfigureRequest, 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected resource.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected internaldata.ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
-	r.client = data.Client
+	r.swaggerClient = data.SwaggerClient
 	r.projectId = data.ProjectID
 }
 
+// Create creates a new insight resource.
 func (r *Insight) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var data InsightResourceModel
+	var plan InsightResourceModel
 
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	request, diags := data.ToInsightRequest(ctx)
+	// Build the Swagger API payload directly from the Terraform model
+	payload, diags := buildInsightPayload(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	insight, err := r.client.CreateInsight(ctx, request)
+	// Execute the API call
+	swaggerInsight, httpResp, err := r.swaggerClient.InsightsAPI.InsightsCreate(ctx, r.projectId).Insight(*payload).Execute()
+
+	// Handle API responses with extra fields not in Swagger spec (e.g., "filters")
+	var apiResp *insightAPIResponse
 	if err != nil {
-		resp.Diagnostics.AddError("Error creating insight", err.Error())
-		return
+		apiResp, err = unmarshalInsightFromError(err, httpResp)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to create insight", formatAPIError(err, httpResp))
+			return
+		}
+	} else {
+		// Convert Swagger response to our API response model
+		apiResp = swaggerInsightToAPIResponse(swaggerInsight)
 	}
 
 	tflog.Info(ctx, "created PostHog insight", map[string]any{
 		"project_id": r.projectId,
-		"id":         insight.ID,
+		"id":         apiResp.ID,
 	})
 
-	stateDiags := r.setStateFromInsight(ctx, &data, insight, request.Query)
-	resp.Diagnostics.Append(stateDiags...)
+	// Update state from API response
+	resp.Diagnostics.Append(setInsightState(ctx, &plan, apiResp)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// Read retrieves the current state of an insight resource.
 func (r *Insight) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var data InsightResourceModel
+	var state InsightResourceModel
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if data.ID.IsNull() || data.ID.IsUnknown() {
+	if state.ID.IsNull() || state.ID.IsUnknown() {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	insight, err := r.client.GetInsight(ctx, data.ID.ValueInt64())
-	if err != nil {
-		var apiErr *posthog.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			tflog.Warn(ctx, "insight not found, removing from state", map[string]any{
-				"project_id": r.projectId,
-				"id":         data.ID.ValueInt64(),
-			})
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		resp.Diagnostics.AddError("Error reading insight", err.Error())
+	insightID := int32(state.ID.ValueInt64())
+	swaggerInsight, httpResp, err := r.swaggerClient.InsightsAPI.InsightsRetrieve(ctx, insightID, r.projectId).Execute()
+
+	// Handle 404 by removing from state
+	if err != nil && httpResp != nil && httpResp.StatusCode == http.StatusNotFound {
+		tflog.Warn(ctx, "insight not found, removing from state", map[string]any{
+			"project_id": r.projectId,
+			"id":         insightID,
+		})
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
-	stateDiags := r.setStateFromInsight(ctx, &data, insight, nil)
-	resp.Diagnostics.Append(stateDiags...)
+	// Handle API responses with extra fields not in Swagger spec (e.g., "filters")
+	var apiResp *insightAPIResponse
+	if err != nil {
+		apiResp, err = unmarshalInsightFromError(err, httpResp)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to read insight", formatAPIError(err, httpResp))
+			return
+		}
+	} else {
+		apiResp = swaggerInsightToAPIResponse(swaggerInsight)
+	}
+
+	// Update state from API response
+	resp.Diagnostics.Append(setInsightState(ctx, &state, apiResp)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
+// Update modifies an existing insight resource.
 func (r *Insight) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan InsightResourceModel
 	var state InsightResourceModel
@@ -222,63 +243,98 @@ func (r *Insight) Update(ctx context.Context, req resource.UpdateRequest, resp *
 	}
 
 	if state.ID.IsNull() || state.ID.IsUnknown() {
-		resp.Diagnostics.AddError("Missing ID", "Resource ID is absent in state")
+		resp.Diagnostics.AddError("Missing resource ID", "Resource ID is absent in state")
 		return
 	}
 
-	request, diags := plan.ToInsightRequest(ctx)
+	// Build the patch payload
+	payload, diags := buildPatchedInsightPayload(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	insight, err := r.client.UpdateInsight(ctx, state.ID.ValueInt64(), request)
+	insightID := int32(state.ID.ValueInt64())
+	swaggerInsight, httpResp, err := r.swaggerClient.InsightsAPI.InsightsPartialUpdate(ctx, insightID, r.projectId).PatchedInsight(*payload).Execute()
+
+	// Handle 404 by removing from state
+	if err != nil && httpResp != nil && httpResp.StatusCode == http.StatusNotFound {
+		resp.State.RemoveResource(ctx)
+		resp.Diagnostics.AddError("Insight not found", fmt.Sprintf("Insight %d no longer exists in PostHog", insightID))
+		return
+	}
+
+	// Handle API responses with extra fields not in Swagger spec (e.g., "filters")
+	var apiResp *insightAPIResponse
 	if err != nil {
-		var apiErr *posthog.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			resp.State.RemoveResource(ctx)
-			resp.Diagnostics.AddError("Insight not found", fmt.Sprintf("insight %d no longer exists in PostHog", state.ID.ValueInt64()))
+		apiResp, err = unmarshalInsightFromError(err, httpResp)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to update insight", formatAPIError(err, httpResp))
 			return
 		}
-		resp.Diagnostics.AddError("Error updating insight", err.Error())
-		return
+	} else {
+		apiResp = swaggerInsightToAPIResponse(swaggerInsight)
 	}
 
 	tflog.Info(ctx, "updated PostHog insight", map[string]any{
 		"project_id": r.projectId,
-		"id":         state.ID.ValueInt64(),
+		"id":         insightID,
 	})
 
-	stateDiags := r.setStateFromInsight(ctx, &plan, insight, request.Query)
-	resp.Diagnostics.Append(stateDiags...)
+	// Update state from API response
+	resp.Diagnostics.Append(setInsightState(ctx, &plan, apiResp)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// Delete soft-deletes an insight resource by setting the deleted flag.
 func (r *Insight) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data InsightResourceModel
+	var state InsightResourceModel
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if data.ID.IsNull() || data.ID.IsUnknown() {
+	if state.ID.IsNull() || state.ID.IsUnknown() {
 		return
 	}
 
-	err := r.client.DeleteInsight(ctx, data.ID.ValueInt64())
+	insightID := int32(state.ID.ValueInt64())
+
+	// Soft delete by setting deleted flag
+	payload := posthogapi.NewPatchedInsight()
+	payload.SetDeleted(true)
+
+	_, httpResp, err := r.swaggerClient.InsightsAPI.InsightsPartialUpdate(ctx, insightID, r.projectId).PatchedInsight(*payload).Execute()
+
+	// 404 means already deleted - this is acceptable
+	if err != nil && httpResp != nil && httpResp.StatusCode == http.StatusNotFound {
+		tflog.Info(ctx, "insight already deleted", map[string]any{
+			"project_id": r.projectId,
+			"id":         insightID,
+		})
+		return
+	}
+
+	// Success response (2xx) is also acceptable even if there's an error object
+	if httpResp != nil && httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+		tflog.Info(ctx, "deleted PostHog insight", map[string]any{
+			"project_id": r.projectId,
+			"id":         insightID,
+		})
+		return
+	}
+
 	if err != nil {
-		var apiErr *posthog.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			return
-		}
-		resp.Diagnostics.AddError("Error deleting insight", err.Error())
+		resp.Diagnostics.AddError("Failed to delete insight", formatAPIError(err, httpResp))
 	}
 }
 
+// ImportState imports an existing insight resource using its numeric ID.
 func (r *Insight) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	id, err := strconv.ParseInt(strings.TrimSpace(req.ID), 10, 64)
 	if err != nil {
@@ -289,69 +345,418 @@ func (r *Insight) ImportState(ctx context.Context, req resource.ImportStateReque
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
-func (r *Insight) setStateFromInsight(ctx context.Context, model *InsightResourceModel, insight posthog.Insight, fallbackQuery json.RawMessage) diag.Diagnostics {
+// setInsightState populates the Terraform model from the API response.
+func setInsightState(ctx context.Context, model *InsightResourceModel, apiResp *insightAPIResponse) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	model.ID = types.Int64Value(insight.ID)
-	model.Name = stringValue(insight.Name)
-	model.DerivedName = stringValue(insight.DerivedName)
-	model.Description = stringValue(insight.Description)
-	if len(insight.Tags) > 0 {
-		tags, tagDiags := types.SetValueFrom(ctx, types.StringType, insight.Tags)
+	// Set ID
+	model.ID = types.Int64Value(apiResp.ID)
+
+	// Set string fields
+	if strings.TrimSpace(apiResp.Name) != "" {
+		model.Name = types.StringValue(apiResp.Name)
+	} else {
+		model.Name = types.StringNull()
+	}
+
+	if strings.TrimSpace(apiResp.DerivedName) != "" {
+		model.DerivedName = types.StringValue(apiResp.DerivedName)
+	} else {
+		model.DerivedName = types.StringNull()
+	}
+
+	if strings.TrimSpace(apiResp.Description) != "" {
+		model.Description = types.StringValue(apiResp.Description)
+	} else {
+		model.Description = types.StringNull()
+	}
+
+	// Set tags
+	if len(apiResp.Tags) > 0 {
+		tagsSet, tagDiags := types.SetValueFrom(ctx, types.StringType, apiResp.Tags)
 		diags.Append(tagDiags...)
 		if diags.HasError() {
 			return diags
 		}
-		model.Tags = tags
-	} else if model.Tags.IsNull() || model.Tags.IsUnknown() {
+		model.Tags = tagsSet
+	} else if !model.Tags.IsNull() {
+		// Preserve configured empty set
+		emptySet, tagDiags := types.SetValueFrom(ctx, types.StringType, []string{})
+		diags.Append(tagDiags...)
+		if diags.HasError() {
+			return diags
+		}
+		model.Tags = emptySet
+	} else {
 		model.Tags = types.SetNull(types.StringType)
-	} else {
-		empty, tagDiags := types.SetValueFrom(ctx, types.StringType, []string{})
-		diags.Append(tagDiags...)
-		if diags.HasError() {
+	}
+
+	// Set create_in_folder if present
+	if strings.TrimSpace(apiResp.CreateInFolder) != "" {
+		model.CreateInFolder = types.StringValue(apiResp.CreateInFolder)
+	}
+
+	// Normalize and set query JSON
+	if apiResp.Query != nil {
+		normalizedQuery, err := normalizeQueryMap(apiResp.Query)
+		if err != nil {
+			diags.AddError("Failed to normalize query", err.Error())
 			return diags
 		}
-		model.Tags = empty
-	}
-	if folder := strings.TrimSpace(insight.CreateInFolder); folder != "" {
-		model.CreateInFolder = types.StringValue(folder)
-	}
-
-	query := insight.Query
-	if len(query) == 0 {
-		query = fallbackQuery
-	}
-
-	if len(query) > 0 {
-		model.QueryJSON = types.StringValue(string(query))
-	} else {
-		model.QueryJSON = types.StringNull()
+		model.QueryJSON = types.StringValue(normalizedQuery)
 	}
 
 	return diags
 }
 
-func stringValue(value string) types.String {
-	if strings.TrimSpace(value) == "" {
-		return types.StringNull()
+// buildInsightPayload creates a Swagger Insight payload from the Terraform model.
+func buildInsightPayload(ctx context.Context, model InsightResourceModel) (*posthogapi.Insight, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	payload := posthogapi.NewInsightWithDefaults()
+
+	// Parse and set query
+	query, err := parseAndValidateQuery(model.QueryJSON)
+	if err != nil {
+		diags.AddError("Invalid query_json", err.Error())
+		return nil, diags
+	}
+	payload.Query = query
+
+	// Set nullable string fields using Swagger's NullableString setters
+	applyNullableString(&payload.Name, model.Name)
+	applyNullableString(&payload.DerivedName, model.DerivedName)
+	applyNullableString(&payload.Description, model.Description)
+
+	// Set tags
+	if !model.Tags.IsNull() && !model.Tags.IsUnknown() {
+		var tags []string
+		diags.Append(model.Tags.ElementsAs(ctx, &tags, false)...)
+		if diags.HasError() {
+			return nil, diags
+		}
+		payload.Tags = convertStringsToInterfaces(tags)
 	}
 
-	return types.StringValue(value)
+	// Set folder
+	if !model.CreateInFolder.IsNull() && !model.CreateInFolder.IsUnknown() {
+		folder := model.CreateInFolder.ValueString()
+		payload.CreateInFolder = &folder
+	}
+
+	return payload, diags
 }
 
-func parseQueryJSON(value types.String) (json.RawMessage, error) {
-	if value.IsNull() || value.IsUnknown() {
-		return nil, fmt.Errorf("query_json must be configured")
+// buildPatchedInsightPayload creates a Swagger PatchedInsight payload from the Terraform model.
+func buildPatchedInsightPayload(ctx context.Context, model InsightResourceModel) (*posthogapi.PatchedInsight, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	payload := posthogapi.NewPatchedInsight()
+
+	// Parse and set query
+	query, err := parseAndValidateQuery(model.QueryJSON)
+	if err != nil {
+		diags.AddError("Invalid query_json", err.Error())
+		return nil, diags
+	}
+	payload.Query = query
+
+	// Set nullable string fields
+	applyNullableString(&payload.Name, model.Name)
+	applyNullableString(&payload.DerivedName, model.DerivedName)
+	applyNullableString(&payload.Description, model.Description)
+
+	// Set tags
+	if !model.Tags.IsNull() && !model.Tags.IsUnknown() {
+		var tags []string
+		diags.Append(model.Tags.ElementsAs(ctx, &tags, false)...)
+		if diags.HasError() {
+			return nil, diags
+		}
+		payload.Tags = convertStringsToInterfaces(tags)
 	}
 
-	raw := strings.TrimSpace(value.ValueString())
+	// Set folder
+	if !model.CreateInFolder.IsNull() && !model.CreateInFolder.IsUnknown() {
+		folder := model.CreateInFolder.ValueString()
+		payload.CreateInFolder = &folder
+	}
+
+	return payload, diags
+}
+
+// parseAndValidateQuery parses and validates the query JSON string.
+func parseAndValidateQuery(queryJSON types.String) (map[string]interface{}, error) {
+	if queryJSON.IsNull() || queryJSON.IsUnknown() {
+		return nil, fmt.Errorf("query_json is required")
+	}
+
+	raw := strings.TrimSpace(queryJSON.ValueString())
 	if raw == "" {
 		return nil, fmt.Errorf("query_json cannot be empty")
 	}
 
 	if !json.Valid([]byte(raw)) {
-		return nil, fmt.Errorf("query_json must contain valid JSON")
+		return nil, fmt.Errorf("query_json must be valid JSON")
 	}
 
-	return json.RawMessage(raw), nil
+	var query map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &query); err != nil {
+		return nil, fmt.Errorf("failed to parse query_json: %w", err)
+	}
+
+	return query, nil
+}
+
+// applyNullableString sets a NullableString field based on a Terraform types.String value.
+func applyNullableString(dst *posthogapi.NullableString, src types.String) {
+	if src.IsNull() || src.IsUnknown() {
+		dst.Unset()
+		return
+	}
+
+	value := strings.TrimSpace(src.ValueString())
+	if value == "" {
+		dst.Set(nil) // Set explicit nil for empty strings
+	} else {
+		dst.Set(&value)
+	}
+}
+
+// nullableStringToTerraform converts a Swagger NullableString to a Terraform types.String.
+func nullableStringToTerraform(ns posthogapi.NullableString) types.String {
+	if !ns.IsSet() {
+		return types.StringNull()
+	}
+
+	val := ns.Get()
+	if val == nil || strings.TrimSpace(*val) == "" {
+		return types.StringNull()
+	}
+
+	return types.StringValue(*val)
+}
+
+// extractStringTags converts []interface{} tags to []string.
+func extractStringTags(tags []interface{}) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if str, ok := tag.(string); ok {
+			result = append(result, str)
+		}
+	}
+
+	return result
+}
+
+// convertStringsToInterfaces converts []string to []interface{} for API payloads.
+func convertStringsToInterfaces(tags []string) []interface{} {
+	if len(tags) == 0 {
+		return []interface{}{}
+	}
+
+	result := make([]interface{}, len(tags))
+	for i, tag := range tags {
+		result[i] = tag
+	}
+
+	return result
+}
+
+// normalizeQueryMap normalizes a query map into canonical JSON string for state storage.
+// This strips server-only fields and ensures consistent formatting.
+func normalizeQueryMap(query map[string]interface{}) (string, error) {
+	if query == nil {
+		return "", nil
+	}
+
+	// Server-only fields that should be stripped from state
+	serverOnlyFields := map[string]struct{}{
+		"filters":                     {},
+		"result":                      {},
+		"hogql":                       {},
+		"columns":                     {},
+		"cache_target_age":            {},
+		"next_allowed_client_refresh": {},
+		"created_at":                  {},
+		"updated_at":                  {},
+		"last_refresh":                {},
+		"last_modified_at":            {},
+		"last_modified_by":            {},
+		"last_viewed_at":              {},
+		"timezone":                    {},
+		"is_cached":                   {},
+		"query_status":                {},
+		"types":                       {},
+	}
+
+	// Create a copy and strip server fields
+	normalized := make(map[string]interface{})
+	for key, value := range query {
+		if _, isServerField := serverOnlyFields[key]; !isServerField {
+			normalized[key] = value
+		}
+	}
+
+	// Marshal to canonical JSON (sorted keys)
+	return marshalCanonical(normalized)
+}
+
+// marshalCanonical marshals data to JSON with sorted keys for consistency.
+func marshalCanonical(v interface{}) (string, error) {
+	buf := &bytes.Buffer{}
+	if err := encodeCanonical(buf, v); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// encodeCanonical recursively encodes values to canonical JSON (sorted keys).
+func encodeCanonical(buf *bytes.Buffer, v interface{}) error {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		buf.WriteByte('{')
+		keys := make([]string, 0, len(val))
+		for key := range val {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		for i, key := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			keyJSON, _ := json.Marshal(key)
+			buf.Write(keyJSON)
+			buf.WriteByte(':')
+			if err := encodeCanonical(buf, val[key]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+
+	case []interface{}:
+		buf.WriteByte('[')
+		for i, item := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := encodeCanonical(buf, item); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+
+	default:
+		// For primitives, use standard JSON marshaling
+		data, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buf.Write(data)
+	}
+
+	return nil
+}
+
+// swaggerInsightToAPIResponse converts a Swagger Insight to our internal API response model.
+func swaggerInsightToAPIResponse(src *posthogapi.Insight) *insightAPIResponse {
+	if src == nil {
+		return &insightAPIResponse{}
+	}
+
+	resp := &insightAPIResponse{
+		ID:    int64(src.GetId()),
+		Query: src.GetQuery(),
+	}
+
+	// Extract nullable strings
+	if name, ok := src.GetNameOk(); ok && name != nil {
+		resp.Name = *name
+	}
+	if derived, ok := src.GetDerivedNameOk(); ok && derived != nil {
+		resp.DerivedName = *derived
+	}
+	if desc, ok := src.GetDescriptionOk(); ok && desc != nil {
+		resp.Description = *desc
+	}
+	if folder, ok := src.GetCreateInFolderOk(); ok && folder != nil {
+		resp.CreateInFolder = *folder
+	}
+
+	// Extract tags
+	if tags := src.GetTags(); len(tags) > 0 {
+		resp.Tags = make([]string, 0, len(tags))
+		for _, tag := range tags {
+			if str, ok := tag.(string); ok {
+				resp.Tags = append(resp.Tags, str)
+			}
+		}
+	}
+
+	return resp
+}
+
+// unmarshalInsightFromError extracts an insight from API error responses.
+// The Swagger spec has type mismatches with the actual PostHog API, so we use
+// a custom struct that matches the real API response.
+func unmarshalInsightFromError(err error, resp *http.Response) (*insightAPIResponse, error) {
+	// Only handle successful responses (2xx) that failed unmarshaling
+	if resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, err
+	}
+
+	// Extract body from Swagger error
+	apiErr, ok := err.(*posthogapi.GenericOpenAPIError)
+	if !ok || len(apiErr.Body()) == 0 {
+		return nil, err
+	}
+
+	// Unmarshal directly to our custom struct (ignores extra fields automatically)
+	var insight insightAPIResponse
+	if err := json.Unmarshal(apiErr.Body(), &insight); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal insight response: %w", err)
+	}
+
+	return &insight, nil
+}
+
+// formatAPIError formats API errors into human-readable messages.
+func formatAPIError(err error, resp *http.Response) string {
+	if err == nil {
+		return "unknown error"
+	}
+
+	var msg strings.Builder
+
+	// Add HTTP status if available
+	if resp != nil {
+		msg.WriteString(fmt.Sprintf("HTTP %s", resp.Status))
+	}
+
+	// Extract error details from Swagger error
+	if apiErr, ok := err.(*posthogapi.GenericOpenAPIError); ok {
+		if msg.Len() > 0 {
+			msg.WriteString(": ")
+		}
+		msg.WriteString(apiErr.Error())
+
+		// Include response body if available
+		if body := apiErr.Body(); len(body) > 0 {
+			msg.WriteString(" (")
+			msg.WriteString(string(body))
+			msg.WriteByte(')')
+		}
+	} else {
+		if msg.Len() > 0 {
+			msg.WriteString(": ")
+		}
+		msg.WriteString(err.Error())
+	}
+
+	return msg.String()
 }
