@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/posthog/terraform-provider/internal/data"
 	"github.com/posthog/terraform-provider/internal/posthog"
 )
 
@@ -81,7 +82,7 @@ func (r *DashboardResource) Configure(ctx context.Context, req resource.Configur
 		return
 	}
 
-	providerData, ok := req.ProviderData.(ProviderData)
+	providerData, ok := req.ProviderData.(data.ProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",

@@ -2,15 +2,18 @@ package posthog
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const (
+	headerAccept        = "Accept"
 	headerAuthorization = "Authorization"
 	headerContentType   = "Content-Type"
 )
@@ -20,6 +23,10 @@ type Client interface {
 	GetDashboard(id string) (Dashboard, error)
 	UpdateDashboard(id string, params UpdateDashboardParams) (Dashboard, error)
 	DeleteDashboard(id string) error
+	CreateInsight(ctx context.Context, input InsightRequest) (Insight, error)
+	GetInsight(ctx context.Context, id int64) (Insight, error)
+	UpdateInsight(ctx context.Context, id int64, input InsightRequest) (Insight, error)
+	DeleteInsight(ctx context.Context, id int64) error
 }
 
 type DefaultClient struct {
@@ -46,7 +53,7 @@ func NewDefaultClient(logger *slog.Logger, host, apiKey, projectId string) Clien
 // baseUrl should NOT end with a trailing slash
 func NewClient(client *http.Client, logger *slog.Logger, host, apiKey, projectId string) Client {
 	return &DefaultClient{
-		host:       host,
+		host:       strings.TrimRight(host, "/"),
 		apiKey:     apiKey,
 		projectId:  projectId,
 		httpClient: client,
@@ -55,6 +62,7 @@ func NewClient(client *http.Client, logger *slog.Logger, host, apiKey, projectId
 }
 
 func (c *DefaultClient) setCommonHeaders(req *http.Request) *http.Request {
+	req.Header.Set(headerAccept, "application/json")
 	req.Header.Set(headerAuthorization, fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set(headerContentType, "application/json")
 
@@ -63,7 +71,7 @@ func (c *DefaultClient) setCommonHeaders(req *http.Request) *http.Request {
 
 // doRequestAndReadBody sends a request and reads the body of the response, it also closes
 // the respective reader so that callees do not have to worry about that.
-// If we receive a non 200 status code, an error is returned.
+// If we receive a non 2xx status code, an error is returned.
 func (c *DefaultClient) doRequestAndReadBody(req *http.Request) ([]byte, error) {
 	logger := c.logger.With(slog.Any("uri", req.URL.String()))
 
@@ -78,14 +86,13 @@ func (c *DefaultClient) doRequestAndReadBody(req *http.Request) ([]byte, error) 
 	}()
 	logger.Debug("received response", slog.Any("status", resp.StatusCode))
 
-	if resp.StatusCode != http.StatusOK {
-		return []byte{}, fmt.Errorf("failed to get success response, received status code: %d", resp.StatusCode)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Info("received an invalid response", slog.Any("body", string(body)))
 		return []byte{}, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return []byte{}, fmt.Errorf("failed to get success response, received status code: %d %s", resp.StatusCode, string(body))
 	}
 	logger.Debug("received a valid response", slog.Any("body", string(body)))
 
@@ -117,6 +124,7 @@ type UpdateDashboardParams struct {
 	Tags        []string `json:"tags,omitempty"`
 }
 
+// CreateDashboard creates a new dashboard in PostHog
 func (c *DefaultClient) CreateDashboard(params CreateDashboardParams) (Dashboard, error) {
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -143,6 +151,7 @@ func (c *DefaultClient) CreateDashboard(params CreateDashboardParams) (Dashboard
 	return response, nil
 }
 
+// GetDashboard retrieves a dashboard by ID
 func (c *DefaultClient) GetDashboard(id string) (Dashboard, error) {
 	url := fmt.Sprintf("%s/api/projects/%s/dashboards/%s/", c.host, c.projectId, id)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -164,6 +173,7 @@ func (c *DefaultClient) GetDashboard(id string) (Dashboard, error) {
 	return response, nil
 }
 
+// UpdateDashboard updates an existing dashboard
 func (c *DefaultClient) UpdateDashboard(id string, params UpdateDashboardParams) (Dashboard, error) {
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -190,6 +200,7 @@ func (c *DefaultClient) UpdateDashboard(id string, params UpdateDashboardParams)
 	return response, nil
 }
 
+// DeleteDashboard soft-deletes a dashboard by setting deleted=true
 func (c *DefaultClient) DeleteDashboard(id string) error {
 	params := UpdateDashboardParams{
 		Deleted: ptrBool(true),
@@ -214,6 +225,7 @@ func (c *DefaultClient) DeleteDashboard(id string) error {
 	return nil
 }
 
+// Helper functions for creating pointers
 func ptrString(s string) *string {
 	return &s
 }
