@@ -5,10 +5,8 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"net/http"
+	"log/slog"
 	"os"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -19,7 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/internal/examples"
-	"github.com/posthog/terraform-provider/internal/posthog/swagger"
+	"github.com/posthog/terraform-provider/internal/posthog"
 )
 
 var (
@@ -30,7 +28,7 @@ var (
 
 // ProviderData passes configured client to resources.
 type ProviderData struct {
-	Client    *posthogapi.APIClient
+	Client    posthog.Client
 	ProjectID string
 }
 
@@ -117,18 +115,9 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		"host": host,
 	})
 
-	cfg := posthogapi.NewConfiguration()
-	cfg.Servers = posthogapi.ServerConfigurations{{URL: host}}
-	cfg.DefaultHeader = map[string]string{
-		"Authorization": fmt.Sprintf("Bearer %s", apiKey),
-	}
-	cfg.HTTPClient = &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	client := posthogapi.NewAPIClient(cfg)
-
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
 	providerData := ProviderData{
-		Client:    client,
+		Client:    posthog.NewDefaultClient(logger, host, apiKey, projectID),
 		ProjectID: projectID,
 	}
 	resp.DataSourceData = providerData
