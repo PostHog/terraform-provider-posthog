@@ -1,6 +1,8 @@
 package posthog
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +16,10 @@ const (
 )
 
 type Client interface {
+	CreateDashboard(params CreateDashboardParams) (Dashboard, error)
+	GetDashboard(id string) (Dashboard, error)
+	UpdateDashboard(id string, params UpdateDashboardParams) (Dashboard, error)
+	DeleteDashboard(id string) error
 }
 
 type DefaultClient struct {
@@ -84,4 +90,134 @@ func (c *DefaultClient) doRequestAndReadBody(req *http.Request) ([]byte, error) 
 	logger.Debug("received a valid response", slog.Any("body", string(body)))
 
 	return body, nil
+}
+
+// Dashboard types
+type Dashboard struct {
+	ID          int32    `json:"id"`
+	Name        *string  `json:"name,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	Pinned      *bool    `json:"pinned,omitempty"`
+	Deleted     *bool    `json:"deleted,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+type CreateDashboardParams struct {
+	Name        string   `json:"name"`
+	Description *string  `json:"description,omitempty"`
+	Pinned      *bool    `json:"pinned,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+type UpdateDashboardParams struct {
+	Name        *string  `json:"name,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	Pinned      *bool    `json:"pinned,omitempty"`
+	Deleted     *bool    `json:"deleted,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+func (c *DefaultClient) CreateDashboard(params CreateDashboardParams) (Dashboard, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to marshal params: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/projects/%s/dashboards/", c.host, c.projectId)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(data))
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	body, err := c.doRequestAndReadBody(req)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to handle the HTTP request: %w", err)
+	}
+
+	var response Dashboard
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *DefaultClient) GetDashboard(id string) (Dashboard, error) {
+	url := fmt.Sprintf("%s/api/projects/%s/dashboards/%s/", c.host, c.projectId, id)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	body, err := c.doRequestAndReadBody(req)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to handle the HTTP request: %w", err)
+	}
+
+	var response Dashboard
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *DefaultClient) UpdateDashboard(id string, params UpdateDashboardParams) (Dashboard, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to marshal params: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/projects/%s/dashboards/%s/", c.host, c.projectId, id)
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(data))
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	body, err := c.doRequestAndReadBody(req)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to handle the HTTP request: %w", err)
+	}
+
+	var response Dashboard
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return Dashboard{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *DefaultClient) DeleteDashboard(id string) error {
+	params := UpdateDashboardParams{
+		Deleted: ptrBool(true),
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal params: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/projects/%s/dashboards/%s/", c.host, c.projectId, id)
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("failed to build request: %w", err)
+	}
+
+	_, err = c.doRequestAndReadBody(req)
+	if err != nil {
+		return fmt.Errorf("failed to handle the HTTP request: %w", err)
+	}
+
+	return nil
+}
+
+func ptrString(s string) *string {
+	return &s
+}
+
+func ptrBool(b bool) *bool {
+	return &b
 }
