@@ -2,8 +2,11 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -16,6 +19,7 @@ import (
 	internaldata "github.com/posthog/terraform-provider/internal/data"
 	"github.com/posthog/terraform-provider/internal/examples"
 	"github.com/posthog/terraform-provider/internal/posthog"
+	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
 
@@ -111,9 +115,29 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	})
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
+
+	config := posthogapi.NewConfiguration()
+	config.HTTPClient = httpClient
+	config.Host = host
+	config.Scheme = "https"
+	config.UserAgent = "posthog/terraform-provider v0.0.0"
+	config.AddDefaultHeader("Content-Type", "application/json")
+	config.AddDefaultHeader("Accept", "application/json")
+	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+
 	providerData := internaldata.ProviderData{
-		Client:    posthog.NewDefaultClient(logger, host, apiKey, projectID),
-		ProjectID: projectID,
+		Client:        posthog.NewDefaultClient(logger, host, apiKey, projectID),
+		SwaggerClient: posthogapi.NewAPIClient(config),
+		ProjectID:     projectID,
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
