@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -17,7 +18,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/hashicorp/terraform-provider-scaffolding-framework/internal/examples"
+	"github.com/posthog/terraform-provider/internal/examples"
+	"github.com/posthog/terraform-provider/internal/posthog/swagger"
 )
 
 var (
@@ -28,9 +30,7 @@ var (
 
 // ProviderData passes configured client to resources.
 type ProviderData struct {
-	Client    *http.Client
-	Host      string
-	APIKey    string
+	Client    *posthogapi.APIClient
 	ProjectID string
 }
 
@@ -113,18 +113,22 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		projectID = data.ProjectID.ValueString()
 	}
 
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{
 		"host": host,
 	})
 
+	cfg := posthogapi.NewConfiguration()
+	cfg.Servers = posthogapi.ServerConfigurations{{URL: host}}
+	cfg.DefaultHeader = map[string]string{
+		"Authorization": fmt.Sprintf("Bearer %s", apiKey),
+	}
+	cfg.HTTPClient = &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	client := posthogapi.NewAPIClient(cfg)
+
 	providerData := ProviderData{
-		Client:    httpClient,
-		Host:      host,
-		APIKey:    apiKey,
+		Client:    client,
 		ProjectID: projectID,
 	}
 	resp.DataSourceData = providerData
