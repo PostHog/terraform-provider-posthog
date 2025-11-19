@@ -122,7 +122,7 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
 	return []func() frameworkresource.Resource{
 		examples.NewExampleResource,
-		NewDashboardResource,
+		posthogresource.NewDashboard,
 		posthogresource.NewInsight,
 	}
 }

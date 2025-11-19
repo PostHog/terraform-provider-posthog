@@ -1,4 +1,4 @@
-package provider
+package resource
 
 import (
 	"context"
@@ -20,7 +20,7 @@ var (
 	_ resource.ResourceWithImportState = &DashboardResource{}
 )
 
-func NewDashboardResource() resource.Resource {
+func NewDashboard() resource.Resource {
 	return &DashboardResource{}
 }
 
