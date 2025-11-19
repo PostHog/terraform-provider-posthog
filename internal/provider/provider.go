@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -19,7 +19,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
 	"github.com/posthog/terraform-provider/internal/examples"
-	"github.com/posthog/terraform-provider/internal/posthog"
 	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
@@ -115,7 +114,6 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		"host": host,
 	})
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -128,9 +126,17 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 	config := posthogapi.NewConfiguration()
 	config.HTTPClient = httpClient
-	// Remove scheme from host - swagger config expects just hostname
-	config.Host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
-	config.Scheme = "https"
+	swaggerHost, swaggerScheme, basePath := normalizeSwaggerHost(host)
+	config.Host = swaggerHost
+	config.Scheme = swaggerScheme
+	if basePath != "" {
+		config.Servers = posthogapi.ServerConfigurations{
+			{
+				URL:         basePath,
+				Description: "Custom PostHog base path",
+			},
+		}
+	}
 	config.UserAgent = "posthog/terraform-provider v0.0.0"
 	// Only set Authorization header - Content-Type and Accept are set per-request by swagger client
 	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
@@ -141,6 +147,26 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
+}
+
+func normalizeSwaggerHost(raw string) (host string, scheme string, basePath string) {
+	scheme = "https"
+	host = raw
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return host, scheme, ""
+	}
+
+	host = parsed.Host
+	if parsed.Scheme != "" {
+		scheme = parsed.Scheme
+	}
+	basePath = strings.TrimSuffix(parsed.Path, "/")
+	if basePath == "/" {
+		basePath = ""
+	}
+	return host, scheme, basePath
 }
 
 func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
