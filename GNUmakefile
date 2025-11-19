@@ -1,6 +1,3 @@
-default: fmt lint install generate
-.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean
-
 PLUGIN_NAME ?= posthog
 PLUGIN_VERSION ?= 0.0.0
 GOOS ?= $(shell go env GOOS)
@@ -10,6 +7,14 @@ BIN_PATH ?= $(BIN_DIR)/terraform-provider-$(PLUGIN_NAME)
 PLAYGROUND_DIR ?= $(CURDIR)/playground
 PLAYGROUND_TFRC ?= $(PLAYGROUND_DIR)/terraformrc
 PLUGIN_FILENAME ?= terraform-provider-$(PLUGIN_NAME)_v$(PLUGIN_VERSION)
+# PostHog OpenAPI Client Generation
+# Uses openapi-generator with tag filtering for insights and dashboards endpoints
+POSTHOG_SPEC_URL ?= https://app.posthog.com/api/schema/
+POSTHOG_SWAGGER_DIR ?= internal/posthog/swagger
+OPENAPI_GENERATOR_VERSION ?= v7.17.0
+
+default: fmt lint install generate
+.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean swagger-generate swagger-clean
 
 build:
 	go build -v ./...
@@ -51,3 +56,27 @@ playground-apply: playground-tfrc
 playground-clean:
 	rm -f $(PLAYGROUND_TFRC)
 	rm -rf $(PLAYGROUND_DIR)/.terraform $(PLAYGROUND_DIR)/.terraform.lock.hcl
+
+swagger-generate:
+	@echo "Generating PostHog Go client with openapi-generator..."
+	@echo "  Spec URL: $(POSTHOG_SPEC_URL)"
+	@echo "  Output: $(POSTHOG_SWAGGER_DIR)"
+	@echo "  Filtering tags: insights, dashboards"
+	@mkdir -p $(POSTHOG_SWAGGER_DIR)
+	@docker run --rm --network="host" \
+		-v "$(CURDIR)":/local \
+		openapitools/openapi-generator-cli:$(OPENAPI_GENERATOR_VERSION) generate \
+		--input-spec "$(POSTHOG_SPEC_URL)" \
+		--generator-name go \
+		--package-name posthogapi \
+		--git-user-id posthog \
+		--git-repo-id terraform-provider \
+		--output /local/$(POSTHOG_SWAGGER_DIR) \
+		--openapi-normalizer "FILTER=tag:insights|dashboards"
+	@rm -f "$(POSTHOG_SWAGGER_DIR)/go.mod" "$(POSTHOG_SWAGGER_DIR)/go.sum"
+	@echo "✓ Generated client at $(POSTHOG_SWAGGER_DIR)/"
+
+swagger-clean:
+	@echo "Cleaning generated swagger files..."
+	@rm -rf $(POSTHOG_SWAGGER_DIR)
+	@echo "Swagger files cleaned"
