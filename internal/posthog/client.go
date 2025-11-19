@@ -63,6 +63,25 @@ func (c *DefaultClient) setCommonHeaders(req *http.Request) *http.Request {
 	return req
 }
 
+// APIError represents an error returned by the PostHog API.
+type APIError struct {
+	StatusCode int
+	Body       []byte
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return ""
+	}
+
+	if e.Message != "" {
+		return e.Message
+	}
+
+	return fmt.Sprintf("posthog API responded with status %d: %s", e.StatusCode, string(e.Body))
+}
+
 // doRequestAndReadBody sends a request and reads the body of the response, it also closes
 // the respective reader so that callees do not have to worry about that.
 // If we receive a non 2xx status code, an error is returned.
@@ -86,7 +105,11 @@ func (c *DefaultClient) doRequestAndReadBody(req *http.Request) ([]byte, error) 
 		return []byte{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return []byte{}, fmt.Errorf("failed to get success response, received status code: %d %s", resp.StatusCode, string(body))
+		return []byte{}, &APIError{
+			StatusCode: resp.StatusCode,
+			Body:       body,
+			Message:    fmt.Sprintf("posthog API responded with status code %d", resp.StatusCode),
+		}
 	}
 	logger.Debug("received a valid response", slog.Any("body", string(body)))
 

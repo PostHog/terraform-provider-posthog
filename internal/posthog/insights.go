@@ -9,10 +9,13 @@ import (
 )
 
 type Insight struct {
-	ID          int64           `json:"id"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Query       json.RawMessage `json:"query"`
+	ID             int64           `json:"id"`
+	Name           string          `json:"name"`
+	DerivedName    string          `json:"derived_name"`
+	Description    string          `json:"description"`
+	Query          json.RawMessage `json:"query"`
+	Tags           []string        `json:"tags"`
+	CreateInFolder string          `json:"_create_in_folder"`
 }
 
 type InsightRequest struct {

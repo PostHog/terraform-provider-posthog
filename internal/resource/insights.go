@@ -3,10 +3,13 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -33,19 +36,22 @@ type Insight struct {
 
 // InsightResourceModel describes the resource data model.
 type InsightResourceModel struct {
-	ID             types.Int64    `tfsdk:"id"`
-	Name           types.String   `tfsdk:"name"`
-	DerivedName    types.String   `tfsdk:"derived_name"`
-	Description    types.String   `tfsdk:"description"`
-	QueryJSON      types.String   `tfsdk:"query_json"`
-	Tags           []types.String `tfsdk:"tags"`
-	CreateInFolder types.String   `tfsdk:"create_in_folder"`
+	ID             types.Int64  `tfsdk:"id"`
+	Name           types.String `tfsdk:"name"`
+	DerivedName    types.String `tfsdk:"derived_name"`
+	Description    types.String `tfsdk:"description"`
+	QueryJSON      types.String `tfsdk:"query_json"`
+	Tags           types.Set    `tfsdk:"tags"`
+	CreateInFolder types.String `tfsdk:"create_in_folder"`
 }
 
-func (m InsightResourceModel) ToInsightRequest() (posthog.InsightRequest, error) {
+func (m InsightResourceModel) ToInsightRequest(ctx context.Context) (posthog.InsightRequest, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
 	query, err := parseQueryJSON(m.QueryJSON)
 	if err != nil {
-		return posthog.InsightRequest{}, fmt.Errorf("invalid query_json: %w", err)
+		diags.AddError("Invalid query_json", err.Error())
+		return posthog.InsightRequest{}, diags
 	}
 
 	request := posthog.InsightRequest{
@@ -60,18 +66,19 @@ func (m InsightResourceModel) ToInsightRequest() (posthog.InsightRequest, error)
 	if !m.Description.IsNull() && !m.Description.IsUnknown() {
 		request.Description = m.Description.ValueString()
 	}
-	if len(m.Tags) > 0 {
-		for _, tag := range m.Tags {
-			if !tag.IsNull() && !tag.IsUnknown() {
-				request.Tags = append(request.Tags, tag.ValueString())
-			}
+	if !m.Tags.IsNull() && !m.Tags.IsUnknown() {
+		var tags []string
+		diags.Append(m.Tags.ElementsAs(ctx, &tags, false)...)
+		if diags.HasError() {
+			return posthog.InsightRequest{}, diags
 		}
+		request.Tags = tags
 	}
 	if !m.CreateInFolder.IsNull() && !m.CreateInFolder.IsUnknown() {
 		request.CreateInFolder = m.CreateInFolder.ValueString()
 	}
 
-	return request, nil
+	return request, diags
 }
 
 func (r *Insight) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -87,7 +94,7 @@ func (r *Insight) Schema(ctx context.Context, req resource.SchemaRequest, resp *
 				MarkdownDescription: "Numeric ID of the insight.",
 			},
 			"name": schema.StringAttribute{
-				Required:            true,
+				Optional:            true,
 				MarkdownDescription: "Insight name.",
 			},
 			"derived_name": schema.StringAttribute{
@@ -102,7 +109,7 @@ func (r *Insight) Schema(ctx context.Context, req resource.SchemaRequest, resp *
 				Required:            true,
 				MarkdownDescription: "Raw JSON serialized query payload accepted by PostHog (for example an `InsightVizNode` with a `TrendsQuery`).",
 			},
-			"tags": schema.ListAttribute{
+			"tags": schema.SetAttribute{
 				Optional:            true,
 				ElementType:         types.StringType,
 				MarkdownDescription: "List of tags to apply to the insight.",
@@ -142,9 +149,9 @@ func (r *Insight) Create(ctx context.Context, req resource.CreateRequest, resp *
 		return
 	}
 
-	request, err := data.ToInsightRequest()
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating insight request", err.Error())
+	request, diags := data.ToInsightRequest(ctx)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -158,8 +165,12 @@ func (r *Insight) Create(ctx context.Context, req resource.CreateRequest, resp *
 		"project_id": r.projectId,
 		"id":         insight.ID,
 	})
-	resp.Diagnostics.AddWarning("created PostHog insight", strconv.FormatInt(insight.ID, 10))
-	r.setStateFromInsight(&data, insight, request.Query)
+
+	stateDiags := r.setStateFromInsight(ctx, &data, insight, request.Query)
+	resp.Diagnostics.Append(stateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -178,57 +189,71 @@ func (r *Insight) Read(ctx context.Context, req resource.ReadRequest, resp *reso
 
 	insight, err := r.client.GetInsight(ctx, data.ID.ValueInt64())
 	if err != nil {
-		// TODO do we want to deal with not founds?
-		//var apiErr *posthog.APIError
-		//if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-		//	tflog.Warn(ctx, "insight not found, removing from state", map[string]any{
-		//		"project_id": projectID,
-		//		"id":         data.ID.ValueInt64(),
-		//	})
-		//	resp.State.RemoveResource(ctx)
-		//	return
-		//}
-
+		var apiErr *posthog.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			tflog.Warn(ctx, "insight not found, removing from state", map[string]any{
+				"project_id": r.projectId,
+				"id":         data.ID.ValueInt64(),
+			})
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error reading insight", err.Error())
 		return
 	}
 
-	r.setStateFromInsight(&data, insight, nil)
+	stateDiags := r.setStateFromInsight(ctx, &data, insight, nil)
+	resp.Diagnostics.Append(stateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *Insight) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data InsightResourceModel
+	var plan InsightResourceModel
+	var state InsightResourceModel
 
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if data.ID.IsNull() || data.ID.IsUnknown() {
+	if state.ID.IsNull() || state.ID.IsUnknown() {
 		resp.Diagnostics.AddError("Missing ID", "Resource ID is absent in state")
 		return
 	}
 
-	request, err := data.ToInsightRequest()
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating insight request", err.Error())
+	request, diags := plan.ToInsightRequest(ctx)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	insight, err := r.client.UpdateInsight(ctx, data.ID.ValueInt64(), request)
+	insight, err := r.client.UpdateInsight(ctx, state.ID.ValueInt64(), request)
 	if err != nil {
+		var apiErr *posthog.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			resp.State.RemoveResource(ctx)
+			resp.Diagnostics.AddError("Insight not found", fmt.Sprintf("insight %d no longer exists in PostHog", state.ID.ValueInt64()))
+			return
+		}
 		resp.Diagnostics.AddError("Error updating insight", err.Error())
 		return
 	}
 
 	tflog.Info(ctx, "updated PostHog insight", map[string]any{
 		"project_id": r.projectId,
-		"id":         data.ID.ValueInt64(),
+		"id":         state.ID.ValueInt64(),
 	})
 
-	r.setStateFromInsight(&data, insight, request.Query)
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	stateDiags := r.setStateFromInsight(ctx, &plan, insight, request.Query)
+	resp.Diagnostics.Append(stateDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *Insight) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -245,22 +270,51 @@ func (r *Insight) Delete(ctx context.Context, req resource.DeleteRequest, resp *
 
 	err := r.client.DeleteInsight(ctx, data.ID.ValueInt64())
 	if err != nil {
-		//var apiErr *posthog.APIError
-		//if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-		//	return
-		//}
+		var apiErr *posthog.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return
+		}
 		resp.Diagnostics.AddError("Error deleting insight", err.Error())
 	}
 }
 
 func (r *Insight) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	id, err := strconv.ParseInt(strings.TrimSpace(req.ID), 10, 64)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Expected numeric insight ID, got %q: %v", req.ID, err))
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
-func (r *Insight) setStateFromInsight(model *InsightResourceModel, insight posthog.Insight, fallbackQuery json.RawMessage) {
+func (r *Insight) setStateFromInsight(ctx context.Context, model *InsightResourceModel, insight posthog.Insight, fallbackQuery json.RawMessage) diag.Diagnostics {
+	var diags diag.Diagnostics
+
 	model.ID = types.Int64Value(insight.ID)
 	model.Name = stringValue(insight.Name)
+	model.DerivedName = stringValue(insight.DerivedName)
 	model.Description = stringValue(insight.Description)
+	if len(insight.Tags) > 0 {
+		tags, tagDiags := types.SetValueFrom(ctx, types.StringType, insight.Tags)
+		diags.Append(tagDiags...)
+		if diags.HasError() {
+			return diags
+		}
+		model.Tags = tags
+	} else if model.Tags.IsNull() || model.Tags.IsUnknown() {
+		model.Tags = types.SetNull(types.StringType)
+	} else {
+		empty, tagDiags := types.SetValueFrom(ctx, types.StringType, []string{})
+		diags.Append(tagDiags...)
+		if diags.HasError() {
+			return diags
+		}
+		model.Tags = empty
+	}
+	if folder := strings.TrimSpace(insight.CreateInFolder); folder != "" {
+		model.CreateInFolder = types.StringValue(folder)
+	}
 
 	query := insight.Query
 	if len(query) == 0 {
@@ -272,6 +326,8 @@ func (r *Insight) setStateFromInsight(model *InsightResourceModel, insight posth
 	} else {
 		model.QueryJSON = types.StringNull()
 	}
+
+	return diags
 }
 
 func stringValue(value string) types.String {
