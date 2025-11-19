@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package provider
 
 import (
@@ -13,11 +10,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/function"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	internaldata "github.com/posthog/terraform-provider/internal/data"
 	"github.com/posthog/terraform-provider/internal/examples"
 	"github.com/posthog/terraform-provider/internal/posthog"
+	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
 
 var (
@@ -26,18 +25,14 @@ var (
 	_ provider.ProviderWithEphemeralResources = &PostHogProvider{}
 )
 
-// ProviderData passes configured client to resources.
-type ProviderData struct {
-	Client    posthog.Client
-	ProjectID string
-}
-
 // PostHogProviderModel describes the provider data model.
 type PostHogProviderModel struct {
 	Host      types.String `tfsdk:"host"`
 	APIKey    types.String `tfsdk:"api_key"`
 	ProjectID types.String `tfsdk:"project_id"`
 }
+
+// ProjectID can be an int
 
 // PostHogProvider defines the provider implementation.
 type PostHogProvider struct {
@@ -116,7 +111,7 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	})
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{}))
-	providerData := ProviderData{
+	providerData := internaldata.ProviderData{
 		Client:    posthog.NewDefaultClient(logger, host, apiKey, projectID),
 		ProjectID: projectID,
 	}
@@ -124,9 +119,9 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	resp.ResourceData = providerData
 }
 
-func (p *PostHogProvider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{
-		examples.NewExampleResource,
+func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
+	return []func() frameworkresource.Resource{
+		posthogresource.NewInsight,
 	}
 }
 
