@@ -210,6 +210,8 @@ func (r *FeatureFlagResource) Create(ctx context.Context, req resource.CreateReq
 		if !resp.Diagnostics.HasError() {
 			data.Tags = tagsSet
 		}
+	} else {
+		data.Tags = types.SetNull(types.StringType)
 	}
 
 	tflog.Debug(ctx, "Created PostHog feature flag", map[string]interface{}{
@@ -226,6 +228,11 @@ func (r *FeatureFlagResource) Read(ctx context.Context, req resource.ReadRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// Track what fields were originally configured
+	hasFiltersInState := !data.Filters.IsNull()
+	hasRolloutInState := !data.RolloutPercentage.IsNull()
+	hasTagsInState := !data.Tags.IsNull()
 
 	tflog.Debug(ctx, "Reading PostHog feature flag", map[string]interface{}{
 		"id": data.ID.ValueInt64(),
@@ -255,26 +262,41 @@ func (r *FeatureFlagResource) Read(ctx context.Context, req resource.ReadRequest
 		data.Active = types.BoolNull()
 	}
 
-	if flag.Filters != nil && len(flag.Filters) > 0 {
-		filtersJSON, err := json.Marshal(flag.Filters)
-		if err == nil {
-			data.Filters = types.StringValue(string(filtersJSON))
+	// Only set filters if it was originally in state
+	if hasFiltersInState {
+		if flag.Filters != nil && len(flag.Filters) > 0 {
+			filtersJSON, err := json.Marshal(flag.Filters)
+			if err == nil {
+				data.Filters = types.StringValue(string(filtersJSON))
+			}
+		} else {
+			data.Filters = types.StringNull()
 		}
 	} else {
 		data.Filters = types.StringNull()
 	}
 
-	if flag.RolloutPercentage != nil {
-		data.RolloutPercentage = types.Int64Value(int64(*flag.RolloutPercentage))
+	// Only set rollout_percentage if it was originally in state
+	if hasRolloutInState {
+		if flag.RolloutPercentage != nil {
+			data.RolloutPercentage = types.Int64Value(int64(*flag.RolloutPercentage))
+		} else {
+			data.RolloutPercentage = types.Int64Null()
+		}
 	} else {
 		data.RolloutPercentage = types.Int64Null()
 	}
 
-	if len(flag.Tags) > 0 {
-		tagsSet, diags := types.SetValueFrom(ctx, types.StringType, flag.Tags)
-		resp.Diagnostics.Append(diags...)
-		if !resp.Diagnostics.HasError() {
-			data.Tags = tagsSet
+	// Only set tags if they were originally in state
+	if hasTagsInState {
+		if len(flag.Tags) > 0 {
+			tagsSet, diags := types.SetValueFrom(ctx, types.StringType, flag.Tags)
+			resp.Diagnostics.Append(diags...)
+			if !resp.Diagnostics.HasError() {
+				data.Tags = tagsSet
+			}
+		} else {
+			data.Tags = types.SetNull(types.StringType)
 		}
 	} else {
 		data.Tags = types.SetNull(types.StringType)
@@ -412,6 +434,13 @@ func (r *FeatureFlagResource) Update(ctx context.Context, req resource.UpdateReq
 		} else {
 			// Empty set if plan had tags but API returned none
 			newState.Tags, _ = types.SetValueFrom(ctx, types.StringType, []string{})
+		}
+	} else {
+		// Tags not in plan - preserve from state or set null with proper type
+		if !state.Tags.IsNull() {
+			newState.Tags = state.Tags
+		} else {
+			newState.Tags = types.SetNull(types.StringType)
 		}
 	}
 
