@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
+	"github.com/posthog/terraform-provider/internal/posthog"
 	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
@@ -140,7 +142,13 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	// Only set Authorization header - Content-Type and Accept are set per-request by swagger client
 	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 
+	// Create a simple slog logger for the custom client
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
 	providerData := internaldata.ProviderData{
+		Client:        posthog.NewClient(httpClient, logger, host, apiKey, projectID),
 		SwaggerClient: posthogapi.NewAPIClient(config),
 		ProjectID:     projectID,
 	}
@@ -172,6 +180,7 @@ func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresou
 	return []func() frameworkresource.Resource{
 		posthogresource.NewDashboard,
 		posthogresource.NewInsight,
+		posthogresource.NewFeatureFlag,
 	}
 }
 
