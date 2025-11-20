@@ -194,10 +194,19 @@ func (c *DefaultClient) UpdateFeatureFlag(ctx context.Context, id int64, input F
 
 // DeleteFeatureFlag soft-deletes a feature flag
 func (c *DefaultClient) DeleteFeatureFlag(ctx context.Context, id int64) error {
+	// First, get the existing feature flag to get its key (API requires key field)
+	existing, err := c.GetFeatureFlag(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to get feature flag for deletion: %w", err)
+	}
+
 	url := fmt.Sprintf("%s/api/projects/%s/feature_flags/%d/", c.host, c.projectId, id)
 
 	deleted := true
-	input := FeatureFlagRequest{Deleted: &deleted}
+	input := FeatureFlagRequest{
+		Key:     existing.Key,
+		Deleted: &deleted,
+	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		return fmt.Errorf("failed to marshal delete request: %w", err)
