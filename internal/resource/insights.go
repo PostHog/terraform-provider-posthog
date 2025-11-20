@@ -61,6 +61,7 @@ type InsightResourceModel struct {
 	QueryJSON      types.String `tfsdk:"query_json"`
 	Tags           types.Set    `tfsdk:"tags"`
 	CreateInFolder types.String `tfsdk:"create_in_folder"`
+	DashboardIDs   types.Set    `tfsdk:"dashboard_ids"`
 }
 
 // insightAPIResponse represents the actual API response from PostHog.
@@ -73,6 +74,7 @@ type insightAPIResponse struct {
 	Query          map[string]interface{} `json:"query"`
 	Tags           []string               `json:"tags"`
 	CreateInFolder string                 `json:"_create_in_folder"`
+	DashboardIDs   []int32                `json:"dashboards"`
 }
 
 // Metadata returns the resource type name.
@@ -113,6 +115,11 @@ func (r *Insight) Schema(ctx context.Context, req resource.SchemaRequest, resp *
 			"create_in_folder": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "The folder where the insight is created.",
+			},
+			"dashboard_ids": schema.SetAttribute{
+				Optional:            true,
+				ElementType:         types.Int32Type,
+				MarkdownDescription: "List of dashboard ids which should contain the insight.",
 			},
 		},
 	}
@@ -396,6 +403,24 @@ func setInsightState(ctx context.Context, model *InsightResourceModel, apiResp *
 		model.CreateInFolder = types.StringValue(apiResp.CreateInFolder)
 	}
 
+	if len(apiResp.DashboardIDs) > 0 {
+		dashboardIds, dashboardDiags := types.SetValueFrom(ctx, types.Int32Type, apiResp.DashboardIDs)
+		diags.Append(dashboardDiags...)
+		if diags.HasError() {
+			return diags
+		}
+		model.DashboardIDs = dashboardIds
+	} else if !model.DashboardIDs.IsNull() {
+		emptySet, dashboardDiags := types.SetValueFrom(ctx, types.Int32Type, []int32{})
+		diags.Append(dashboardDiags...)
+		if diags.HasError() {
+			return diags
+		}
+		model.DashboardIDs = emptySet
+	} else {
+		model.DashboardIDs = types.SetNull(types.Int32Type)
+	}
+
 	// Normalize and set query JSON
 	if apiResp.Query != nil {
 		normalizedQuery, err := normalizeQueryMap(apiResp.Query)
@@ -444,6 +469,21 @@ func buildInsightPayload(ctx context.Context, model InsightResourceModel) (*post
 		payload.CreateInFolder = &folder
 	}
 
+	if !model.DashboardIDs.IsUnknown() {
+		if model.DashboardIDs.IsNull() {
+			// User wants to remove all dashboard associations - send empty array
+			payload.Dashboards = []int32{}
+		} else {
+			// User specified dashboard IDs
+			var ids []int32
+			diags.Append(model.DashboardIDs.ElementsAs(ctx, &ids, false)...)
+			if diags.HasError() {
+				return nil, diags
+			}
+			payload.Dashboards = ids
+		}
+	}
+
 	return payload, diags
 }
 
@@ -480,6 +520,21 @@ func buildPatchedInsightPayload(ctx context.Context, model InsightResourceModel)
 	if !model.CreateInFolder.IsNull() && !model.CreateInFolder.IsUnknown() {
 		folder := model.CreateInFolder.ValueString()
 		payload.CreateInFolder = &folder
+	}
+
+	if !model.DashboardIDs.IsUnknown() {
+		if model.DashboardIDs.IsNull() {
+			// User wants to remove all dashboard associations - send empty array
+			payload.Dashboards = []int32{}
+		} else {
+			// User specified dashboard IDs
+			var ids []int32
+			diags.Append(model.DashboardIDs.ElementsAs(ctx, &ids, false)...)
+			if diags.HasError() {
+				return nil, diags
+			}
+			payload.Dashboards = ids
+		}
 	}
 
 	return payload, diags
@@ -686,6 +741,15 @@ func swaggerInsightToAPIResponse(src *posthogapi.Insight) *insightAPIResponse {
 	}
 	if folder, ok := src.GetCreateInFolderOk(); ok && folder != nil {
 		resp.CreateInFolder = *folder
+	}
+	if dashboardTiles, ok := src.GetDashboardTilesOk(); ok && len(dashboardTiles) > 0 {
+		result := make([]int32, len(dashboardTiles))
+		for i, tile := range dashboardTiles {
+			result[i] = tile.DashboardId
+		}
+		resp.DashboardIDs = result
+	} else if dashboardIds, ok := src.GetDashboardsOk(); ok && len(dashboardIds) > 0 {
+		resp.DashboardIDs = dashboardIds
 	}
 
 	// Extract tags

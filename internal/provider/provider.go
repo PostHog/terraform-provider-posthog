@@ -18,7 +18,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
-	"github.com/posthog/terraform-provider/internal/examples"
 	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
@@ -171,26 +170,19 @@ func normalizeSwaggerHost(raw string) (host string, scheme string, basePath stri
 
 func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
 	return []func() frameworkresource.Resource{
-		examples.NewExampleResource,
 		posthogresource.NewDashboard,
 		posthogresource.NewInsight,
 	}
 }
 
 func (p *PostHogProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
-	return []func() ephemeral.EphemeralResource{
-		examples.NewExampleEphemeralResource,
-	}
+	return []func() ephemeral.EphemeralResource{}
 }
 
 func (p *PostHogProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{
-		examples.NewExampleDataSource,
-	}
+	return []func() datasource.DataSource{}
 }
 
 func (p *PostHogProvider) Functions(ctx context.Context) []func() function.Function {
-	return []func() function.Function{
-		examples.NewExampleFunction,
-	}
+	return []func() function.Function{}
 }

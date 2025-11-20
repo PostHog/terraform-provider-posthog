@@ -73,6 +73,7 @@ func (r *DashboardResource) Schema(ctx context.Context, req resource.SchemaReque
 			},
 			"deleted": schema.BoolAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Whether the dashboard is deleted (soft delete)",
 			},
 		},
@@ -184,6 +185,12 @@ func (r *DashboardResource) Create(ctx context.Context, req resource.CreateReque
 		}
 	} else if data.Tags.IsNull() {
 		data.Tags = types.SetNull(types.StringType)
+	}
+
+	if created.Deleted != nil {
+		data.Deleted = types.BoolValue(*created.Deleted)
+	} else {
+		data.Deleted = types.BoolNull()
 	}
 
 	tflog.Debug(ctx, "Created PostHog dashboard", map[string]interface{}{
@@ -351,6 +358,12 @@ func (r *DashboardResource) Update(ctx context.Context, req resource.UpdateReque
 
 	if updated.Pinned != nil {
 		data.Pinned = types.BoolValue(*updated.Pinned)
+	}
+
+	if updated.Deleted != nil {
+		data.Deleted = types.BoolValue(*updated.Deleted)
+	} else {
+		data.Deleted = types.BoolNull()
 	}
 
 	tflog.Debug(ctx, "Updated PostHog dashboard", map[string]interface{}{
