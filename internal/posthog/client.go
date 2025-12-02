@@ -6,217 +6,117 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-const (
-	headerAuthorization = "Authorization"
-	headerContentType   = "Content-Type"
-)
+type HTTPStatusCode int
 
-type Client interface {
-	CreateFeatureFlag(ctx context.Context, input FeatureFlagRequest) (FeatureFlag, error)
-	GetFeatureFlag(ctx context.Context, id int64) (FeatureFlag, error)
-	UpdateFeatureFlag(ctx context.Context, id int64, input FeatureFlagRequest) (FeatureFlag, error)
-	DeleteFeatureFlag(ctx context.Context, id int64) error
-}
-
-type DefaultClient struct {
-	host      string
-	apiKey    string
-	projectId string
-
+type PosthogClient struct {
+	host       string
+	apiKey     string
+	projectID  string
 	httpClient *http.Client
-	logger     *slog.Logger
 }
 
-func NewDefaultClient(logger *slog.Logger, host, apiKey, projectId string) Client {
+// NewDefaultClient creates a new client with default HTTP settings.
+func NewDefaultClient(host, apiKey, projectID string) PosthogClient {
 	return NewClient(&http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			IdleConnTimeout:     30 * time.Second,
-			TLSHandshakeTimeout: 5 * time.Second,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
 		},
-	}, logger, host, apiKey, projectId)
+	}, host, apiKey, projectID)
 }
 
-// NewClient creates a new HTTP client
-// baseUrl should NOT end with a trailing slash
-func NewClient(client *http.Client, logger *slog.Logger, host, apiKey, projectId string) Client {
-	return &DefaultClient{
+// NewClient creates a new HTTP client with the given http.Client.
+func NewClient(client *http.Client, host, apiKey, projectID string) PosthogClient {
+	return PosthogClient{
 		host:       host,
 		apiKey:     apiKey,
-		projectId:  projectId,
+		projectID:  projectID,
 		httpClient: client,
-		logger:     logger,
 	}
 }
 
-func (c *DefaultClient) setCommonHeaders(req *http.Request) *http.Request {
-	req.Header.Set(headerAuthorization, fmt.Sprintf("Bearer %s", c.apiKey))
-	req.Header.Set(headerContentType, "application/json")
+func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body any) ([]byte, HTTPStatusCode, error) {
+	url := fmt.Sprintf("%s%s", c.host, path)
 
-	return req
-}
-
-// doRequestAndReadBody sends a request and reads the body of the response, it also closes
-// the respective reader so that callees do not have to worry about that.
-// If we receive a non 200 status code, an error is returned.
-func (c *DefaultClient) doRequestAndReadBody(req *http.Request) ([]byte, error) {
-	logger := c.logger.With(slog.Any("uri", req.URL.String()))
-
-	resp, err := c.httpClient.Do(c.setCommonHeaders(req))
-	if err != nil {
-		return []byte{}, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			logger.Error("failed to close response body", slog.Any("error", err))
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
 		}
-	}()
-	logger.Debug("received response", slog.Any("status", resp.StatusCode))
+		reqBody = bytes.NewReader(data)
+	}
 
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Posthog/terraform-provider-posthog v0.0.1")
+
+	tflog.Debug(ctx, "sending http request", map[string]any{"method": method, "url": url})
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, HTTPStatusCode(resp.StatusCode), fmt.Errorf("failed to read response: %w", err)
+	}
+
+	tflog.Debug(ctx, "received response", map[string]any{"status": resp.StatusCode, "body": string(respBody)})
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return []byte{}, fmt.Errorf("failed to get success response, received status code: %d, body: %s", resp.StatusCode, string(body))
+		return respBody, HTTPStatusCode(resp.StatusCode), fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		logger.Info("received an invalid response", slog.Any("body", string(body)))
-		return []byte{}, fmt.Errorf("failed to read response body: %w", err)
-	}
-	logger.Debug("received a valid response", slog.Any("body", string(body)))
-
-	return body, nil
+	return respBody, HTTPStatusCode(resp.StatusCode), nil
 }
 
-// FeatureFlag represents a PostHog feature flag
-type FeatureFlag struct {
-	ID                int64                  `json:"id"`
-	Key               string                 `json:"key"`
-	Name              *string                `json:"name,omitempty"`
-	Active            *bool                  `json:"active,omitempty"`
-	Filters           map[string]interface{} `json:"filters,omitempty"`
-	RolloutPercentage *int32                 `json:"rollout_percentage,omitempty"`
-	Tags              []string               `json:"tags,omitempty"`
-	Deleted           *bool                  `json:"deleted,omitempty"`
+func doPost[T any](c *PosthogClient, ctx context.Context, path string, body any) (T, HTTPStatusCode, error) {
+	var result T
+	respBody, status, err := c.doRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return result, status, fmt.Errorf("failed to send POST request: %w", err)
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return result, status, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return result, status, nil
 }
 
-// FeatureFlagRequest represents the request body for creating/updating feature flags
-type FeatureFlagRequest struct {
-	Key     string                 `json:"key"`
-	Name    *string                `json:"name,omitempty"`
-	Active  *bool                  `json:"active,omitempty"`
-	Filters map[string]interface{} `json:"filters,omitempty"`
-	Tags    []string               `json:"tags,omitempty"`
-	Deleted *bool                  `json:"deleted,omitempty"`
+func doGet[T any](c *PosthogClient, ctx context.Context, path string) (T, HTTPStatusCode, error) {
+	var result T
+	respBody, status, err := c.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return result, status, fmt.Errorf("failed to send GET request: %w", err)
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return result, status, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return result, status, nil
 }
 
-// CreateFeatureFlag creates a new feature flag
-func (c *DefaultClient) CreateFeatureFlag(ctx context.Context, input FeatureFlagRequest) (FeatureFlag, error) {
-	url := fmt.Sprintf("%s/api/projects/%s/feature_flags/", c.host, c.projectId)
-
-	body, err := json.Marshal(input)
+func doPatch[T any](c *PosthogClient, ctx context.Context, path string, body any) (T, HTTPStatusCode, error) {
+	var result T
+	respBody, status, err := c.doRequest(ctx, http.MethodPatch, path, body)
 	if err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to marshal feature flag request: %w", err)
+		return result, status, fmt.Errorf("failed to send PATCH request: %w", err)
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to create request: %w", err)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return result, status, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-
-	respBody, err := c.doRequestAndReadBody(req)
-	if err != nil {
-		return FeatureFlag{}, err
-	}
-
-	var flag FeatureFlag
-	if err := json.Unmarshal(respBody, &flag); err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to unmarshal feature flag response: %w", err)
-	}
-
-	return flag, nil
-}
-
-// GetFeatureFlag retrieves a feature flag by ID
-func (c *DefaultClient) GetFeatureFlag(ctx context.Context, id int64) (FeatureFlag, error) {
-	url := fmt.Sprintf("%s/api/projects/%s/feature_flags/%d/", c.host, c.projectId, id)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	respBody, err := c.doRequestAndReadBody(req)
-	if err != nil {
-		return FeatureFlag{}, err
-	}
-
-	var flag FeatureFlag
-	if err := json.Unmarshal(respBody, &flag); err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to unmarshal feature flag response: %w", err)
-	}
-
-	return flag, nil
-}
-
-// UpdateFeatureFlag updates an existing feature flag
-func (c *DefaultClient) UpdateFeatureFlag(ctx context.Context, id int64, input FeatureFlagRequest) (FeatureFlag, error) {
-	url := fmt.Sprintf("%s/api/projects/%s/feature_flags/%d/", c.host, c.projectId, id)
-
-	body, err := json.Marshal(input)
-	if err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to marshal feature flag request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
-	if err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	respBody, err := c.doRequestAndReadBody(req)
-	if err != nil {
-		return FeatureFlag{}, err
-	}
-
-	var flag FeatureFlag
-	if err := json.Unmarshal(respBody, &flag); err != nil {
-		return FeatureFlag{}, fmt.Errorf("failed to unmarshal feature flag response: %w", err)
-	}
-
-	return flag, nil
-}
-
-// DeleteFeatureFlag soft-deletes a feature flag
-func (c *DefaultClient) DeleteFeatureFlag(ctx context.Context, id int64) error {
-	// First, get the existing feature flag to get its key (API requires key field)
-	existing, err := c.GetFeatureFlag(ctx, id)
-	if err != nil {
-		return fmt.Errorf("failed to get feature flag for deletion: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/api/projects/%s/feature_flags/%d/", c.host, c.projectId, id)
-
-	deleted := true
-	input := FeatureFlagRequest{
-		Key:     existing.Key,
-		Deleted: &deleted,
-	}
-	body, err := json.Marshal(input)
-	if err != nil {
-		return fmt.Errorf("failed to marshal delete request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	_, err = c.doRequestAndReadBody(req)
-	return err
+	return result, status, nil
 }
