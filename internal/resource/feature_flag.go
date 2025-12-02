@@ -223,7 +223,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	model.ID = types.Int64Value(resp.ID)
 	model.Key = types.StringValue(resp.Key)
-	model.Name = core.PtrToStringNullIfEmpty(resp.Name)
+	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Active = core.PtrToBool(resp.Active)
 
 	// Set filters if present

@@ -124,8 +124,8 @@ func (o DashboardOps) MapResponseToModel(ctx context.Context, resp httpclient.Da
 	var diags diag.Diagnostics
 
 	model.ID = types.Int64Value(resp.ID)
-	model.Name = core.PtrToString(resp.Name)
-	model.Description = core.PtrToStringNullIfEmpty(resp.Description)
+	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
 	model.Pinned = core.PtrToBool(resp.Pinned)
 	model.Deleted = core.PtrToBool(resp.Deleted)
 
