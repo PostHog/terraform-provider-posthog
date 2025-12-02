@@ -1,9 +1,9 @@
-package http
+package httpclient
 
 import (
 	"net/http"
 
-	"github.com/posthog/terraform-provider/internal/http/middleware"
+	"github.com/posthog/terraform-provider/internal/httpclient/middleware"
 )
 
 // ClientOption is a functional option for configuring the client.

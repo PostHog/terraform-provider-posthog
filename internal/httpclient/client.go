@@ -1,4 +1,4 @@
-package http
+package httpclient
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/posthog/terraform-provider/internal/http/middleware"
+	"github.com/posthog/terraform-provider/internal/httpclient/middleware"
 )
 
 type HTTPStatusCode int
