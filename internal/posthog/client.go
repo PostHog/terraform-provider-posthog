@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/posthog/terraform-provider/internal/posthog/middleware"
 )
 
 type HTTPStatusCode int
@@ -21,9 +22,8 @@ type PosthogClient struct {
 	httpClient *http.Client
 }
 
-// NewDefaultClient creates a new client with default HTTP settings.
-func NewDefaultClient(host, apiKey, projectID string) PosthogClient {
-	return NewClient(&http.Client{
+func NewDefaultClient(host, apiKey, projectID string, opts ...ClientOption) PosthogClient {
+	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        100,
@@ -31,11 +31,27 @@ func NewDefaultClient(host, apiKey, projectID string) PosthogClient {
 			IdleConnTimeout:     90 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
 		},
-	}, host, apiKey, projectID)
+	}
+
+	httpClient.Transport = middleware.NewRetryTransport(httpClient.Transport, middleware.DefaultRetryConfig())
+
+	for _, opt := range opts {
+		opt(httpClient)
+	}
+
+	return PosthogClient{
+		host:       host,
+		apiKey:     apiKey,
+		projectID:  projectID,
+		httpClient: httpClient,
+	}
 }
 
-// NewClient creates a new HTTP client with the given http.Client.
-func NewClient(client *http.Client, host, apiKey, projectID string) PosthogClient {
+func NewClient(client *http.Client, host, apiKey, projectID string, opts ...ClientOption) PosthogClient {
+	for _, opt := range opts {
+		opt(client)
+	}
+
 	return PosthogClient{
 		host:       host,
 		apiKey:     apiKey,
@@ -48,12 +64,14 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 	url := fmt.Sprintf("%s%s", c.host, path)
 
 	var reqBody io.Reader
+	var bodyBytes []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to marshal request: %w", err)
 		}
-		reqBody = bytes.NewReader(data)
+		reqBody = bytes.NewReader(bodyBytes)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
@@ -61,11 +79,19 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 		return nil, 0, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Set GetBody for retry support
+	if bodyBytes != nil {
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+		}
+	}
+
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Posthog/terraform-provider-posthog v0.0.1")
 
 	tflog.Debug(ctx, "sending http request", map[string]any{"method": method, "url": url})
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to send request: %w", err)
@@ -77,7 +103,8 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 		return nil, HTTPStatusCode(resp.StatusCode), fmt.Errorf("failed to read response: %w", err)
 	}
 
-	tflog.Debug(ctx, "received response", map[string]any{"status": resp.StatusCode, "body": string(respBody)})
+	tflog.Debug(ctx, "received response", map[string]any{"status": resp.StatusCode})
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return respBody, HTTPStatusCode(resp.StatusCode), fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
