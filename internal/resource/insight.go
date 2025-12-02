@@ -161,8 +161,13 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 	return input, diags
 }
 
-func (o InsightOps) BuildUpdateRequest(ctx context.Context, plan, _ InsightResourceTFModel) (httpclient.InsightRequest, diag.Diagnostics) {
+func (o InsightOps) BuildUpdateRequest(ctx context.Context, plan, state InsightResourceTFModel) (httpclient.InsightRequest, diag.Diagnostics) {
 	req, diags := o.BuildCreateRequest(ctx, plan)
+
+	// Clear description if removed from config
+	if core.ShouldClearString(plan.Description, state.Description) {
+		req.Description = core.StringPtr("")
+	}
 
 	if !plan.Deleted.IsNull() {
 		deleted := plan.Deleted.ValueBool()

@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -124,10 +125,34 @@ func TestFeatureFlag_FiltersWithRollout(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
 					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
-					resource.TestCheckResourceAttr("posthog_feature_flag.test", "filters.groups[0].rollout_percentage", "75"),
+					testCheckFiltersRolloutPercentage("posthog_feature_flag.test", 0, 75),
 				),
 			},
 		},
+	})
+}
+
+// testCheckFiltersRolloutPercentage verifies the rollout_percentage in a filters JSON attribute.
+func testCheckFiltersRolloutPercentage(resourceName string, groupIndex int, expected float64) resource.TestCheckFunc {
+	return resource.TestCheckResourceAttrWith(resourceName, "filters", func(value string) error {
+		var filters struct {
+			Groups []struct {
+				RolloutPercentage *float64 `json:"rollout_percentage"`
+			} `json:"groups"`
+		}
+		if err := json.Unmarshal([]byte(value), &filters); err != nil {
+			return fmt.Errorf("failed to parse filters JSON: %w", err)
+		}
+		if groupIndex >= len(filters.Groups) {
+			return fmt.Errorf("group index %d out of range (have %d groups)", groupIndex, len(filters.Groups))
+		}
+		if filters.Groups[groupIndex].RolloutPercentage == nil {
+			return fmt.Errorf("rollout_percentage is nil for group %d", groupIndex)
+		}
+		if *filters.Groups[groupIndex].RolloutPercentage != expected {
+			return fmt.Errorf("expected rollout_percentage %v, got %v", expected, *filters.Groups[groupIndex].RolloutPercentage)
+		}
+		return nil
 	})
 }
 

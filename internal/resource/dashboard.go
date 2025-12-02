@@ -107,9 +107,9 @@ func (o DashboardOps) BuildCreateRequest(ctx context.Context, model DashboardRes
 func (o DashboardOps) BuildUpdateRequest(ctx context.Context, plan, state DashboardResourceTFModel) (httpclient.DashboardRequest, diag.Diagnostics) {
 	req, diags := o.BuildCreateRequest(ctx, plan)
 
-	if plan.Description.IsNull() && !state.Description.IsNull() {
-		empty := ""
-		req.Description = &empty
+	// Clear description if removed from config
+	if core.ShouldClearString(plan.Description, state.Description) {
+		req.Description = core.StringPtr("")
 	}
 
 	if !plan.Deleted.IsNull() {

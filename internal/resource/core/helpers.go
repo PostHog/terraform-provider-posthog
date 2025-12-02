@@ -80,3 +80,14 @@ func Int32SetPreserveEmpty(ctx context.Context, values []int32, currentModel typ
 	}
 	return types.SetNull(types.Int32Type), diags
 }
+
+// ShouldClearString returns true if the plan value is null but state has a value,
+// indicating the user wants to clear the field by sending an empty string.
+func ShouldClearString(plan, state types.String) bool {
+	return plan.IsNull() && !state.IsNull()
+}
+
+// StringPtr returns a pointer to the given string.
+func StringPtr(s string) *string {
+	return &s
+}

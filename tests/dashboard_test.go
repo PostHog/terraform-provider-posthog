@@ -244,14 +244,12 @@ func TestDashboard_EmptyDescription(t *testing.T) {
 				Config: testAccDashboardBasic(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_dashboard.test", "name", rName),
-					resource.TestCheckResourceAttr("posthog_dashboard.test", "description", ""),
+					resource.TestCheckNoResourceAttr("posthog_dashboard.test", "description"),
 				),
 			},
 		},
 	})
 }
-
-// Config generators
 
 func testAccDashboardBasic(name string) string {
 	return fmt.Sprintf(`

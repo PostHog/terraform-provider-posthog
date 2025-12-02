@@ -325,7 +325,7 @@ func TestInsight_EmptyDescription(t *testing.T) {
 				Config: testAccInsightBasic(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
-					resource.TestCheckNoResourceAttr("posthog_dashboard.test", "description"),
+					resource.TestCheckNoResourceAttr("posthog_insight.test", "description"),
 				),
 			},
 		},

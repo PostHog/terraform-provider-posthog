@@ -318,3 +318,44 @@ func TestInt32SetPreserveEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldClearString(t *testing.T) {
+	tests := map[string]struct {
+		plan  types.String
+		state types.String
+		want  bool
+	}{
+		"plan null, state has value - should clear": {
+			plan:  types.StringNull(),
+			state: types.StringValue("existing"),
+			want:  true,
+		},
+		"plan null, state null - nothing to clear": {
+			plan:  types.StringNull(),
+			state: types.StringNull(),
+			want:  false,
+		},
+		"plan has value, state has value - no clearing needed": {
+			plan:  types.StringValue("new"),
+			state: types.StringValue("old"),
+			want:  false,
+		},
+		"plan has value, state null - no clearing needed": {
+			plan:  types.StringValue("new"),
+			state: types.StringNull(),
+			want:  false,
+		},
+		"plan unknown, state has value - unknown handled elsewhere": {
+			plan:  types.StringUnknown(),
+			state: types.StringValue("existing"),
+			want:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := ShouldClearString(tc.plan, tc.state)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
