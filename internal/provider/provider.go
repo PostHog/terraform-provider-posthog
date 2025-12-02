@@ -3,12 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -19,9 +14,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
-	"github.com/posthog/terraform-provider/internal/posthog"
-	posthogapi "github.com/posthog/terraform-provider/internal/posthog/swagger"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
+)
+
+const (
+	EnvPostHogAPIKey    = "POSTHOG_API_KEY"
+	EnvPostHogHost      = "POSTHOG_HOST"
+	EnvPostHogProjectId = "POSTHOG_PROJECT_ID"
 )
 
 var (
@@ -30,20 +30,13 @@ var (
 	_ provider.ProviderWithEphemeralResources = &PostHogProvider{}
 )
 
-// PostHogProviderModel describes the provider data model.
 type PostHogProviderModel struct {
 	Host      types.String `tfsdk:"host"`
 	APIKey    types.String `tfsdk:"api_key"`
 	ProjectID types.String `tfsdk:"project_id"`
 }
 
-// ProjectID can be an int
-
-// PostHogProvider defines the provider implementation.
 type PostHogProvider struct {
-	// version is set to the provider version on release, "dev" when the
-	// provider is built and ran locally, and "test" when running acceptance
-	// testing.
 	version string
 }
 
@@ -55,26 +48,32 @@ func New(version string) func() provider.Provider {
 	}
 }
 
-func (p *PostHogProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+func (p *PostHogProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "posthog"
 	resp.Version = p.version
 }
 
-func (p *PostHogProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Base URL for the PostHog API. Defaults to `https://us.posthog.com`. Can be set via `POSTHOG_HOST`",
+				Optional: true,
+				MarkdownDescription: fmt.Sprintf(
+					"Base URL for the PostHog API. Defaults to `https://us.posthog.com`. Can be set via `%s`", EnvPostHogHost,
+				),
 			},
 			"api_key": schema.StringAttribute{
-				Optional:            true,
-				Sensitive:           true,
-				MarkdownDescription: "PostHog personal API key. Can be set via `POSTHOG_API_KEY`.",
+				Optional:  true,
+				Sensitive: true,
+				MarkdownDescription: fmt.Sprintf(
+					"PostHog personal API key. Can be set via `%s` environment variable.", EnvPostHogAPIKey,
+				),
 			},
 			"project_id": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Default project ID (environment) to target. Can be set via `POSTHOG_PROJECT_ID`.",
+				Optional: true,
+				MarkdownDescription: fmt.Sprintf(
+					"Default project ID (environment) to target. Can be set via `%s` environment variable.", EnvPostHogProjectId,
+				),
 			},
 		},
 	}
@@ -88,95 +87,43 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
 	host := "https://us.posthog.com"
 	if !data.Host.IsNull() {
 		host = data.Host.ValueString()
-	} else if envHost := os.Getenv("POSTHOG_HOST"); envHost != "" {
+	} else if envHost := os.Getenv(EnvPostHogHost); envHost != "" {
 		host = envHost
 	}
 
-	apiKey := os.Getenv("POSTHOG_API_KEY")
+	apiKey := os.Getenv(EnvPostHogAPIKey)
 	if !data.APIKey.IsNull() {
 		apiKey = data.APIKey.ValueString()
 	}
 	if apiKey == "" {
-		resp.Diagnostics.AddError("Missing API key", "The provider requires a PostHog personal API key. Set it in configuration or POSTHOG_API_KEY.")
+		resp.Diagnostics.AddError("Missing API key",
+			fmt.Sprintf("The provider requires a PostHog personal API key. Set it in configuration or as env var: %s.", EnvPostHogAPIKey))
 		return
 	}
 
-	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	projectID := os.Getenv(EnvPostHogProjectId)
 	if !data.ProjectID.IsNull() {
 		projectID = data.ProjectID.ValueString()
 	}
-
-	tflog.Debug(ctx, "configured PostHog provider", map[string]any{
-		"host": host,
-	})
-
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-		},
+	if projectID == "" {
+		resp.Diagnostics.AddError("Missing project ID",
+			fmt.Sprintf("The provider requires a PostHog project ID. Set it in configuration or as env var: %s.", EnvPostHogProjectId))
+		return
 	}
 
-	config := posthogapi.NewConfiguration()
-	config.HTTPClient = httpClient
-	swaggerHost, swaggerScheme, basePath := normalizeSwaggerHost(host)
-	config.Host = swaggerHost
-	config.Scheme = swaggerScheme
-	if basePath != "" {
-		config.Servers = posthogapi.ServerConfigurations{
-			{
-				URL:         basePath,
-				Description: "Custom PostHog base path",
-			},
-		}
-	}
-	config.UserAgent = "posthog/terraform-provider v0.0.0"
-	// Only set Authorization header - Content-Type and Accept are set per-request by swagger client
-	config.AddDefaultHeader("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-
-	// Create a simple slog logger for the custom client
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client:        posthog.NewClient(httpClient, logger, host, apiKey, projectID),
-		SwaggerClient: posthogapi.NewAPIClient(config),
-		ProjectID:     projectID,
+		Client: httpclient.NewDefaultClient(host, apiKey, projectID),
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
 }
 
-func normalizeSwaggerHost(raw string) (host string, scheme string, basePath string) {
-	scheme = "https"
-	host = raw
-
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return host, scheme, ""
-	}
-
-	host = parsed.Host
-	if parsed.Scheme != "" {
-		scheme = parsed.Scheme
-	}
-	basePath = strings.TrimSuffix(parsed.Path, "/")
-	if basePath == "/" {
-		basePath = ""
-	}
-	return host, scheme, basePath
-}
-
-func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresource.Resource {
+func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresource.Resource {
 	return []func() frameworkresource.Resource{
 		posthogresource.NewDashboard,
 		posthogresource.NewInsight,
@@ -184,14 +131,14 @@ func (p *PostHogProvider) Resources(ctx context.Context) []func() frameworkresou
 	}
 }
 
-func (p *PostHogProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
+func (p *PostHogProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{}
 }
 
-func (p *PostHogProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *PostHogProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{}
 }
 
-func (p *PostHogProvider) Functions(ctx context.Context) []func() function.Function {
+func (p *PostHogProvider) Functions(_ context.Context) []func() function.Function {
 	return []func() function.Function{}
 }
