@@ -1,10 +1,10 @@
 package data
 
 import (
-	"github.com/posthog/terraform-provider/internal/posthog"
+	"github.com/posthog/terraform-provider/internal/http"
 )
 
 // ProviderData passes configured client to resources.
 type ProviderData struct {
-	Client posthog.PosthogClient
+	Client http.PosthogClient
 }
