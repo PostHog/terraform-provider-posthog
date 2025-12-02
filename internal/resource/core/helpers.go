@@ -1,0 +1,82 @@
+// Package core provides helper functions for Terraform resources.
+package core
+
+import (
+	"context"
+	"strings"
+
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+)
+
+func PtrToStringNullIfEmptyTrimmed(v *string) types.String {
+	if v == nil || strings.TrimSpace(*v) == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(*v)
+}
+
+func PtrToBool(v *bool) types.Bool {
+	if v == nil {
+		return types.BoolNull()
+	}
+	return types.BoolValue(*v)
+}
+
+// ExtractTags extracts []string from types.Set. Returns nil if null/unknown.
+func ExtractTags(ctx context.Context, tags types.Set) ([]string, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if tags.IsNull() || tags.IsUnknown() {
+		return nil, diags
+	}
+	var result []string
+	diags.Append(tags.ElementsAs(ctx, &result, false)...)
+	return result, diags
+}
+
+// TagsToSet converts []string to types.Set. Returns null set if empty.
+func TagsToSet(ctx context.Context, tags []string) (types.Set, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if len(tags) == 0 {
+		return types.SetNull(types.StringType), diags
+	}
+	result, d := types.SetValueFrom(ctx, types.StringType, tags)
+	diags.Append(d...)
+	return result, diags
+}
+
+// TagsToSetPreserveEmpty converts []string to types.Set.
+// If tags is empty but currentModel is not null, returns an empty set (preserving the user's intent).
+// If tags is empty and currentModel is null, returns null set.
+func TagsToSetPreserveEmpty(ctx context.Context, tags []string, currentModel types.Set) (types.Set, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if len(tags) > 0 {
+		result, d := types.SetValueFrom(ctx, types.StringType, tags)
+		diags.Append(d...)
+		return result, diags
+	}
+	if !currentModel.IsNull() {
+		result, d := types.SetValueFrom(ctx, types.StringType, []string{})
+		diags.Append(d...)
+		return result, diags
+	}
+	return types.SetNull(types.StringType), diags
+}
+
+// Int32SetPreserveEmpty converts []int32 to types.Set.
+// If values is empty but currentModel is not null, returns an empty set (preserving the user's intent).
+// If values is empty and currentModel is null, returns null set.
+func Int32SetPreserveEmpty(ctx context.Context, values []int32, currentModel types.Set) (types.Set, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if len(values) > 0 {
+		result, d := types.SetValueFrom(ctx, types.Int32Type, values)
+		diags.Append(d...)
+		return result, diags
+	}
+	if !currentModel.IsNull() {
+		result, d := types.SetValueFrom(ctx, types.Int32Type, []int32{})
+		diags.Append(d...)
+		return result, diags
+	}
+	return types.SetNull(types.Int32Type), diags
+}
