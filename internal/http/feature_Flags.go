@@ -1,4 +1,4 @@
-package posthog
+package http
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package posthog
+package http
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/posthog/terraform-provider/internal/posthog/middleware"
+	"github.com/posthog/terraform-provider/internal/http/middleware"
 )
 
 type HTTPStatusCode int
@@ -88,7 +88,7 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Posthog/terraform-provider-posthog v0.0.1")
+	req.Header.Set("User-Agent", "Posthog/terraform-provider-http v0.0.1")
 
 	tflog.Debug(ctx, "sending http request", map[string]any{"method": method, "url": url})
 
