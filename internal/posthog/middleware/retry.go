@@ -115,7 +115,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		// If not retryable or last attempt, return
-		if !shouldRetry || attempt >= t.Config.MaxRetries-1 {
+		if !shouldRetry || attempt >= t.Config.MaxRetries {
 			if err != nil {
 				return nil, err
 			}
