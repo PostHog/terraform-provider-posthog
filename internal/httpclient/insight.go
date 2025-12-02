@@ -34,21 +34,19 @@ func (c *PosthogClient) CreateInsight(ctx context.Context, input InsightRequest)
 	return result, err
 }
 
-func (c *PosthogClient) GetInsight(ctx context.Context, id int64) (Insight, error) {
+func (c *PosthogClient) GetInsight(ctx context.Context, id int64) (Insight, HTTPStatusCode, error) {
 	path := fmt.Sprintf("/api/projects/%s/insights/%d/", c.projectID, id)
-	result, _, err := doGet[Insight](c, ctx, path)
-	return result, err
+	return doGet[Insight](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateInsight(ctx context.Context, id int64, input InsightRequest) (Insight, error) {
+func (c *PosthogClient) UpdateInsight(ctx context.Context, id int64, input InsightRequest) (Insight, HTTPStatusCode, error) {
 	path := fmt.Sprintf("/api/projects/%s/insights/%d/", c.projectID, id)
-	result, _, err := doPatch[Insight](c, ctx, path, input)
-	return result, err
+	return doPatch[Insight](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteInsight(ctx context.Context, id int64) error {
+func (c *PosthogClient) DeleteInsight(ctx context.Context, id int64) (HTTPStatusCode, error) {
 	deleted := true
 	input := InsightRequest{Deleted: &deleted}
-	_, err := c.UpdateInsight(ctx, id, input)
-	return err
+	_, statusCode, err := c.UpdateInsight(ctx, id, input)
+	return statusCode, err
 }
