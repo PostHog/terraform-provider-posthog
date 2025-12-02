@@ -9,7 +9,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -51,11 +50,7 @@ func (o DashboardOps) Schema() schema.Schema {
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
-				Computed:            true,
 				MarkdownDescription: "Dashboard description",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"pinned": schema.BoolAttribute{
 				Optional:            true,
@@ -109,8 +104,13 @@ func (o DashboardOps) BuildCreateRequest(ctx context.Context, model DashboardRes
 	return req, diags
 }
 
-func (o DashboardOps) BuildUpdateRequest(ctx context.Context, plan, _ DashboardResourceTFModel) (httpclient.DashboardRequest, diag.Diagnostics) {
+func (o DashboardOps) BuildUpdateRequest(ctx context.Context, plan, state DashboardResourceTFModel) (httpclient.DashboardRequest, diag.Diagnostics) {
 	req, diags := o.BuildCreateRequest(ctx, plan)
+
+	if plan.Description.IsNull() && !state.Description.IsNull() {
+		empty := ""
+		req.Description = &empty
+	}
 
 	if !plan.Deleted.IsNull() {
 		deleted := plan.Deleted.ValueBool()

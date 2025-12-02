@@ -1,0 +1,493 @@
+package tests
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+)
+
+// TestFeatureFlag_Basic tests creating a feature flag with only the required field (key).
+func TestFeatureFlag_Basic(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagBasic(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_AllFields tests creating a feature flag with all optional fields.
+func TestFeatureFlag_AllFields(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagAllFields(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Test Feature Flag"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "true"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "2"),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_RolloutPercentage tests using the rollout_percentage convenience field.
+func TestFeatureFlag_RolloutPercentage(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagRolloutPercentage(rKey, 50),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "rollout_percentage", "50"),
+				),
+			},
+			// Update rollout percentage
+			{
+				Config: testAccFeatureFlagRolloutPercentage(rKey, 100),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "rollout_percentage", "100"),
+				),
+			},
+			// Set to 0%
+			{
+				Config: testAccFeatureFlagRolloutPercentage(rKey, 0),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "rollout_percentage", "0"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_Filters tests using raw filters JSON.
+func TestFeatureFlag_Filters(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagSimpleFilters(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_FiltersWithRollout tests filters JSON with embedded rollout_percentage.
+func TestFeatureFlag_FiltersWithRollout(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagFiltersWithRollout(rKey, 75),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "filters.groups[0].rollout_percentage", "75"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_Update tests updating each field individually.
+func TestFeatureFlag_Update(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Initial Name", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Initial Name"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "true"),
+				),
+			},
+			// Update name
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Updated Name", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Updated Name"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "true"),
+				),
+			},
+			// Update active
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Updated Name", false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Updated Name"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "false"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_ToggleActive tests toggling the active state on/off.
+func TestFeatureFlag_ToggleActive(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Start active
+			{
+				Config: testAccFeatureFlagActive(rKey, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "true"),
+				),
+			},
+			// Deactivate
+			{
+				Config: testAccFeatureFlagActive(rKey, false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "false"),
+				),
+			},
+			// Reactivate
+			{
+				Config: testAccFeatureFlagActive(rKey, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "active", "true"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_Tags tests creating, updating, and removing tags.
+func TestFeatureFlag_Tags(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create with tags
+			{
+				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1", "tag2"}),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "2"),
+				),
+			},
+			// Add more tags
+			{
+				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1", "tag2", "tag3"}),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "3"),
+				),
+			},
+			// Remove tags
+			{
+				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1"}),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "1"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_ComplexFilters tests complex filters with properties and multiple groups.
+func TestFeatureFlag_ComplexFilters(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagComplexFilters(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_Import tests importing an existing feature flag by ID.
+func TestFeatureFlag_Import(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Import Test", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+				),
+			},
+			// Import
+			{
+				ResourceName:            "posthog_feature_flag.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"filters", "rollout_percentage"},
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_MultipleGroups tests feature flags with multiple release groups.
+func TestFeatureFlag_MultipleGroups(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagMultipleGroups(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+		},
+	})
+}
+
+func testAccFeatureFlagBasic(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key = %q
+}
+`, key)
+}
+
+func testAccFeatureFlagAllFields(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Test Feature Flag"
+  active = true
+  tags   = ["managed-by:terraform", "env:test"]
+}
+`, key)
+}
+
+func testAccFeatureFlagRolloutPercentage(key string, percentage int) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                = %q
+  name               = "Rollout Test"
+  active             = true
+  rollout_percentage = %d
+}
+`, key, percentage)
+}
+
+func testAccFeatureFlagSimpleFilters(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Simple Filters"
+  active = true
+
+  filters = jsonencode({
+    groups = [{
+      properties         = []
+      rollout_percentage = 100
+    }]
+  })
+}
+`, key)
+}
+
+func testAccFeatureFlagFiltersWithRollout(key string, percentage int) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Filters with rollout"
+  active = true
+
+  filters = jsonencode({
+    groups = [{
+      properties         = []
+      rollout_percentage = %d
+    }]
+  })
+}
+`, key, percentage)
+}
+
+func testAccFeatureFlagWithName(key, name string, active bool) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = %q
+  active = %t
+}
+`, key, name, active)
+}
+
+func testAccFeatureFlagActive(key string, active bool) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Active Toggle Test"
+  active = %t
+}
+`, key, active)
+}
+
+func testAccFeatureFlagWithTags(key string, tags []string) string {
+	tagsStr := ""
+	for i, tag := range tags {
+		if i > 0 {
+			tagsStr += ", "
+		}
+		tagsStr += fmt.Sprintf("%q", tag)
+	}
+
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Tags Test"
+  active = true
+  tags   = [%s]
+}
+`, key, tagsStr)
+}
+
+func testAccFeatureFlagComplexFilters(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Complex Filters"
+  active = true
+
+  filters = jsonencode({
+    groups = [{
+      properties = [
+        {
+          key      = "email"
+          type     = "person"
+          value    = ["test@example.com", "admin@example.com"]
+          operator = "exact"
+        },
+        {
+          key      = "$browser"
+          type     = "person"
+          value    = ["Chrome", "Firefox"]
+          operator = "exact"
+        }
+      ]
+      rollout_percentage = 100
+    }]
+  })
+}
+`, key)
+}
+
+func testAccFeatureFlagMultipleGroups(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Multiple Groups"
+  active = true
+
+  filters = jsonencode({
+    groups = [
+      {
+        properties = [
+          {
+            key      = "email"
+            type     = "person"
+            value    = ["admin@example.com"]
+            operator = "exact"
+          }
+        ]
+        rollout_percentage = 100
+      },
+      {
+        properties         = []
+        rollout_percentage = 10
+      }
+    ]
+  })
+}
+`, key)
+}
