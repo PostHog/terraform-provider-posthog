@@ -61,7 +61,9 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Metadata(
 	req resource.MetadataRequest,
 	resp *resource.MetadataResponse,
 ) {
-	resp.TypeName = fmt.Sprintf("%s_%s", req.ProviderTypeName, strings.ToLower(r.ops.ResourceName()))
+	resp.TypeName = fmt.Sprintf("%s_%s", req.ProviderTypeName,
+		strings.Replace(strings.ToLower(r.ops.ResourceName()), " ", "_", -1),
+	)
 }
 
 func (r *GenericResource[TFModel, APIRequest, APIResponse]) Schema(
@@ -262,7 +264,7 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Delete(
 	statusCode, err := r.ops.Delete(ctx, r.client, state.GetID())
 	if err != nil {
 		if statusCode == http.StatusNotFound {
-			tflog.Warn(ctx, "Insight already deleted, removing from state", map[string]any{"id": state.GetID()})
+			tflog.Warn(ctx, "Resource already deleted, removing from state", map[string]any{"id": state.GetID()})
 			resp.State.RemoveResource(ctx)
 			return
 		}

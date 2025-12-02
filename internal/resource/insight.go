@@ -10,6 +10,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -44,6 +47,9 @@ func (o InsightOps) Schema() schema.Schema {
 			"id": schema.Int64Attribute{
 				Computed:            true,
 				MarkdownDescription: "Numeric ID of the insight.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"name": schema.StringAttribute{
 				Optional:            true,
@@ -79,6 +85,9 @@ func (o InsightOps) Schema() schema.Schema {
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether the insight is deleted (soft delete)",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -167,6 +176,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	var diags diag.Diagnostics
 
 	model.ID = types.Int64Value(resp.ID)
+	model.Deleted = core.PtrToBool(resp.Deleted)
 
 	// String fields - convert empty to null
 	if resp.Name != nil && strings.TrimSpace(*resp.Name) != "" {

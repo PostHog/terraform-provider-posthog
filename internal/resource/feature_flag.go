@@ -8,6 +8,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -40,6 +43,9 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"id": schema.Int64Attribute{
 				Computed:            true,
 				MarkdownDescription: "Feature Flag ID",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"key": schema.StringAttribute{
 				Required:            true,
@@ -55,11 +61,19 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			},
 			"filters": schema.StringAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Feature flag filters as JSON",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"rollout_percentage": schema.Int64Attribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Rollout percentage (0-100)",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"tags": schema.SetAttribute{
 				ElementType:         types.StringType,
@@ -89,7 +103,8 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	// Handle filters and rollout_percentage
 	var filters map[string]interface{}
 
-	if !model.Filters.IsNull() {
+	// Check both IsNull and IsUnknown since filters is Computed
+	if !model.Filters.IsNull() && !model.Filters.IsUnknown() {
 		if err := json.Unmarshal([]byte(model.Filters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
 			return req, diags
@@ -105,7 +120,8 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 
 	// If rollout_percentage is provided, add it to the first group in filters
 	// rollout_percentage is a convenience field that maps to filters.groups[0].rollout_percentage
-	if !model.RolloutPercentage.IsNull() {
+	// Check both IsNull and IsUnknown since rollout_percentage is Computed
+	if !model.RolloutPercentage.IsNull() && !model.RolloutPercentage.IsUnknown() {
 		percentage := int32(model.RolloutPercentage.ValueInt64())
 		groups, ok := filters["groups"].([]interface{})
 		if !ok || len(groups) == 0 {
@@ -151,12 +167,13 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	// Handle filters and rollout_percentage
 	var filters map[string]interface{}
 
-	if !plan.Filters.IsNull() {
+	// Check both IsNull and IsUnknown since filters is Computed
+	if !plan.Filters.IsNull() && !plan.Filters.IsUnknown() {
 		if err := json.Unmarshal([]byte(plan.Filters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
 			return req, diags
 		}
-	} else if !plan.RolloutPercentage.IsNull() {
+	} else if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() {
 		// If only rollout_percentage is provided, create default filters structure
 		filters = map[string]interface{}{
 			"groups": []interface{}{
@@ -166,7 +183,8 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	}
 
 	// If rollout_percentage is provided, add it to the first group in filters
-	if !plan.RolloutPercentage.IsNull() && filters != nil {
+	// Check both IsNull and IsUnknown since rollout_percentage is Computed
+	if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() && filters != nil {
 		percentage := int32(plan.RolloutPercentage.ValueInt64())
 		groups, ok := filters["groups"].([]interface{})
 		if !ok || len(groups) == 0 {
