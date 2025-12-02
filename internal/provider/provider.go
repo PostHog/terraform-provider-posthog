@@ -63,16 +63,16 @@ func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				),
 			},
 			"api_key": schema.StringAttribute{
-				Required:  true,
+				Optional:  true,
 				Sensitive: true,
 				MarkdownDescription: fmt.Sprintf(
-					"PostHog personal API key. Can be set via `%s`.", EnvPostHogAPIKey,
+					"PostHog personal API key. Can be set via `%s` environment variable.", EnvPostHogAPIKey,
 				),
 			},
 			"project_id": schema.StringAttribute{
-				Required: true,
+				Optional: true,
 				MarkdownDescription: fmt.Sprintf(
-					"Default project ID (environment) to target. Can be set via `%s`.", EnvPostHogProjectId,
+					"Default project ID (environment) to target. Can be set via `%s` environment variable.", EnvPostHogProjectId,
 				),
 			},
 		},
