@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -50,11 +51,19 @@ func (o DashboardOps) Schema() schema.Schema {
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Dashboard description",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"pinned": schema.BoolAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Whether the dashboard is pinned",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"tags": schema.SetAttribute{
 				ElementType:         types.StringType,
@@ -116,7 +125,7 @@ func (o DashboardOps) MapResponseToModel(ctx context.Context, resp httpclient.Da
 
 	model.ID = types.Int64Value(resp.ID)
 	model.Name = core.PtrToString(resp.Name)
-	model.Description = core.PtrToString(resp.Description)
+	model.Description = core.PtrToStringNullIfEmpty(resp.Description)
 	model.Pinned = core.PtrToBool(resp.Pinned)
 	model.Deleted = core.PtrToBool(resp.Deleted)
 

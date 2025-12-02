@@ -178,52 +178,21 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	model.ID = types.Int64Value(resp.ID)
 	model.Deleted = core.PtrToBool(resp.Deleted)
 
-	// String fields - convert empty to null
-	if resp.Name != nil && strings.TrimSpace(*resp.Name) != "" {
-		model.Name = types.StringValue(*resp.Name)
-	} else {
-		model.Name = types.StringNull()
-	}
-	if resp.DerivedName != nil && strings.TrimSpace(*resp.DerivedName) != "" {
-		model.DerivedName = types.StringValue(*resp.DerivedName)
-	} else {
-		model.DerivedName = types.StringNull()
-	}
-	if resp.Description != nil && strings.TrimSpace(*resp.Description) != "" {
-		model.Description = types.StringValue(*resp.Description)
-	} else {
-		model.Description = types.StringNull()
-	}
-	if resp.CreateInFolder != nil && strings.TrimSpace(*resp.CreateInFolder) != "" {
-		model.CreateInFolder = types.StringValue(*resp.CreateInFolder)
-	}
+	// String fields - convert empty/whitespace to null
+	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	model.DerivedName = core.PtrToStringNullIfEmptyTrimmed(resp.DerivedName)
+	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	model.CreateInFolder = core.PtrToStringNullIfEmptyTrimmed(resp.CreateInFolder)
 
-	// Tags
-	if len(resp.Tags) > 0 {
-		tagsSet, d := types.SetValueFrom(ctx, types.StringType, resp.Tags)
-		diags.Append(d...)
-		model.Tags = tagsSet
-	} else if !model.Tags.IsNull() {
-		// Preserve empty set if it was configured
-		emptySet, d := types.SetValueFrom(ctx, types.StringType, []string{})
-		diags.Append(d...)
-		model.Tags = emptySet
-	} else {
-		model.Tags = types.SetNull(types.StringType)
-	}
+	// Tags - preserve empty set if configured
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
+	diags.Append(d...)
+	model.Tags = tagsSet
 
-	// Dashboard IDs
-	if len(resp.Dashboards) > 0 {
-		dashSet, d := types.SetValueFrom(ctx, types.Int32Type, resp.Dashboards)
-		diags.Append(d...)
-		model.DashboardIDs = dashSet
-	} else if !model.DashboardIDs.IsNull() {
-		emptySet, d := types.SetValueFrom(ctx, types.Int32Type, []int32{})
-		diags.Append(d...)
-		model.DashboardIDs = emptySet
-	} else {
-		model.DashboardIDs = types.SetNull(types.Int32Type)
-	}
+	// Dashboard IDs - preserve empty set if configured
+	dashSet, d := core.Int32SetPreserveEmpty(ctx, resp.Dashboards, model.DashboardIDs)
+	diags.Append(d...)
+	model.DashboardIDs = dashSet
 
 	// Query - normalize to prevent state drift
 	if resp.Query != nil {
@@ -260,20 +229,42 @@ func normalizeQueryMap(query map[string]interface{}) (string, error) {
 		return "", nil
 	}
 
-	// Server-only fields to strip
-	serverOnlyFields := map[string]struct{}{
+	// Server-only fields to strip at top level
+	topLevelServerOnlyFields := map[string]struct{}{
 		"filters": {}, "result": {}, "hogql": {}, "columns": {},
 		"cache_target_age": {}, "next_allowed_client_refresh": {},
 		"created_at": {}, "updated_at": {}, "last_refresh": {},
 		"last_modified_at": {}, "last_modified_by": {}, "last_viewed_at": {},
 		"timezone": {}, "is_cached": {}, "query_status": {}, "types": {},
+		"version": {},
+	}
+
+	// Server-only fields to strip from the "source" object
+	sourceServerOnlyFields := map[string]struct{}{
+		"version": {},
 	}
 
 	normalized := make(map[string]interface{})
 	for key, value := range query {
-		if _, skip := serverOnlyFields[key]; !skip {
-			normalized[key] = value
+		if _, skip := topLevelServerOnlyFields[key]; skip {
+			continue
 		}
+
+		// If this is the "source" object, strip server-only fields from it too
+		if key == "source" {
+			if sourceMap, ok := value.(map[string]interface{}); ok {
+				normalizedSource := make(map[string]interface{})
+				for sourceKey, sourceValue := range sourceMap {
+					if _, skip := sourceServerOnlyFields[sourceKey]; !skip {
+						normalizedSource[sourceKey] = sourceValue
+					}
+				}
+				normalized[key] = normalizedSource
+				continue
+			}
+		}
+
+		normalized[key] = value
 	}
 
 	return marshalCanonical(normalized)
