@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
-	"github.com/posthog/terraform-provider/internal/posthog"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
 
@@ -117,7 +117,7 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client: posthog.NewDefaultClient(host, apiKey, projectID),
+		Client: httpclient.NewDefaultClient(host, apiKey, projectID),
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
