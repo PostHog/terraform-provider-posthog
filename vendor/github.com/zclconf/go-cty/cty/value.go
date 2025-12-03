@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package cty
 
 // Value represents a value of a particular type, and is the interface by

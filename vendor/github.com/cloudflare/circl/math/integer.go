@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package math
 
 import "math/bits"

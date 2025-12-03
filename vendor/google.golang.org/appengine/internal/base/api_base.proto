@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 // Built-in base types for API calls. Primarily useful as return types.
 
 syntax = "proto2";

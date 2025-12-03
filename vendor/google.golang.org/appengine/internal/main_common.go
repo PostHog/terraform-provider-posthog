@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package internal
 
 // MainPath stores the file path of the main package. On App Engine Standard

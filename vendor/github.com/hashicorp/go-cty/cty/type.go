@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package cty
 
 // Type represents value types within the type system.

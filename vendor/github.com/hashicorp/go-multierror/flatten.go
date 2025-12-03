@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package multierror
 
 // Flatten flattens the given error, merging any *Errors together into

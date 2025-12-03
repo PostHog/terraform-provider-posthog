@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 // Package errwrap implements methods to formalize error wrapping in Go.
 //
 // All of the top-level functions that take an `error` are built to be able

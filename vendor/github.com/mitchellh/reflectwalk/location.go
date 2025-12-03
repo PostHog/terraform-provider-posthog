@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package reflectwalk
 
 //go:generate stringer -type=Location location.go

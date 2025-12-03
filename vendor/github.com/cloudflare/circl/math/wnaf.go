@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 // Package math provides some utility functions for big integers.
 package math
 

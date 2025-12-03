@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) HashiCorp, Inc.
+ */
+
 // This code was imported from https://github.com/armfazh/rfc7748_precomputed
 
 // CHECK_BMI2ADX triggers bmi2adx if supported,

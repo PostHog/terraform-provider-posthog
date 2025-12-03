@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 /*
 Package x448 provides Diffie-Hellman functions as specified in RFC-7748.
 

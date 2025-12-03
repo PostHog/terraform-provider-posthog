@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package packet
 
 // Generated with `gpg --export-secret-keys "Test Key 2"`

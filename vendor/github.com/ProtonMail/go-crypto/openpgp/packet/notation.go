@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package packet
 
 // Notation type represents a Notation Data subpacket

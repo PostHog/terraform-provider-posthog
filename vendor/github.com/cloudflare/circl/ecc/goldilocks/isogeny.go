@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package goldilocks
 
 import fp "github.com/cloudflare/circl/math/fp448"

@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package require
 
 // TestingT is an interface wrapper around *testing.T

@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package cty
 
 // NullVal returns a null value of the given type. A null can be created of any

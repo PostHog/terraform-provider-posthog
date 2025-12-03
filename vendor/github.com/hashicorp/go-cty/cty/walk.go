@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package cty
 
 // Walk visits all of the values in a possibly-complex structure, calling

@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 //go:build solaris && !appengine
 // +build solaris,!appengine
 

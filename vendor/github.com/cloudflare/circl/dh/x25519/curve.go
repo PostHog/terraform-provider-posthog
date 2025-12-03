@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package x25519
 
 import (

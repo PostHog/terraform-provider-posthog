@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 // Package ed448 implements Ed448 signature scheme as described in RFC-8032.
 //
 // This package implements two signature variants.

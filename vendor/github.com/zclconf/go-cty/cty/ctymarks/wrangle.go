@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package ctymarks
 
 // WrangleAction values each describe an action to be taken for a particular

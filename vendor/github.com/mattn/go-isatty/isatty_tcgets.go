@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 //go:build (linux || aix || zos) && !appengine && !tinygo
 // +build linux aix zos
 // +build !appengine

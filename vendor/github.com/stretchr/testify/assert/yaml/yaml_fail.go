@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 //go:build testify_yaml_fail && !testify_yaml_custom && !testify_yaml_default
 
 // Package yaml is an implementation of YAML functions that always fail.

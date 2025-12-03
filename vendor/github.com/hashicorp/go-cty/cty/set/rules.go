@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package set
 
 // Rules represents the operations that define membership for a Set.

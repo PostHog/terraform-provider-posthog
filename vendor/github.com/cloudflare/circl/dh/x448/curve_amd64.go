@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 //go:build amd64 && !purego
 // +build amd64,!purego
 

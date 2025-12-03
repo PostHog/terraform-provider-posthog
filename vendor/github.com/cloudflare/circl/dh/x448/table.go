@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package x448
 
 import fp "github.com/cloudflare/circl/math/fp448"

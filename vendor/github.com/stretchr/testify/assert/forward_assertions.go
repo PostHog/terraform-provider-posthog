@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package assert
 
 // Assertions provides assertion methods around the

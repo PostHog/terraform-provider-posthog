@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package packet
 
 const rsaFingerprintHex = "5fb74b1d03b1e3cb31bc2f8aa34d7e18c20c31bb"

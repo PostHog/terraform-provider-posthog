@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package cty
 
 // UnknownAsNull returns a value of the same type as the given value but

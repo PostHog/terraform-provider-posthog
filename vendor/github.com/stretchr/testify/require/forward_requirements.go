@@ -1,3 +1,5 @@
+// Copyright (c) HashiCorp, Inc.
+
 package require
 
 // Assertions provides assertion methods around the
