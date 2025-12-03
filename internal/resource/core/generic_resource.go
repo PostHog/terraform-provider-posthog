@@ -62,7 +62,7 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Metadata(
 	resp *resource.MetadataResponse,
 ) {
 	resp.TypeName = fmt.Sprintf("%s_%s", req.ProviderTypeName,
-		strings.Replace(strings.ToLower(r.ops.ResourceName()), " ", "_", -1),
+		strings.ReplaceAll(strings.ToLower(r.ops.ResourceName()), " ", "_"),
 	)
 }
 
