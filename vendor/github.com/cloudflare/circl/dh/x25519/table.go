@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package x25519
 
 import "github.com/cloudflare/circl/math/fp25519"

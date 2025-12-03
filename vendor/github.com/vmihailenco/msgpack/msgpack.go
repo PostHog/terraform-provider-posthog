@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package msgpack
 
 type Marshaler interface {

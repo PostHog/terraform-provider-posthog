@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package assert provides a set of comprehensive testing tools for use with the normal Go testing system.
 //
 // # Note

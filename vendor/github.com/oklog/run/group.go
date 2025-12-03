@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package run implements an actor-runner with deterministic teardown. It is
 // somewhat similar to package errgroup, except it does not require actor
 // goroutines to understand context semantics. This makes it suitable for use in

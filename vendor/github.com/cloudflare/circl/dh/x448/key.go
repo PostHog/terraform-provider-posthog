@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package x448
 
 import (

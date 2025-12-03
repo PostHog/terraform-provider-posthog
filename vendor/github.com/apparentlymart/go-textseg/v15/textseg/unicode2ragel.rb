@@ -1,6 +1,4 @@
 #!/usr/bin/env ruby
-# Copyright (c) HashiCorp, Inc.
-
 #
 # This scripted has been updated to accept more command-line arguments:
 #

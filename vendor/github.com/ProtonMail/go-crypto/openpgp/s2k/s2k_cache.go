@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package s2k
 
 // Cache stores keys derived with s2k functions from one passphrase

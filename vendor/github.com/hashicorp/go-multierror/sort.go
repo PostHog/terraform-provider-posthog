@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package multierror
 
 // Len implements sort.Interface function for length

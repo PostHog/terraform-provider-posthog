@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package fp448
 
 import (

@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // +build appengine
 
 package internal

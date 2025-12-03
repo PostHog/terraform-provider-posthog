@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 //go:build windows && !appengine
 // +build windows,!appengine
 

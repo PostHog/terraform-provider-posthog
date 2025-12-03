@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package cty
 
 // TestConformance recursively walks the receiver and the given other type and

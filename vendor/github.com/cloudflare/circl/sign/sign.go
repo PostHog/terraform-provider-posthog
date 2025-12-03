@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package sign provides unified interfaces for signature schemes.
 //
 // A register of schemes is available in the package

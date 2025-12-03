@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 /*
 Package x25519 provides Diffie-Hellman functions as specified in RFC-7748.
 

@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package eax
 
 // Test vectors from

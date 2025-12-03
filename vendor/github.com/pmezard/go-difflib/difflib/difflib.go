@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package difflib is a partial port of Python difflib module.
 //
 // It provides tools to compare sequences of strings and generate textual diffs.

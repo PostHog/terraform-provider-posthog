@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package sha3
 
 // RC stores the round constants for use in the ι step.

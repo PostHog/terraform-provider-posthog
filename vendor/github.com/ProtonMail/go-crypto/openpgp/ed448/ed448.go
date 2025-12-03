@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package ed448 implements the ed448 signature algorithm for OpenPGP
 // as defined in the Open PGP crypto refresh.
 package ed448

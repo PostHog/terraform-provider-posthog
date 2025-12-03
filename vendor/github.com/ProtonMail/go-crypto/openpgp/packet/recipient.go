@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package packet
 
 // Recipient type represents a Intended Recipient Fingerprint subpacket

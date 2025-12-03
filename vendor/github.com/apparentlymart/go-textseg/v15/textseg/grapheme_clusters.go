@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 //line grapheme_clusters.rl:1
 package textseg
 

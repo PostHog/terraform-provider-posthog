@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package ctystrings is a collection of string manipulation utilities which
 // intend to help application developers implement string-manipulation
 // functionality in a way that respects the cty model of strings, even when

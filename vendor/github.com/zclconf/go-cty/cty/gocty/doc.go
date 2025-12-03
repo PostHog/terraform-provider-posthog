@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package gocty deals with converting between cty Values and native go
 // values.
 //

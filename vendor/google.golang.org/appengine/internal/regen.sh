@@ -1,6 +1,4 @@
 #!/bin/bash -e
-# Copyright (c) HashiCorp, Inc.
-
 #
 # This script rebuilds the generated code for the protocol buffers.
 # To run this you will need protoc and goprotobuf installed;

@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package msgpack provides functions for serializing cty values in the
 // msgpack encoding, and decoding them again.
 //

@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package ocb
 
 // Second set of test vectors from https://tools.ietf.org/html/rfc7253

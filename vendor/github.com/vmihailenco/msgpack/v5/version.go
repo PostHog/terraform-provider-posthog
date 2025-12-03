@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package msgpack
 
 // Version is the current release version.

@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package cty
 
 // unknownType is the placeholder type used for the sigil value representing

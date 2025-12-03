@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package s2k
 
 import "crypto"

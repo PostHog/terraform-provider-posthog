@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package textseg
 
 import "unicode/utf8"

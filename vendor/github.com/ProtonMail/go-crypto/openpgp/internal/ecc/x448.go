@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package ecc implements a generic interface for ECDH, ECDSA, and EdDSA.
 package ecc
 

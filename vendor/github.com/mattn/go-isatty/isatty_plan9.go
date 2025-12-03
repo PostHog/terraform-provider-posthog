@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 //go:build plan9
 // +build plan9
 

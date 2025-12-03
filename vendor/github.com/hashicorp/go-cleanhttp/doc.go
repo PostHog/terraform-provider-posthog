@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package cleanhttp offers convenience utilities for acquiring "clean"
 // http.Transport and http.Client structs.
 //

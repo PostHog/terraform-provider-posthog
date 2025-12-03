@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 package packet
 
 // This file implements the pushdown automata (PDA) from PGPainless (Paul Schaub)

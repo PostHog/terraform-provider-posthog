@@ -1,5 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-
 // Package ed25519 implements the ed25519 signature algorithm for OpenPGP
 // as defined in the Open PGP crypto refresh.
 package ed25519

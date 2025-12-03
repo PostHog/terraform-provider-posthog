@@ -1,5 +1,3 @@
-# Copyright (c) HashiCorp, Inc.
-
 set -ev
 
 if [[ "$1" == "goveralls" ]]; then
