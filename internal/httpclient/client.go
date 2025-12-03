@@ -19,10 +19,11 @@ type PosthogClient struct {
 	host       string
 	apiKey     string
 	projectID  string
+	version    string
 	httpClient *http.Client
 }
 
-func NewDefaultClient(host, apiKey, projectID string, opts ...ClientOption) PosthogClient {
+func NewDefaultClient(host, apiKey, projectID, version string, opts ...ClientOption) PosthogClient {
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -43,11 +44,12 @@ func NewDefaultClient(host, apiKey, projectID string, opts ...ClientOption) Post
 		host:       host,
 		apiKey:     apiKey,
 		projectID:  projectID,
+		version:    version,
 		httpClient: httpClient,
 	}
 }
 
-func NewClient(client *http.Client, host, apiKey, projectID string, opts ...ClientOption) PosthogClient {
+func NewClient(client *http.Client, host, apiKey, projectID, version string, opts ...ClientOption) PosthogClient {
 	for _, opt := range opts {
 		opt(client)
 	}
@@ -56,6 +58,7 @@ func NewClient(client *http.Client, host, apiKey, projectID string, opts ...Clie
 		host:       host,
 		apiKey:     apiKey,
 		projectID:  projectID,
+		version:    version,
 		httpClient: client,
 	}
 }
@@ -88,7 +91,7 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Posthog/terraform-provider-http v0.0.1")
+	req.Header.Set("User-Agent", fmt.Sprintf("posthog/terraform-provider; version: %s", c.version))
 
 	tflog.Debug(ctx, "sending http request", map[string]any{"method": method, "url": url})
 

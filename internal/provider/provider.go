@@ -117,7 +117,7 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client: httpclient.NewDefaultClient(host, apiKey, projectID),
+		Client: httpclient.NewDefaultClient(host, apiKey, projectID, p.version),
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
