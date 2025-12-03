@@ -9,7 +9,7 @@ PLAYGROUND_TFRC ?= $(PLAYGROUND_DIR)/terraformrc
 PLUGIN_FILENAME ?= terraform-provider-$(PLUGIN_NAME)_v$(PLUGIN_VERSION)
 
 default: fmt lint install generate
-.PHONY: fmt lint test testacc testacc-integration build install generate playground-binary playground-init playground-plan playground-apply playground-clean
+.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean
 
 build:
 	go build -v ./...
@@ -27,12 +27,9 @@ fmt:
 	gofmt -s -w -e .
 
 test:
-	go test -v -cover -timeout=120s -parallel=10 ./...
+	go test -v -cover -timeout=120s -parallel=10 ./internal/...
 
 testacc:
-	TF_ACC=1 go test -v -cover -timeout 120m ./...
-
-testacc-integration:
 	@if [ -z "$$POSTHOG_API_KEY" ]; then \
 		read -p "POSTHOG_API_KEY not set. Enter API key: " POSTHOG_API_KEY; \
 		export POSTHOG_API_KEY; \
@@ -45,8 +42,8 @@ testacc-integration:
 		read -p "POSTHOG_HOST not set. Enter Posthog host: " POSTHOG_HOST; \
 		export POSTHOG_HOST; \
 	fi; \
-	echo "Running integration tests..."; \
-	TF_ACC=1 POSTHOG_API_KEY=$$POSTHOG_API_KEY POSTHOG_PROJECT_ID=$$POSTHOG_PROJECT_ID POSTHOG_HOST=$$POSTHOG_HOST go test -v -timeout 30m ./tests/...
+	echo "Running acceptance tests..."; \
+	TF_ACC=1 POSTHOG_API_KEY=$$POSTHOG_API_KEY POSTHOG_PROJECT_ID=$$POSTHOG_PROJECT_ID POSTHOG_HOST=$$POSTHOG_HOST go test -v -timeout 30m ./testacc/...
 
 playground-binary:
 	mkdir -p $(BIN_DIR)
