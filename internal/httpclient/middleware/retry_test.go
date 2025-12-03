@@ -137,7 +137,7 @@ func TestRetryTransport_NonRetryableStatusCodes(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attempts.Add(1)
 				w.WriteHeader(statusCode)
-				w.Write([]byte(`{"error": "client error"}`))
+				_, _ = w.Write([]byte(`{"error": "client error"}`))
 			}))
 			defer server.Close()
 
@@ -148,7 +148,7 @@ func TestRetryTransport_NonRetryableStatusCodes(t *testing.T) {
 			resp, err := client.Do(req)
 
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			assert.Equal(t, statusCode, resp.StatusCode)
 			assert.Equal(t, int32(1), attempts.Load(), "should not retry on %d", statusCode)
@@ -164,11 +164,11 @@ func TestRetryTransport_RetryOn429WithRetryAfter(t *testing.T) {
 		if attempt < 2 {
 			w.Header().Set("Retry-After", "1") // 1 second
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error": "rate limited"}`))
+			_, _ = w.Write([]byte(`{"error": "rate limited"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
 
@@ -185,7 +185,7 @@ func TestRetryTransport_RetryOn429WithRetryAfter(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), attempts.Load())
