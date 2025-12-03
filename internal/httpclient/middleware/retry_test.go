@@ -29,7 +29,7 @@ func testRetryConfig() RetryConfig {
 func TestRetryTransport_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
 
@@ -40,7 +40,7 @@ func TestRetryTransport_Success(t *testing.T) {
 	resp, err := client.Do(req)
 
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -98,11 +98,11 @@ func TestRetryTransport_RetryableStatusCodes(t *testing.T) {
 				attempt := attempts.Add(1)
 				if attempt < tt.failUntilAttempt {
 					w.WriteHeader(tt.failStatus)
-					w.Write([]byte(`{"error": "server error"}`))
+					_, _ = w.Write([]byte(`{"error": "server error"}`))
 					return
 				}
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"status": "ok"}`))
+				_, _ = w.Write([]byte(`{"status": "ok"}`))
 			}))
 			defer server.Close()
 
@@ -113,7 +113,7 @@ func TestRetryTransport_RetryableStatusCodes(t *testing.T) {
 			resp, err := client.Do(req)
 
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			assert.Equal(t, tt.expectedStatus, resp.StatusCode)
 			assert.Equal(t, tt.expectedAttempts, attempts.Load())
 		})

@@ -126,7 +126,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if resp != nil {
 			// Close response body before retry to avoid resource leak
 			if resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			if resp.StatusCode == http.StatusTooManyRequests {
 				if retryAfter, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After")); ok {
