@@ -91,7 +91,7 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", fmt.Sprintf("Posthog/terraform-provider-http; version: %s", c.version))
+	req.Header.Set("User-Agent", fmt.Sprintf("posthog/terraform-provider; version: %s", c.version))
 
 	tflog.Debug(ctx, "sending http request", map[string]any{"method": method, "url": url})
 
