@@ -200,11 +200,11 @@ func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *te
 		if attempt < 2 {
 			w.Header().Set("Retry-After", "1") // 1 second
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error": "rate limited"}`))
+			_, _ = w.Write([]byte(`{"error": "rate limited"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
 
@@ -217,7 +217,7 @@ func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *te
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), attempts.Load())
@@ -230,7 +230,7 @@ func TestRetryTransport_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "internal server error"}`))
+		_, _ = w.Write([]byte(`{"error": "internal server error"}`))
 	}))
 	defer server.Close()
 
@@ -263,7 +263,7 @@ func TestRetryTransport_WithBody(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
 
@@ -279,7 +279,7 @@ func TestRetryTransport_WithBody(t *testing.T) {
 	resp, err := client.Do(req)
 
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Len(t, receivedBodies, 2, "expected 2 attempts")
@@ -315,7 +315,7 @@ func TestRetryTransport_OnRetryCallback(t *testing.T) {
 	resp, err := client.Do(req)
 
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Len(t, callbackInvocations, 2, "callback should be invoked twice (after attempt 1 and 2)")
 	assert.Equal(t, []int{1, 2}, callbackInvocations)
