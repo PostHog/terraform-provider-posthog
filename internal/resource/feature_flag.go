@@ -227,7 +227,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Active = core.PtrToBool(resp.Active)
 
 	// Set filters if present
-	if resp.Filters != nil && len(resp.Filters) > 0 {
+	if len(resp.Filters) > 0 {
 		filtersJSON, err := json.Marshal(resp.Filters)
 		if err == nil {
 			model.Filters = types.StringValue(string(filtersJSON))

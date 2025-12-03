@@ -443,11 +443,18 @@ func testStepNewConfig(ctx context.Context, t testing.T, c TestCase, wd *plugint
 		// this fails. If refresh isn't read-only, then this will have
 		// caught a different bug.
 		if idRefreshCheck != nil {
+			fmt.Println("Not Writing by testing ID Refresh")
 			if err := testIDRefresh(ctx, t, c, wd, step, idRefreshCheck, providers, stepIndex, helper); err != nil {
 				return fmt.Errorf(
 					"[ERROR] Test: ID-only test failed: %s", err)
 			}
 		}
+	}
+
+	if step.PostApplyFunc != nil {
+		logging.HelperResourceDebug(ctx, "Calling TestCase PostApplyFunc")
+		step.PostApplyFunc()
+		logging.HelperResourceDebug(ctx, "Called TestCase PostApplyFunc")
 	}
 
 	if refreshAfterApply && !step.Destroy && !step.PlanOnly {
