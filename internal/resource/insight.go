@@ -1,10 +1,9 @@
 package resource
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"sort"
+	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -105,13 +104,9 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 			diags.AddError("Invalid query_json", "query_json cannot be empty")
 			return input, diags
 		}
-		if !json.Valid([]byte(raw)) {
-			diags.AddError("Invalid query_json", "query_json must be valid JSON")
-			return input, diags
-		}
 		var query map[string]interface{}
 		if err := json.Unmarshal([]byte(raw), &query); err != nil {
-			diags.AddError("Invalid query_json", err.Error())
+			diags.AddError("Invalid query_json", "query_json must be valid JSON: "+err.Error())
 			return input, diags
 		}
 		input.Query = query
@@ -199,9 +194,14 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	diags.Append(d...)
 	model.DashboardIDs = dashSet
 
-	// Query - normalize to prevent state drift
+	// Query - filter API response to only include fields from user's config
+	// This enables drift detection for user-specified fields while ignoring server-added fields
 	if resp.Query != nil {
-		normalizedQuery, err := normalizeQueryMap(resp.Query)
+		userQueryJSON := ""
+		if !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown() {
+			userQueryJSON = model.QueryJSON.ValueString()
+		}
+		normalizedQuery, err := normalizeQueryForState(resp.Query, userQueryJSON)
 		if err != nil {
 			diags.AddError("Failed to normalize query", err.Error())
 			return diags
@@ -216,112 +216,88 @@ func (o InsightOps) Create(ctx context.Context, client httpclient.PosthogClient,
 	return client.CreateInsight(ctx, req)
 }
 
-func (o InsightOps) Read(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
+func (o InsightOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
 	return client.GetInsight(ctx, id)
 }
 
-func (o InsightOps) Update(ctx context.Context, client httpclient.PosthogClient, id int64, req httpclient.InsightRequest) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
+func (o InsightOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.InsightRequest) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
 	return client.UpdateInsight(ctx, id, req)
 }
 
-func (o InsightOps) Delete(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.HTTPStatusCode, error) {
+func (o InsightOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteInsight(ctx, id)
 }
 
-// normalizeQueryMap normalizes a query map to canonical JSON, stripping server-only fields.
-func normalizeQueryMap(query map[string]interface{}) (string, error) {
-	if query == nil {
+// normalizeQueryForState takes the API response query and the user's configured query,
+// filters the API response to only include fields the user specified, and returns
+// canonical JSON. This enables drift detection without needing to maintain a list
+// of server-only fields.
+func normalizeQueryForState(apiQuery map[string]interface{}, userQueryJSON string) (string, error) {
+	if apiQuery == nil {
 		return "", nil
 	}
 
-	// Server-only fields to strip at top level
-	topLevelServerOnlyFields := map[string]struct{}{
-		"filters": {}, "result": {}, "hogql": {}, "columns": {},
-		"cache_target_age": {}, "next_allowed_client_refresh": {},
-		"created_at": {}, "updated_at": {}, "last_refresh": {},
-		"last_modified_at": {}, "last_modified_by": {}, "last_viewed_at": {},
-		"timezone": {}, "is_cached": {}, "query_status": {}, "types": {},
-		"version": {},
+	// Parse user's query to know which fields to keep
+	var userQuery map[string]interface{}
+	if err := json.Unmarshal([]byte(userQueryJSON), &userQuery); err != nil {
+		// If we can't parse user's query, fall back to returning API query as canonical JSON
+		return marshalJSON(apiQuery)
 	}
 
-	// Server-only fields to strip from the "source" object
-	sourceServerOnlyFields := map[string]struct{}{
-		"version": {},
-	}
-
-	normalized := make(map[string]interface{})
-	for key, value := range query {
-		if _, skip := topLevelServerOnlyFields[key]; skip {
-			continue
-		}
-
-		// If this is the "source" object, strip server-only fields from it too
-		if key == "source" {
-			if sourceMap, ok := value.(map[string]interface{}); ok {
-				normalizedSource := make(map[string]interface{})
-				for sourceKey, sourceValue := range sourceMap {
-					if _, skip := sourceServerOnlyFields[sourceKey]; !skip {
-						normalizedSource[sourceKey] = sourceValue
-					}
-				}
-				normalized[key] = normalizedSource
-				continue
-			}
-		}
-
-		normalized[key] = value
-	}
-
-	return marshalCanonical(normalized)
+	filtered := filterToOnlyIncludeUserFields(userQuery, apiQuery)
+	return marshalJSON(filtered)
 }
 
-// marshalCanonical marshals to JSON with sorted keys.
-func marshalCanonical(v interface{}) (string, error) {
-	buf := &bytes.Buffer{}
-	if err := encodeCanonical(buf, v); err != nil {
-		return "", err
+func marshalJSON(v interface{}) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal canonical JSON: %w", err)
 	}
-	return buf.String(), nil
+	return string(data), nil
 }
 
-func encodeCanonical(buf *bytes.Buffer, v interface{}) error {
-	switch val := v.(type) {
+// filterToOnlyIncludeUserFields filters apiData to only include fields present in userData.
+// This allows drift detection for fields the user cares about while ignoring
+// server-added fields (like "result", "hogql", "is_cached", etc.) automatically.
+func filterToOnlyIncludeUserFields(userData, apiData interface{}) interface{} {
+	switch userVal := userData.(type) {
 	case map[string]interface{}:
-		buf.WriteByte('{')
-		keys := make([]string, 0, len(val))
-		for key := range val {
-			keys = append(keys, key)
+		apiMap, ok := apiData.(map[string]interface{})
+		if !ok {
+			// Type mismatch - return API data as-is to surface the drift
+			return apiData
 		}
-		sort.Strings(keys)
-		for i, key := range keys {
-			if i > 0 {
-				buf.WriteByte(',')
+		result := make(map[string]interface{})
+		for key, userValue := range userVal {
+			if apiValue, exists := apiMap[key]; exists {
+				// Recursively filter nested structures
+				result[key] = filterToOnlyIncludeUserFields(userValue, apiValue)
 			}
-			keyJSON, _ := json.Marshal(key)
-			buf.Write(keyJSON)
-			buf.WriteByte(':')
-			if err := encodeCanonical(buf, val[key]); err != nil {
-				return err
-			}
+			// If key doesn't exist in API response, don't include it
+			// This will surface as drift when compared to user's config
 		}
-		buf.WriteByte('}')
+		return result
+
 	case []interface{}:
-		buf.WriteByte('[')
-		for i, item := range val {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			if err := encodeCanonical(buf, item); err != nil {
-				return err
+		apiSlice, ok := apiData.([]interface{})
+		if !ok {
+			// Type mismatch - return API data as-is to surface the drift
+			return apiData
+		}
+		result := make([]interface{}, len(apiSlice))
+		for i, apiItem := range apiSlice {
+			if i < len(userVal) {
+				// Filter each array element against corresponding user element
+				result[i] = filterToOnlyIncludeUserFields(userVal[i], apiItem)
+			} else {
+				// API has more elements than user specified
+				result[i] = apiItem
 			}
 		}
-		buf.WriteByte(']')
+		return result
+
 	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		buf.Write(data)
+		// Primitive value - return API's value to detect drift
+		return apiData
 	}
-	return nil
 }
