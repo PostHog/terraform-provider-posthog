@@ -23,7 +23,7 @@ func NewInsight() resource.Resource {
 }
 
 type InsightResourceTFModel struct {
-	core.BaseIdentifiable
+	core.BaseInt64Identifiable
 	Name           types.String `tfsdk:"name"`
 	DerivedName    types.String `tfsdk:"derived_name"`
 	Description    types.String `tfsdk:"description"`

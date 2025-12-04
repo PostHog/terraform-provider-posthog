@@ -19,7 +19,7 @@ func NewDashboard() resource.Resource {
 }
 
 type DashboardResourceTFModel struct {
-	core.BaseIdentifiable
+	core.BaseInt64Identifiable
 	Name        types.String `tfsdk:"name"`
 	Description types.String `tfsdk:"description"`
 	Pinned      types.Bool   `tfsdk:"pinned"`
@@ -140,14 +140,14 @@ func (o DashboardOps) Create(ctx context.Context, client httpclient.PosthogClien
 	return client.CreateDashboard(ctx, req)
 }
 
-func (o DashboardOps) Read(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
+func (o DashboardOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
 	return client.GetDashboard(ctx, id)
 }
 
-func (o DashboardOps) Update(ctx context.Context, client httpclient.PosthogClient, id int64, req httpclient.DashboardRequest) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
+func (o DashboardOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.DashboardRequest) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
 	return client.UpdateDashboard(ctx, id, req)
 }
 
-func (o DashboardOps) Delete(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.HTTPStatusCode, error) {
+func (o DashboardOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteDashboard(ctx, id)
 }

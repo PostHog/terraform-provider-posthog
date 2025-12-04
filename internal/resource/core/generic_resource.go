@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -32,9 +31,9 @@ type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] inter
 	MapResponseToModel(ctx context.Context, resp APIResponse, model *TFModel) diag.Diagnostics
 
 	Create(ctx context.Context, client httpclient.PosthogClient, req APIRequest) (APIResponse, error)
-	Read(ctx context.Context, client httpclient.PosthogClient, id int64) (APIResponse, httpclient.HTTPStatusCode, error)
-	Update(ctx context.Context, client httpclient.PosthogClient, id int64, req APIRequest) (APIResponse, httpclient.HTTPStatusCode, error)
-	Delete(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.HTTPStatusCode, error)
+	Read(ctx context.Context, client httpclient.PosthogClient, id string) (APIResponse, httpclient.HTTPStatusCode, error)
+	Update(ctx context.Context, client httpclient.PosthogClient, id string, req APIRequest) (APIResponse, httpclient.HTTPStatusCode, error)
+	Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error)
 }
 
 // GenericResource implements resource.Resource using the provided operations.
@@ -161,7 +160,6 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Read(
 
 	response, statusCode, err := r.ops.Read(ctx, r.client, state.GetID())
 	if err != nil {
-		// TODO does this make sense here?
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource not found, removing from state", map[string]any{"id": state.GetID()})
 			resp.State.RemoveResource(ctx)
@@ -214,9 +212,12 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 
 	response, statusCode, err := r.ops.Update(ctx, r.client, state.GetID(), request)
 	if err != nil {
-		// TODO does this make sense here?
 		if statusCode == http.StatusNotFound {
-			tflog.Warn(ctx, "Resource not found, removing from state", map[string]any{"id": state.GetID()})
+			tflog.Warn(ctx, "Resource not found during update, removing from state", map[string]any{"id": state.GetID()})
+			resp.Diagnostics.AddWarning(
+				"Resource not found",
+				fmt.Sprintf("%s with ID %s was deleted externally and will be recreated.", r.ops.ResourceName(), state.GetID()),
+			)
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -285,14 +286,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
 ) {
-	id, err := strconv.ParseInt(req.ID, 10, 64)
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid import ID", err.Error())
-		return
-	}
-
 	// Read the resource to populate state
-	response, _, err := r.ops.Read(ctx, r.client, id)
+	response, _, err := r.ops.Read(ctx, r.client, req.ID)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			fmt.Sprintf("Error reading %s during import", r.ops.ResourceName()),

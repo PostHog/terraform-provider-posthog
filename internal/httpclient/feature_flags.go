@@ -31,17 +31,17 @@ func (c *PosthogClient) CreateFeatureFlag(ctx context.Context, input FeatureFlag
 	return result, err
 }
 
-func (c *PosthogClient) GetFeatureFlag(ctx context.Context, id int64) (FeatureFlag, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/projects/%s/feature_flags/%d/", c.projectID, id)
+func (c *PosthogClient) GetFeatureFlag(ctx context.Context, id string) (FeatureFlag, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", c.projectID, id)
 	return doGet[FeatureFlag](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateFeatureFlag(ctx context.Context, id int64, input FeatureFlagRequest) (FeatureFlag, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/projects/%s/feature_flags/%d/", c.projectID, id)
+func (c *PosthogClient) UpdateFeatureFlag(ctx context.Context, id string, input FeatureFlagRequest) (FeatureFlag, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", c.projectID, id)
 	return doPatch[FeatureFlag](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteFeatureFlag(ctx context.Context, id int64) (HTTPStatusCode, error) {
+func (c *PosthogClient) DeleteFeatureFlag(ctx context.Context, id string) (HTTPStatusCode, error) {
 	existing, _, err := c.GetFeatureFlag(ctx, id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get feature flag for deletion: %w", err)
