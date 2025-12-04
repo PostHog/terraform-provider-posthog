@@ -9,7 +9,7 @@ PLAYGROUND_TFRC ?= $(PLAYGROUND_DIR)/terraformrc
 PLUGIN_FILENAME ?= terraform-provider-$(PLUGIN_NAME)_v$(PLUGIN_VERSION)
 
 default: fmt lint install generate
-.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean
+.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean release-alpha release-beta release
 
 build:
 	go build -v ./...
@@ -64,3 +64,27 @@ playground-apply: playground-tfrc
 playground-clean:
 	rm -f $(PLAYGROUND_TFRC)
 	rm -rf $(PLAYGROUND_DIR)/.terraform $(PLAYGROUND_DIR)/.terraform.lock.hcl
+
+# Release targets - create signed tags and push to trigger GoReleaser
+# Usage: make release-alpha VERSION=0.1.0 NUM=1  -> v0.1.0-alpha.1
+#        make release VERSION=0.1.0              -> v0.1.0
+VERSION ?= 0.0.1
+NUM ?= 1
+
+release-alpha:
+	@echo "Creating alpha release v$(VERSION)-alpha.$(NUM)..."
+	git tag -s "v$(VERSION)-alpha.$(NUM)" -m "v$(VERSION)-alpha.$(NUM)"
+	git push origin "v$(VERSION)-alpha.$(NUM)"
+	@echo "Release v$(VERSION)-alpha.$(NUM) pushed. Check GitHub Actions for release status."
+
+release-beta:
+	@echo "Creating beta release v$(VERSION)-beta.$(NUM)..."
+	git tag -s "v$(VERSION)-beta.$(NUM)" -m "v$(VERSION)-beta.$(NUM)"
+	git push origin "v$(VERSION)-beta.$(NUM)"
+	@echo "Release v$(VERSION)-beta.$(NUM) pushed. Check GitHub Actions for release status."
+
+release:
+	@echo "Creating stable release v$(VERSION)..."
+	git tag -s "v$(VERSION)" -m "v$(VERSION)"
+	git push origin "v$(VERSION)"
+	@echo "Release v$(VERSION) pushed. Check GitHub Actions for release status."

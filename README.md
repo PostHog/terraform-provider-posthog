@@ -99,3 +99,24 @@ In order to run the full suite of Acceptance tests, run `make testacc`.
 ```shell
 make testacc
 ```
+
+## Releasing
+
+Releases are automated via GoReleaser when a signed tag is pushed. The Makefile provides convenience targets for creating releases:
+
+```shell
+# Alpha releases (pre-release, for early testing)
+make release-alpha VERSION=0.1.0 NUM=1  # creates v0.1.0-alpha.1
+
+# Beta releases (pre-release, feature complete)
+make release-beta VERSION=0.1.0 NUM=1   # creates v0.1.0-beta.1
+
+# Stable releases
+make release VERSION=0.1.0              # creates v0.1.0
+```
+
+**Requirements:**
+- GPG key configured for signing (`git tag -s`)
+- GPG key added to your GitHub account (for the "Verified" badge)
+
+Pre-release versions (alpha, beta) won't be installed by default — users must explicitly pin to them in their Terraform configuration.
