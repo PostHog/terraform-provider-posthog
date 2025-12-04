@@ -1,22 +1,36 @@
 package core
 
 import (
+	"strconv"
+
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 type Identifiable interface {
-	GetID() int64
+	GetID() string
 	HasValidID() bool
 }
 
-type BaseIdentifiable struct {
+type BaseInt64Identifiable struct {
 	ID types.Int64 `tfsdk:"id"`
 }
 
-func (b BaseIdentifiable) HasValidID() bool {
+func (b BaseInt64Identifiable) HasValidID() bool {
 	return !b.ID.IsNull() && !b.ID.IsUnknown()
 }
 
-func (b BaseIdentifiable) GetID() int64 {
-	return b.ID.ValueInt64()
+func (b BaseInt64Identifiable) GetID() string {
+	return strconv.FormatInt(b.ID.ValueInt64(), 10)
+}
+
+type BaseStringIdentifiable struct {
+	ID types.String `tfsdk:"id"`
+}
+
+func (b BaseStringIdentifiable) HasValidID() bool {
+	return !b.ID.IsNull() && !b.ID.IsUnknown() && b.ID.ValueString() != ""
+}
+
+func (b BaseStringIdentifiable) GetID() string {
+	return b.ID.ValueString()
 }

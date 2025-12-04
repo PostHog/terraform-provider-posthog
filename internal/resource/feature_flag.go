@@ -22,7 +22,7 @@ func NewFeatureFlag() resource.Resource {
 }
 
 type FeatureFlagTFModel struct {
-	core.BaseIdentifiable
+	core.BaseInt64Identifiable
 	Key               types.String `tfsdk:"key"`
 	Name              types.String `tfsdk:"name"`
 	Active            types.Bool   `tfsdk:"active"`
@@ -255,14 +255,14 @@ func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogCli
 	return client.CreateFeatureFlag(ctx, req)
 }
 
-func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
+func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
 	return client.GetFeatureFlag(ctx, id)
 }
 
-func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, id int64, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
+func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
 	return client.UpdateFeatureFlag(ctx, id, req)
 }
 
-func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, id int64) (httpclient.HTTPStatusCode, error) {
+func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteFeatureFlag(ctx, id)
 }
