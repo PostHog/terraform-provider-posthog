@@ -36,24 +36,6 @@ jobs:
         with:
           version: latest
 
-  generate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-      # We need the latest version of Terraform for our documentation generation to use
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_wrapper: false
-      - run: make generate
-      - name: Check for uncommitted changes
-        run: |
-          git diff --compact-summary --exit-code || \
-            (echo; echo "Unexpected difference in directories after code generation. Run 'make generate' command and commit."; exit 1)
-
   # Run unit tests in a matrix with Terraform CLI versions
   # Note: Acceptance tests in ./testacc/ require POSTHOG_API_KEY and should be run separately
   test:
