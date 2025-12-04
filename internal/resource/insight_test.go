@@ -37,6 +37,39 @@ func TestFilterToUserFields(t *testing.T) {
 				},
 			},
 		},
+		"complex objects should be handled correctly as well": {
+			userData: map[string]interface{}{
+				"kind":   "DataVisualizationNode",
+				"result": []interface{}{1, 2, 4},
+				"source": map[string]interface{}{
+					"kind": "TrendsQuery",
+				},
+				"test": "foobar",
+			},
+			apiData: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind":    "TrendsQuery",
+					"version": 2, // server-added
+				},
+				"test": map[string]interface{}{
+					"kind": "TestQuery",
+				},
+				"result":    []interface{}{1, 2, 3, 4},
+				"hogql":     "SELECT ...", // server-added
+				"is_cached": true,         // server-added
+			},
+			expected: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind": "TrendsQuery",
+				},
+				"result": []interface{}{1, 2, 3, 4}, // Drift will be flagged
+				"test": map[string]interface{}{
+					"kind": "TestQuery",
+				},
+			},
+		},
 		"detects value changes (drift)": {
 			userData: map[string]interface{}{
 				"kind": "DataVisualizationNode",
