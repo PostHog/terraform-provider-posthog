@@ -326,6 +326,14 @@ resource "posthog_insight" "test" {
 					resource.TestCheckNoResourceAttr("posthog_alert.test", "name"),
 				),
 			},
+			// Step 4: Recreate
+			{
+				Config: testAccAlertBasic(rName + "-recreated"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "name", rName+"-recreated"),
+					resource.TestCheckResourceAttrSet("posthog_alert.test", "insight"),
+				),
+			},
 		},
 	})
 }
