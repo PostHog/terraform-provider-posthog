@@ -150,3 +150,11 @@ func doPatch[T any](c *PosthogClient, ctx context.Context, path string, body any
 	}
 	return result, status, nil
 }
+
+func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCode, error) {
+	_, status, err := c.doRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return status, fmt.Errorf("failed to send DELETE request: %w", err)
+	}
+	return status, nil
+}
