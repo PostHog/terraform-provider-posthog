@@ -24,6 +24,7 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 ### Optional
 
 - `calculation_interval` (String) How often to check the alert: `hourly`, `daily`, `weekly`, or `monthly`.
+- `check_ongoing_interval` (Boolean) Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked.
 - `condition_type` (String) Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.
 - `enabled` (Boolean) Whether the alert is enabled. Defaults to true.
 - `name` (String) Name of the alert.

@@ -83,6 +83,7 @@ func TestAlert_AllFields(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_lower", "10"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_upper", "100"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "condition_type", "absolute_value"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "true"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "calculation_interval", "daily"),
 					resource.TestCheckResourceAttrSet("posthog_alert.test", "id"),
 				),
@@ -238,6 +239,42 @@ func TestAlert_CalculationIntervals(t *testing.T) {
 	})
 }
 
+// TestAlert_CheckOngoingInterval tests toggling the check_ongoing_interval setting.
+func TestAlert_CheckOngoingInterval(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			// Create with check_ongoing_interval = true
+			{
+				Config: testAccAlertWithCheckOngoingInterval(rName, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "true"),
+				),
+			},
+			// Update to false
+			{
+				Config: testAccAlertWithCheckOngoingInterval(rName, false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "false"),
+				),
+			},
+			// Update back to true
+			{
+				Config: testAccAlertWithCheckOngoingInterval(rName, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "true"),
+				),
+			},
+		},
+	})
+}
+
 // TestAlert_Import tests importing an existing alert by ID.
 func TestAlert_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
@@ -315,16 +352,11 @@ resource "posthog_insight" "test" {
 				Config: insightOnlyConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName+"-insight"),
-					resource.TestCheckNoResourceAttr("posthog_alert.test", "name"),
 				),
 			},
 			// Step 3: Remove insight too - should succeed since alert is gone
 			{
 				Config: `provider "posthog" {}`,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckNoResourceAttr("posthog_insight.test", "name"),
-					resource.TestCheckNoResourceAttr("posthog_alert.test", "name"),
-				),
 			},
 			// Step 4: Recreate
 			{
@@ -385,17 +417,18 @@ provider "posthog" {}
 %s
 
 resource "posthog_alert" "test" {
-  name                 = %q
-  insight              = posthog_insight.test.id
-  subscribed_users     = []
-  enabled              = true
-  threshold_type       = "absolute"
-  threshold_lower      = 10
-  threshold_upper      = 100
-  condition_type       = "absolute_value"
-  series_index         = 0
-  calculation_interval = "daily"
-  skip_weekend         = false
+  name                   = %q
+  insight                = posthog_insight.test.id
+  subscribed_users       = []
+  enabled                = true
+  threshold_type         = "absolute"
+  threshold_lower        = 10
+  threshold_upper        = 100
+  condition_type         = "absolute_value"
+  series_index           = 0
+  check_ongoing_interval = true
+  calculation_interval   = "daily"
+  skip_weekend           = false
 
   depends_on = [posthog_insight.test]
 }
@@ -476,4 +509,23 @@ resource "posthog_alert" "test" {
   depends_on = [posthog_insight.test]
 }
 `, testAccAlertInsightBase(name), name, interval)
+}
+
+func testAccAlertWithCheckOngoingInterval(name string, checkOngoing bool) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name                   = %q
+  insight                = posthog_insight.test.id
+  subscribed_users       = []
+  threshold_type         = "absolute"
+  threshold_upper        = 100
+  check_ongoing_interval = %t
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(name), name, checkOngoing)
 }

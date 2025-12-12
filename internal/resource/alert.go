@@ -29,10 +29,11 @@ type AlertResourceTFModel struct {
 	ThresholdLower      types.Float64 `tfsdk:"threshold_lower"`
 	ThresholdUpper      types.Float64 `tfsdk:"threshold_upper"`
 	ConditionType       types.String  `tfsdk:"condition_type"`
-	SeriesIndex         types.Int64   `tfsdk:"series_index"`
-	CalculationInterval types.String  `tfsdk:"calculation_interval"`
-	SkipWeekend         types.Bool    `tfsdk:"skip_weekend"`
-	State               types.String  `tfsdk:"state"`
+	SeriesIndex            types.Int64   `tfsdk:"series_index"`
+	CheckOngoingInterval   types.Bool    `tfsdk:"check_ongoing_interval"`
+	CalculationInterval    types.String  `tfsdk:"calculation_interval"`
+	SkipWeekend            types.Bool    `tfsdk:"skip_weekend"`
+	State                  types.String  `tfsdk:"state"`
 }
 
 type AlertOps struct{}
@@ -101,6 +102,14 @@ func (o AlertOps) Schema() schema.Schema {
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
+			"check_ongoing_interval": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"calculation_interval": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
@@ -165,11 +174,17 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 		}
 	}
 
-	if !model.SeriesIndex.IsNull() && !model.SeriesIndex.IsUnknown() {
-		seriesIndex := int(model.SeriesIndex.ValueInt64())
+	if !model.SeriesIndex.IsNull() && !model.SeriesIndex.IsUnknown() || !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
 		req.Config = &httpclient.TrendsAlertConfig{
-			Type:        "TrendsAlertConfig",
-			SeriesIndex: &seriesIndex,
+			Type: "TrendsAlertConfig",
+		}
+		if !model.SeriesIndex.IsNull() && !model.SeriesIndex.IsUnknown() {
+			seriesIndex := int(model.SeriesIndex.ValueInt64())
+			req.Config.SeriesIndex = &seriesIndex
+		}
+		if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
+			checkOngoing := model.CheckOngoingInterval.ValueBool()
+			req.Config.CheckOngoingInterval = &checkOngoing
 		}
 	}
 
@@ -257,6 +272,12 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 		model.SeriesIndex = types.Int64Value(int64(*resp.Config.SeriesIndex))
 	} else {
 		model.SeriesIndex = types.Int64Null()
+	}
+
+	if resp.Config != nil && resp.Config.CheckOngoingInterval != nil {
+		model.CheckOngoingInterval = types.BoolValue(*resp.Config.CheckOngoingInterval)
+	} else {
+		model.CheckOngoingInterval = types.BoolNull()
 	}
 
 	if resp.CalculationInterval != nil {
