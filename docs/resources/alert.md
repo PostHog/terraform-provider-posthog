@@ -36,4 +36,3 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 ### Read-Only
 
 - `id` (String) UUID of the alert.
-- `state` (String) Current state of the alert: `Firing`, `Not firing`, `Errored`, or `Snoozed`.
