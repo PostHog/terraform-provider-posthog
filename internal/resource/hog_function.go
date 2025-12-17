@@ -308,17 +308,19 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		}
 	}
 
-	if len(resp.Inputs) > 0 {
-		normalized, err := normalizeJSONForState(resp.Inputs, model.InputsJSON.ValueString())
-		if err != nil {
-			diags.AddError("Failed to normalize inputs", err.Error())
-			return diags
+	// Only update inputs_json if user configured it (not template-provided)
+	// This prevents inconsistent state when template provides default inputs
+	if !model.InputsJSON.IsNull() {
+		if len(resp.Inputs) > 0 {
+			normalized, err := normalizeJSONForState(resp.Inputs, model.InputsJSON.ValueString())
+			if err != nil {
+				diags.AddError("Failed to normalize inputs", err.Error())
+				return diags
+			}
+			model.InputsJSON = types.StringValue(normalized)
+		} else {
+			model.InputsJSON = types.StringValue("{}")
 		}
-		model.InputsJSON = types.StringValue(normalized)
-	} else if !model.InputsJSON.IsNull() {
-		model.InputsJSON = types.StringValue("{}")
-	} else {
-		model.InputsJSON = types.StringNull()
 	}
 
 	if len(resp.Filters) > 0 {
