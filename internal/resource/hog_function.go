@@ -268,7 +268,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
 	model.Enabled = core.PtrToBool(resp.Enabled)
-	model.Hog = core.PtrToStringNullIfEmptyTrimmed(resp.Hog)
+	model.Hog = core.PtrToStringTrimmed(resp.Hog)
 	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
 
 	// TemplateID - only set if the model already has one (write-only field)

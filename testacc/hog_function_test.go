@@ -518,7 +518,7 @@ resource "posthog_hog_function" "test" {
   enabled     = true
   template_id = "template-webhook"
 
-  hog = <<-EOT
+  hog = chomp(<<-EOT
     let payload := {
       'headers': inputs.headers,
       'body': inputs.body,
@@ -539,6 +539,7 @@ resource "posthog_hog_function" "test" {
       print('Response', res.status, res.body);
     }
   EOT
+  )
 
   inputs_json = jsonencode({
     url = {
