@@ -213,7 +213,7 @@ func TestHogFunction_ImportWithHogCode(t *testing.T) {
 				ResourceName:            "posthog_hog_function.test",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"inputs_json", "filters_json", "inputs_schema_json"},
+				ImportStateVerifyIgnore: []string{"inputs_json", "filters_json"},
 			},
 		},
 	})

@@ -379,16 +379,16 @@ func normalizeJSONStripServerFields(apiData interface{}, userJSON string) (strin
 func stripServerFields(v interface{}) interface{} {
 	// serverComputedFields are fields that the server generates and should be stripped
 	// from API responses to avoid spurious diffs.
-	var serverComputedFields = map[string]bool{
-		"bytecode": true,
-		"order":    true,
+	var serverComputedFields = map[string]struct{}{
+		"bytecode": {},
+		"order":    {},
 	}
 
 	switch val := v.(type) {
 	case map[string]interface{}:
 		cleaned := make(map[string]interface{})
 		for k, v := range val {
-			if !serverComputedFields[k] {
+			if _, isServerField := serverComputedFields[k]; !isServerField {
 				cleaned[k] = stripServerFields(v)
 			}
 		}
