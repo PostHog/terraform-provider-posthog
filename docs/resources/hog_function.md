@@ -24,7 +24,6 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 - `hog` (String) The Hog code to execute. Not required when using a template - the template provides the code.
 - `icon_url` (String) URL of the icon for this Hog function.
 - `inputs_json` (String) JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties.
-- `inputs_schema_json` (String) JSON array defining the input schema for the Hog function. When using a template, this is provided by the template.
 - `mappings_json` (String) JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.
 - `masking_json` (String) JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.
 - `name` (String) Name of the Hog function.

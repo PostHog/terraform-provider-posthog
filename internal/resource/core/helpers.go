@@ -16,6 +16,20 @@ func PtrToStringNullIfEmptyTrimmed(v *string) types.String {
 	return types.StringValue(*v)
 }
 
+// PtrToStringTrimmed trims trailing whitespace from a string pointer.
+// Returns null if the pointer is nil or the trimmed result is empty.
+// Useful for multi-line code fields where trailing newlines can differ.
+func PtrToStringTrimmed(v *string) types.String {
+	if v == nil {
+		return types.StringNull()
+	}
+	trimmed := strings.TrimRight(*v, " \t\n\r")
+	if trimmed == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(trimmed)
+}
+
 func PtrToBool(v *bool) types.Bool {
 	if v == nil {
 		return types.BoolNull()

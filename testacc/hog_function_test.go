@@ -188,6 +188,37 @@ func TestHogFunction_Import(t *testing.T) {
 	})
 }
 
+// TestHogFunction_ImportWithHogCode tests importing a hog function with explicit hog code.
+// This verifies that the hog attribute is properly populated during import.
+func TestHogFunction_ImportWithHogCode(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			// Create with explicit hog code
+			{
+				Config: testAccHogFunctionWithHogCode(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "hog"),
+				),
+			},
+			// Import and verify hog is preserved (not ignored)
+			{
+				ResourceName:            "posthog_hog_function.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"inputs_json", "filters_json"},
+			},
+		},
+	})
+}
+
 // TestHogFunction_AlertWebhookIntegration tests the full chain:
 // insight → alert → hog_function webhook notification when alert fires.
 func TestHogFunction_AlertWebhookIntegration(t *testing.T) {
@@ -472,6 +503,77 @@ resource "posthog_hog_function" "test" {
   })
 
   depends_on = [posthog_alert.test]
+}
+`, name)
+}
+
+func testAccHogFunctionWithHogCode(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Test hog function with explicit hog code"
+  type        = "destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  hog = chomp(<<-EOT
+    let payload := {
+      'headers': inputs.headers,
+      'body': inputs.body,
+      'method': inputs.method
+    }
+
+    if (inputs.debug) {
+      print('Request', inputs.url, payload)
+    }
+
+    let res := fetch(inputs.url, payload);
+
+    if (res.status >= 400) {
+      throw Error(f'Webhook failed with status {res.status}: {res.body}');
+    }
+
+    if (inputs.debug) {
+      print('Response', res.status, res.body);
+    }
+  EOT
+  )
+
+  inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/webhook"
+      templating = "hog"
+    }
+    method = {
+      value      = "POST"
+      templating = "hog"
+    }
+    body = {
+      value = {
+        event     = "{event.event}"
+        timestamp = "{event.timestamp}"
+      }
+      templating = "hog"
+    }
+    headers = {
+      value = {
+        "Content-Type" = "application/json"
+      }
+      templating = "hog"
+    }
+  })
+
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$pageview"
+      name = "$pageview"
+      type = "events"
+    }]
+    filter_test_accounts = false
+  })
 }
 `, name)
 }
