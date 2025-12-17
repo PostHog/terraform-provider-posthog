@@ -23,19 +23,18 @@ func NewHogFunction() resource.Resource {
 
 type HogFunctionResourceTFModel struct {
 	core.BaseStringIdentifiable
-	Type             types.String `tfsdk:"type"`
-	Name             types.String `tfsdk:"name"`
-	Description      types.String `tfsdk:"description"`
-	Enabled          types.Bool   `tfsdk:"enabled"`
-	Hog              types.String `tfsdk:"hog"`
-	InputsSchemaJSON types.String `tfsdk:"inputs_schema_json"`
-	InputsJSON       types.String `tfsdk:"inputs_json"`
-	FiltersJSON      types.String `tfsdk:"filters_json"`
-	MaskingJSON      types.String `tfsdk:"masking_json"`
-	MappingsJSON     types.String `tfsdk:"mappings_json"`
-	IconURL          types.String `tfsdk:"icon_url"`
-	TemplateID       types.String `tfsdk:"template_id"`
-	ExecutionOrder   types.Int64  `tfsdk:"execution_order"`
+	Type           types.String `tfsdk:"type"`
+	Name           types.String `tfsdk:"name"`
+	Description    types.String `tfsdk:"description"`
+	Enabled        types.Bool   `tfsdk:"enabled"`
+	Hog            types.String `tfsdk:"hog"`
+	InputsJSON     types.String `tfsdk:"inputs_json"`
+	FiltersJSON    types.String `tfsdk:"filters_json"`
+	MaskingJSON    types.String `tfsdk:"masking_json"`
+	MappingsJSON   types.String `tfsdk:"mappings_json"`
+	IconURL        types.String `tfsdk:"icon_url"`
+	TemplateID     types.String `tfsdk:"template_id"`
+	ExecutionOrder types.Int64  `tfsdk:"execution_order"`
 }
 
 type HogFunctionOps struct{}
@@ -83,14 +82,6 @@ func (o HogFunctionOps) Schema() schema.Schema {
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "The Hog code to execute. Not required when using a template - the template provides the code.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
-			"inputs_schema_json": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "JSON array defining the input schema for the Hog function. When using a template, this is provided by the template.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -178,18 +169,6 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 	if !model.ExecutionOrder.IsNull() && !model.ExecutionOrder.IsUnknown() {
 		order := int(model.ExecutionOrder.ValueInt64())
 		req.ExecutionOrder = &order
-	}
-
-	if !model.InputsSchemaJSON.IsNull() && !model.InputsSchemaJSON.IsUnknown() {
-		raw := strings.TrimSpace(model.InputsSchemaJSON.ValueString())
-		if raw != "" {
-			var inputsSchema []map[string]interface{}
-			if err := json.Unmarshal([]byte(raw), &inputsSchema); err != nil {
-				diags.AddError("Invalid inputs_schema_json", "inputs_schema_json must be valid JSON array: "+err.Error())
-				return req, diags
-			}
-			req.InputsSchema = inputsSchema
-		}
 	}
 
 	if !model.InputsJSON.IsNull() && !model.InputsJSON.IsUnknown() {
@@ -288,37 +267,21 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.ExecutionOrder = types.Int64Null()
 	}
 
-	// Only update inputs_schema_json if user configured it (not template-provided)
-	if !model.InputsSchemaJSON.IsNull() {
-		if len(resp.InputsSchema) > 0 {
-			normalized, err := normalizeJSONForState(resp.InputsSchema, model.InputsSchemaJSON.ValueString())
-			if err != nil {
-				diags.AddError("Failed to normalize inputs_schema", err.Error())
-				return diags
-			}
-			model.InputsSchemaJSON = types.StringValue(normalized)
-		} else {
-			model.InputsSchemaJSON = types.StringValue("[]")
+	// Always populate inputs_json from API for import support
+	// Strip server-computed fields (bytecode, order) from each input
+	if len(resp.Inputs) > 0 {
+		normalized, err := normalizeJSONStripServerFields(resp.Inputs, model.InputsJSON.ValueString())
+		if err != nil {
+			diags.AddError("Failed to normalize inputs", err.Error())
+			return diags
 		}
-	}
-
-	// Only update inputs_json if user configured it (not template-provided)
-	// This prevents inconsistent state when template provides default inputs
-	if !model.InputsJSON.IsNull() {
-		if len(resp.Inputs) > 0 {
-			normalized, err := normalizeJSONForState(resp.Inputs, model.InputsJSON.ValueString())
-			if err != nil {
-				diags.AddError("Failed to normalize inputs", err.Error())
-				return diags
-			}
-			model.InputsJSON = types.StringValue(normalized)
-		} else {
-			model.InputsJSON = types.StringValue("{}")
-		}
+		model.InputsJSON = types.StringValue(normalized)
+	} else if !model.InputsJSON.IsNull() {
+		model.InputsJSON = types.StringValue("{}")
 	}
 
 	if len(resp.Filters) > 0 {
-		normalized, err := normalizeFiltersJSON(resp.Filters, model.FiltersJSON.ValueString())
+		normalized, err := normalizeJSONStripServerFields(resp.Filters, model.FiltersJSON.ValueString())
 		if err != nil {
 			diags.AddError("Failed to normalize filters", err.Error())
 			return diags
@@ -331,7 +294,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	}
 
 	if len(resp.Masking) > 0 {
-		normalized, err := normalizeJSONForState(resp.Masking, model.MaskingJSON.ValueString())
+		normalized, err := normalizeJSONStripServerFields(resp.Masking, model.MaskingJSON.ValueString())
 		if err != nil {
 			diags.AddError("Failed to normalize masking", err.Error())
 			return diags
@@ -343,8 +306,9 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.MaskingJSON = types.StringNull()
 	}
 
+	// Mappings contain nested inputs and filters that need server fields stripped
 	if len(resp.Mappings) > 0 {
-		normalized, err := normalizeJSONForState(resp.Mappings, model.MappingsJSON.ValueString())
+		normalized, err := normalizeJSONStripServerFields(resp.Mappings, model.MappingsJSON.ValueString())
 		if err != nil {
 			diags.AddError("Failed to normalize mappings", err.Error())
 			return diags
@@ -400,20 +364,42 @@ func normalizeJSONForState(apiData interface{}, userJSON string) (string, error)
 	return marshalJSON(filtered)
 }
 
-// normalizeFiltersJSON normalizes the API response for filters_json,
-// stripping server-computed fields like bytecode.
-func normalizeFiltersJSON(apiData map[string]interface{}, userJSON string) (string, error) {
+// normalizeJSONStripServerFields normalizes JSON by stripping server-computed fields
+// returning canonical JSON matching user's field structure.
+func normalizeJSONStripServerFields(apiData interface{}, userJSON string) (string, error) {
 	if apiData == nil {
 		return "", nil
 	}
 
-	// Remove server-computed bytecode from API response
-	apiDataCleaned := make(map[string]interface{})
-	for k, v := range apiData {
-		if k != "bytecode" {
-			apiDataCleaned[k] = v
-		}
+	cleaned := stripServerFields(apiData)
+	return normalizeJSONForState(cleaned, userJSON)
+}
+
+// stripServerFields recursively removes server-computed fields from a value.
+func stripServerFields(v interface{}) interface{} {
+	// serverComputedFields are fields that the server generates and should be stripped
+	// from API responses to avoid spurious diffs.
+	var serverComputedFields = map[string]bool{
+		"bytecode": true,
+		"order":    true,
 	}
 
-	return normalizeJSONForState(apiDataCleaned, userJSON)
+	switch val := v.(type) {
+	case map[string]interface{}:
+		cleaned := make(map[string]interface{})
+		for k, v := range val {
+			if !serverComputedFields[k] {
+				cleaned[k] = stripServerFields(v)
+			}
+		}
+		return cleaned
+	case []interface{}:
+		cleaned := make([]interface{}, len(val))
+		for i, item := range val {
+			cleaned[i] = stripServerFields(item)
+		}
+		return cleaned
+	default:
+		return v
+	}
 }
