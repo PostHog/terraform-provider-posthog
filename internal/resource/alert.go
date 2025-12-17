@@ -21,19 +21,18 @@ func NewAlert() resource.Resource {
 
 type AlertResourceTFModel struct {
 	core.BaseStringIdentifiable
-	Name                types.String  `tfsdk:"name"`
-	Insight             types.Int64   `tfsdk:"insight"`
-	Enabled             types.Bool    `tfsdk:"enabled"`
-	SubscribedUsers     types.Set     `tfsdk:"subscribed_users"`
-	ThresholdType       types.String  `tfsdk:"threshold_type"`
-	ThresholdLower      types.Float64 `tfsdk:"threshold_lower"`
-	ThresholdUpper      types.Float64 `tfsdk:"threshold_upper"`
-	ConditionType       types.String  `tfsdk:"condition_type"`
+	Name                   types.String  `tfsdk:"name"`
+	Insight                types.Int64   `tfsdk:"insight"`
+	Enabled                types.Bool    `tfsdk:"enabled"`
+	SubscribedUsers        types.Set     `tfsdk:"subscribed_users"`
+	ThresholdType          types.String  `tfsdk:"threshold_type"`
+	ThresholdLower         types.Float64 `tfsdk:"threshold_lower"`
+	ThresholdUpper         types.Float64 `tfsdk:"threshold_upper"`
+	ConditionType          types.String  `tfsdk:"condition_type"`
 	SeriesIndex            types.Int64   `tfsdk:"series_index"`
 	CheckOngoingInterval   types.Bool    `tfsdk:"check_ongoing_interval"`
 	CalculationInterval    types.String  `tfsdk:"calculation_interval"`
 	SkipWeekend            types.Bool    `tfsdk:"skip_weekend"`
-	State                  types.String  `tfsdk:"state"`
 }
 
 type AlertOps struct{}
@@ -125,10 +124,6 @@ func (o AlertOps) Schema() schema.Schema {
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
-			},
-			"state": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "Current state of the alert: `Firing`, `Not firing`, `Errored`, or `Snoozed`.",
 			},
 		},
 	}
@@ -290,12 +285,6 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 		model.SkipWeekend = types.BoolValue(*resp.SkipWeekend)
 	} else {
 		model.SkipWeekend = types.BoolNull()
-	}
-
-	if resp.State != nil {
-		model.State = types.StringValue(*resp.State)
-	} else {
-		model.State = types.StringNull()
 	}
 
 	return diags

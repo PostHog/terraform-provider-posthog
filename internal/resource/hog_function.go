@@ -268,13 +268,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
 	model.Enabled = core.PtrToBool(resp.Enabled)
-
-	// Hog - only update if user configured it (not using template-provided code)
-	// This prevents inconsistent state when template provides the hog code
-	if !model.Hog.IsNull() {
-		model.Hog = core.PtrToStringNullIfEmptyTrimmed(resp.Hog)
-	}
-
+	model.Hog = core.PtrToStringNullIfEmptyTrimmed(resp.Hog)
 	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
 
 	// TemplateID - only set if the model already has one (write-only field)
@@ -324,7 +318,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	}
 
 	if len(resp.Filters) > 0 {
-		normalized, err := normalizeJSONForState(resp.Filters, model.FiltersJSON.ValueString())
+		normalized, err := normalizeFiltersJSON(resp.Filters, model.FiltersJSON.ValueString())
 		if err != nil {
 			diags.AddError("Failed to normalize filters", err.Error())
 			return diags
@@ -404,4 +398,22 @@ func normalizeJSONForState(apiData interface{}, userJSON string) (string, error)
 
 	filtered := filterToOnlyIncludeUserFields(userData, apiData)
 	return marshalJSON(filtered)
+}
+
+// normalizeFiltersJSON normalizes the API response for filters_json,
+// stripping server-computed fields like bytecode.
+func normalizeFiltersJSON(apiData map[string]interface{}, userJSON string) (string, error) {
+	if apiData == nil {
+		return "", nil
+	}
+
+	// Remove server-computed bytecode from API response
+	apiDataCleaned := make(map[string]interface{})
+	for k, v := range apiData {
+		if k != "bytecode" {
+			apiDataCleaned[k] = v
+		}
+	}
+
+	return normalizeJSONForState(apiDataCleaned, userJSON)
 }
