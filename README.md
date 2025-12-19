@@ -1,122 +1,111 @@
-# Terraform Provider Scaffolding (Terraform Plugin Framework)
+# Terraform Provider for PostHog
 
-_This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://developer.hashicorp.com/terraform/plugin/framework-benefits) in the Terraform documentation for additional information._
+Terraform provider for managing [PostHog](https://posthog.com) resources.
 
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
+## Documentation
 
-- A resource and a data source (`internal/provider/`),
-- Examples (`examples/`) and generated documentation (`docs/`),
-- Miscellaneous meta files.
-
-These files contain boilerplate code that you will need to edit to create your own Terraform provider. Tutorials for creating Terraform providers can be found on the [HashiCorp Developer](https://developer.hashicorp.com/terraform/tutorials/providers-plugin-framework) platform. _Terraform Plugin Framework specific guides are titled accordingly._
-
-Please see the [GitHub template repository documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template) for how to create a new repository from this template on GitHub.
-
-Once you've written your provider, you'll want to [publish it on the Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing) so that others can use it.
+For usage documentation and supported resources, see the [Terraform Registry](https://registry.terraform.io/providers/posthog/posthog/latest/docs).
 
 ## Requirements
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.0
 - [Go](https://golang.org/doc/install) >= 1.24
 
-## Building The Provider
-
-1. Clone the repository
-1. Enter the repository directory
-1. Build the provider using the Go `install` command:
+## Building the Provider
 
 ```shell
 go install
 ```
 
-## Adding Dependencies
+## Local Development
 
-This provider uses [Go modules](https://github.com/golang/go/wiki/Modules).
-Please see the Go documentation for the most up to date information about using Go modules.
+The `playground/` directory lets you test provider changes locally without publishing.
 
-To add a new dependency `github.com/author/dependency` to your Terraform provider:
+### Setup
 
-```shell
-go get github.com/author/dependency
-go mod tidy
-```
+1. Create your Terraform config in `playground/` (e.g., `playground/demo.tf`)
 
-Then commit the changes to `go.mod` and `go.sum`.
-
-## Using the provider
-
-Configure the provider with your PostHog host, personal API key, and default project/environment ID. All resources inherit this project scope.
-
-```hcl
-provider "posthog" {
-  host       = "https://us.posthog.com"
-  api_key    = var.posthog_api_key
-  project_id = var.posthog_project_id
-}
-
-resource "posthog_insight" "weekly_signups" {
-  name        = "Weekly signups"
-  description = "Tracks sign up volume per week"
-  derived_name = "Weekly signups"
-
-  query_json = jsonencode({
-    kind   = "InsightVizNode"
-    source = {
-      kind   = "TrendsQuery"
-      series = [{
-        kind= "EventsNode"
-        name = "$pageview"
-        event = "$pageview"
-        math= "total"
-      }]
-      version = 2
-      trendsFilter = {}
-    }
-  })
-  tags = ["managed-by:terraform"]
-  create_in_folder = "Unfiled/Insights"
-}
-```
-
-To import an existing insight, run:
+2. Build the provider and run terraform:
 
 ```shell
-terraform import posthog_insight.weekly_signups "<insight_id>"
+# Plan changes
+make playground-plan
+
+# Apply changes
+make playground-apply
 ```
 
-## Developing the Provider
+This builds the provider binary and configures Terraform to use your local build via `dev_overrides` - no `terraform init` required.
 
-If you wish to work on the provider, you'll first need [Go](http://www.golang.org) installed on your machine (see [Requirements](#requirements) above).
+### Manual Setup
 
-To compile the provider, run `go install`. This will build the provider and put the provider binary in the `$GOPATH/bin` directory.
-
-To generate or update documentation, run `make generate`.
-
-In order to run the full suite of Acceptance tests, run `make testacc`.
-
-*Note:* Acceptance tests create real resources, and often cost money to run.
+If you prefer to test outside the playground directory:
 
 ```shell
+# Build the provider
+make playground-binary
+
+# Point Terraform to your local build
+export TF_CLI_CONFIG_FILE=/path/to/terraform-provider-posthog/playground/terraformrc
+
+# Run terraform commands in any directory
+terraform plan
+terraform apply
+```
+
+### Cleanup
+
+```shell
+make playground-clean
+```
+
+## Testing
+
+### Unit Tests
+
+```shell
+go test ./...
+```
+
+### Acceptance Tests
+
+Acceptance tests run against a real PostHog instance and create actual resources:
+
+```shell
+export POSTHOG_API_KEY="your-api-key"
+export POSTHOG_PROJECT_ID="12345"
+export POSTHOG_HOST="https://us.posthog.com"
+
 make testacc
+```
+
+## Generating Documentation
+
+```shell
+make generate
 ```
 
 ## Releasing
 
-Releases are automated via GoReleaser when a signed tag is pushed. The Makefile provides convenience targets for creating releases:
+Releases are automated via GoReleaser when a signed tag is pushed. The Makefile provides convenience targets:
 
 ```shell
 # Alpha releases (pre-release, for early testing)
-make release-alpha VERSION=0.1.0 NUM=1  # creates v0.1.0-alpha.1
+make release-alpha VERSION=1.0.0 NUM=1  # creates v1.0.0-alpha.1
 
 # Beta releases (pre-release, feature complete)
-make release-beta VERSION=0.1.0 NUM=1   # creates v0.1.0-beta.1
+make release-beta VERSION=1.0.0 NUM=1   # creates v1.0.0-beta.1
 
 # Stable releases
-make release VERSION=0.1.0              # creates v0.1.0
+make release VERSION=1.0.0              # creates v1.0.0
 ```
 
 **Requirements:**
 - GPG key configured for signing (`git tag -s`)
 - GPG key added to your GitHub account (for the "Verified" badge)
 
-Pre-release versions (alpha, beta) won't be installed by default — users must explicitly pin to them in their Terraform configuration.
+Pre-release versions (alpha, beta) won't be installed by default - users must explicitly pin to them in their Terraform configuration.
+
+## License
+
+See [LICENSE](LICENSE).
