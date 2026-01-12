@@ -130,6 +130,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewFeatureFlag,
 		posthogresource.NewHogFunction,
 		posthogresource.NewInsight,
+		posthogresource.NewProject,
 	}
 }
 
