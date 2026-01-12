@@ -42,8 +42,12 @@ testacc:
 		read -p "POSTHOG_HOST not set. Enter Posthog host: " POSTHOG_HOST; \
 		export POSTHOG_HOST; \
 	fi; \
+	if [ -z "$$POSTHOG_ORGANIZATION_ID" ]; then \
+		read -p "POSTHOG_ORGANIZATION_ID not set. Enter Organization ID (required for project tests): " POSTHOG_ORGANIZATION_ID; \
+		export POSTHOG_ORGANIZATION_ID; \
+	fi; \
 	echo "Running acceptance tests..."; \
-	TF_ACC=1 POSTHOG_API_KEY=$$POSTHOG_API_KEY POSTHOG_PROJECT_ID=$$POSTHOG_PROJECT_ID POSTHOG_HOST=$$POSTHOG_HOST go test -v -timeout 30m ./testacc/...
+	TF_ACC=1 POSTHOG_API_KEY=$$POSTHOG_API_KEY POSTHOG_PROJECT_ID=$$POSTHOG_PROJECT_ID POSTHOG_HOST=$$POSTHOG_HOST POSTHOG_ORGANIZATION_ID=$$POSTHOG_ORGANIZATION_ID go test -v -timeout 30m ./testacc/...
 
 playground-binary:
 	mkdir -p $(BIN_DIR)
