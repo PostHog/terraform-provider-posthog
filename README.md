@@ -75,6 +75,7 @@ Acceptance tests run against a real PostHog instance and create actual resources
 export POSTHOG_API_KEY="your-api-key"
 export POSTHOG_PROJECT_ID="12345"
 export POSTHOG_HOST="https://us.posthog.com"
+export POSTHOG_ORGANIZATION_ID="your-org-uuid"  # Required for project resource tests
 
 make testacc
 ```
