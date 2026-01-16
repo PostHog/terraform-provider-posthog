@@ -3,10 +3,12 @@ package tests
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // TestFeatureFlag_Basic tests creating a feature flag with only the required field (key).
@@ -308,6 +310,52 @@ func TestFeatureFlag_Import(t *testing.T) {
 				ImportState:             true,
 				ImportStateVerify:       true,
 				ImportStateVerifyIgnore: []string{"filters", "rollout_percentage"},
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_ImportWithProjectID tests importing using the project_id/resource_id format.
+// This format allows importing resources without having project_id set at the provider level.
+func TestFeatureFlag_ImportWithProjectID(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Import With ProjectID Test", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+				),
+			},
+			// Import using project_id/resource_id format
+			{
+				ResourceName:            "posthog_feature_flag.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"filters", "rollout_percentage"},
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["posthog_feature_flag.test"]
+					if !ok {
+						return "", fmt.Errorf("resource not found: posthog_feature_flag.test")
+					}
+					// Use project_id/resource_id format
+					return fmt.Sprintf("%s/%s", projectID, rs.Primary.ID), nil
+				},
+			},
+			// Verify project_id is set in state after import
+			{
+				Config: testAccFeatureFlagWithName(rKey, "Import With ProjectID Test", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "project_id", projectID),
+				),
 			},
 		},
 	})

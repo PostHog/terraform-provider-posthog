@@ -20,17 +20,24 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 	"posthog": providerserver.NewProtocol6WithError(provider.New("test")()),
 }
 
-// testAccPreCheck validates required environment variables before running tests.
-func testAccPreCheck(t *testing.T) {
+// testAccBasePreCheck validates the minimum required environment variables.
+// Use this as a building block for more specific prechecks.
+func testAccBasePreCheck(t *testing.T) {
 	t.Helper()
 	if os.Getenv("POSTHOG_API_KEY") == "" {
 		t.Fatal("POSTHOG_API_KEY must be set for acceptance tests")
 	}
-	if os.Getenv("POSTHOG_PROJECT_ID") == "" {
-		t.Fatal("POSTHOG_PROJECT_ID must be set for acceptance tests")
-	}
 	if os.Getenv("POSTHOG_HOST") == "" {
 		t.Fatal("POSTHOG_HOST must be set for acceptance tests")
+	}
+}
+
+// testAccPreCheck validates required environment variables for tests that need a project_id.
+func testAccPreCheck(t *testing.T) {
+	t.Helper()
+	testAccBasePreCheck(t)
+	if os.Getenv("POSTHOG_PROJECT_ID") == "" {
+		t.Fatal("POSTHOG_PROJECT_ID must be set for acceptance tests")
 	}
 }
 
@@ -39,5 +46,13 @@ func skipIfNotAcceptance(t *testing.T) {
 	t.Helper()
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("Acceptance tests skipped unless TF_ACC=1")
+	}
+}
+
+// skipIfNoOrganizationID skips the test if POSTHOG_ORGANIZATION_ID is not set.
+func skipIfNoOrganizationID(t *testing.T) {
+	t.Helper()
+	if os.Getenv("POSTHOG_ORGANIZATION_ID") == "" {
+		t.Skip("Skipping test: POSTHOG_ORGANIZATION_ID not set")
 	}
 }

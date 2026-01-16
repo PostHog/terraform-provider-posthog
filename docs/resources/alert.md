@@ -28,6 +28,7 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 - `condition_type` (String) Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.
 - `enabled` (Boolean) Whether the alert is enabled. Defaults to true.
 - `name` (String) Name of the alert.
+- `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `series_index` (Number) Index of the trend series to monitor (0-based). Used for trends alerts.
 - `skip_weekend` (Boolean) Whether to skip checking the alert on weekends.
 - `threshold_lower` (Number) Lower bound of the threshold. Alert fires when value goes below this.

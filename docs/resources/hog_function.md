@@ -27,6 +27,7 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 - `mappings_json` (String) JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.
 - `masking_json` (String) JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.
 - `name` (String) Name of the Hog function.
+- `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `template_id` (String) ID of a template to use as the basis for this Hog function. The template provides default code, inputs schema, and configuration.
 - `type` (String) Type of Hog function: `destination`, `site_destination`, `internal_destination`, `source_webhook`, `site_app`, or `transformation`.
 

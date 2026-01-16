@@ -108,16 +108,12 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	if !data.ProjectID.IsNull() {
 		projectID = data.ProjectID.ValueString()
 	}
-	if projectID == "" {
-		resp.Diagnostics.AddError("Missing project ID",
-			fmt.Sprintf("The provider requires a PostHog project ID. Set it in configuration or as env var: %s.", EnvPostHogProjectId))
-		return
-	}
 
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client: httpclient.NewDefaultClient(host, apiKey, projectID, p.version),
+		Client:           httpclient.NewDefaultClient(host, apiKey, p.version),
+		DefaultProjectID: projectID,
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData

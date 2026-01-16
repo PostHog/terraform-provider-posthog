@@ -25,24 +25,24 @@ type FeatureFlagRequest struct {
 	Deleted *bool                  `json:"deleted,omitempty"`
 }
 
-func (c *PosthogClient) CreateFeatureFlag(ctx context.Context, input FeatureFlagRequest) (FeatureFlag, error) {
-	path := fmt.Sprintf("/api/projects/%s/feature_flags/", c.projectID)
+func (c *PosthogClient) CreateFeatureFlag(ctx context.Context, projectID string, input FeatureFlagRequest) (FeatureFlag, error) {
+	path := fmt.Sprintf("/api/projects/%s/feature_flags/", projectID)
 	result, _, err := doPost[FeatureFlag](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetFeatureFlag(ctx context.Context, id string) (FeatureFlag, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", c.projectID, id)
+func (c *PosthogClient) GetFeatureFlag(ctx context.Context, projectID, id string) (FeatureFlag, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", projectID, id)
 	return doGet[FeatureFlag](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateFeatureFlag(ctx context.Context, id string, input FeatureFlagRequest) (FeatureFlag, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", c.projectID, id)
+func (c *PosthogClient) UpdateFeatureFlag(ctx context.Context, projectID, id string, input FeatureFlagRequest) (FeatureFlag, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/projects/%s/feature_flags/%s/", projectID, id)
 	return doPatch[FeatureFlag](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteFeatureFlag(ctx context.Context, id string) (HTTPStatusCode, error) {
-	existing, _, err := c.GetFeatureFlag(ctx, id)
+func (c *PosthogClient) DeleteFeatureFlag(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
+	existing, _, err := c.GetFeatureFlag(ctx, projectID, id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get feature flag for deletion: %w", err)
 	}
@@ -52,6 +52,6 @@ func (c *PosthogClient) DeleteFeatureFlag(ctx context.Context, id string) (HTTPS
 		Key:     existing.Key,
 		Deleted: &deleted,
 	}
-	_, statusCode, err := c.UpdateFeatureFlag(ctx, id, input)
+	_, statusCode, err := c.UpdateFeatureFlag(ctx, projectID, id, input)
 	return statusCode, err
 }

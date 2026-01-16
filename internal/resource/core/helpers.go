@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -104,4 +107,26 @@ func ShouldClearString(plan, state types.String) bool {
 // StringPtr returns a pointer to the given string.
 func StringPtr(s string) *string {
 	return &s
+}
+
+func ProjectIDSchemaAttribute() schema.StringAttribute {
+	return schema.StringAttribute{
+		Optional:            true,
+		Computed:            true,
+		MarkdownDescription: "Project ID (environment) for this resource. Overrides the provider-level project_id.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.RequiresReplaceIfConfigured(),
+			stringplanmodifier.UseStateForUnknown(),
+		},
+	}
+}
+
+func OrganizationIDSchemaAttribute() schema.StringAttribute {
+	return schema.StringAttribute{
+		Required:            true,
+		MarkdownDescription: "The identifier of the organization this resource belongs to.",
+		PlanModifiers: []planmodifier.String{
+			stringplanmodifier.RequiresReplace(),
+		},
+	}
 }

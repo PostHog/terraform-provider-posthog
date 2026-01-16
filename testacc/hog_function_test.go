@@ -18,16 +18,16 @@ func testAccCheckHogFunctionDestroy(s *terraform.State) error {
 	client := httpclient.NewDefaultClient(
 		os.Getenv("POSTHOG_HOST"),
 		os.Getenv("POSTHOG_API_KEY"),
-		os.Getenv("POSTHOG_PROJECT_ID"),
 		"test",
 	)
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
 
 	for _, rs := range s.RootModule().Resources {
 		if rs.Type != "posthog_hog_function" {
 			continue
 		}
 
-		_, status, err := client.GetHogFunction(context.Background(), rs.Primary.ID)
+		_, status, err := client.GetHogFunction(context.Background(), projectID, rs.Primary.ID)
 		if err == nil {
 			return fmt.Errorf("hog_function %s still exists", rs.Primary.ID)
 		}

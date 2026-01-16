@@ -57,26 +57,26 @@ type HogFunctionStatus struct {
 	Tokens int `json:"tokens"`
 }
 
-func (c *PosthogClient) CreateHogFunction(ctx context.Context, input HogFunctionRequest) (HogFunction, error) {
-	path := fmt.Sprintf("/api/environments/%s/hog_functions/", c.projectID)
+func (c *PosthogClient) CreateHogFunction(ctx context.Context, projectID string, input HogFunctionRequest) (HogFunction, error) {
+	path := fmt.Sprintf("/api/environments/%s/hog_functions/", projectID)
 	result, _, err := doPost[HogFunction](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetHogFunction(ctx context.Context, id string) (HogFunction, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", c.projectID, id)
+func (c *PosthogClient) GetHogFunction(ctx context.Context, projectID, id string) (HogFunction, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", projectID, id)
 	return doGet[HogFunction](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateHogFunction(ctx context.Context, id string, input HogFunctionRequest) (HogFunction, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", c.projectID, id)
+func (c *PosthogClient) UpdateHogFunction(ctx context.Context, projectID, id string, input HogFunctionRequest) (HogFunction, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", projectID, id)
 	return doPatch[HogFunction](c, ctx, path, input)
 }
 
 // DeleteHogFunction performs a soft delete by setting deleted=true via PATCH.
 // The HogFunction API does not support hard deletes
-func (c *PosthogClient) DeleteHogFunction(ctx context.Context, id string) (HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", c.projectID, id)
+func (c *PosthogClient) DeleteHogFunction(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/hog_functions/%s/", projectID, id)
 	deleted := true
 	req := HogFunctionRequest{Deleted: &deleted}
 	_, status, err := doPatch[HogFunction](c, ctx, path, req)

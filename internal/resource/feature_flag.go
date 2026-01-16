@@ -18,11 +18,15 @@ import (
 )
 
 func NewFeatureFlag() resource.Resource {
-	return core.NewGenericResource[FeatureFlagTFModel, httpclient.FeatureFlagRequest, httpclient.FeatureFlag](FeatureFlagOps{})
+	return core.NewGenericResource[FeatureFlagTFModel, httpclient.FeatureFlagRequest, httpclient.FeatureFlag](
+		FeatureFlagOps{},
+		core.ProjectScopedImportParser[FeatureFlagTFModel](),
+	)
 }
 
 type FeatureFlagTFModel struct {
 	core.BaseInt64Identifiable
+	core.BaseProjectID
 	Key               types.String `tfsdk:"key"`
 	Name              types.String `tfsdk:"name"`
 	Active            types.Bool   `tfsdk:"active"`
@@ -48,6 +52,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
+			"project_id": core.ProjectIDSchemaAttribute(),
 			"key": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Feature flag key (unique identifier)",
@@ -251,18 +256,18 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	return diags
 }
 
-func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
-	return client.CreateFeatureFlag(ctx, req)
+func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
+	return client.CreateFeatureFlag(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.GetFeatureFlag(ctx, id)
+func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
+	return client.GetFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.UpdateFeatureFlag(ctx, id, req)
+func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
+	return client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
-func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteFeatureFlag(ctx, id)
+func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
 }

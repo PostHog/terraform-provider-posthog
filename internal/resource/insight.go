@@ -19,11 +19,15 @@ import (
 )
 
 func NewInsight() resource.Resource {
-	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](InsightOps{})
+	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](
+		InsightOps{},
+		core.ProjectScopedImportParser[InsightResourceTFModel](),
+	)
 }
 
 type InsightResourceTFModel struct {
 	core.BaseInt64Identifiable
+	core.BaseProjectID
 	Name           types.String `tfsdk:"name"`
 	DerivedName    types.String `tfsdk:"derived_name"`
 	Description    types.String `tfsdk:"description"`
@@ -51,6 +55,7 @@ func (o InsightOps) Schema() schema.Schema {
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
+			"project_id": core.ProjectIDSchemaAttribute(),
 			"name": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Insight name.",
@@ -217,20 +222,20 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	return diags
 }
 
-func (o InsightOps) Create(ctx context.Context, client httpclient.PosthogClient, req httpclient.InsightRequest) (httpclient.Insight, error) {
-	return client.CreateInsight(ctx, req)
+func (o InsightOps) Create(ctx context.Context, client httpclient.PosthogClient, model InsightResourceTFModel, req httpclient.InsightRequest) (httpclient.Insight, error) {
+	return client.CreateInsight(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o InsightOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
-	return client.GetInsight(ctx, id)
+func (o InsightOps) Read(ctx context.Context, client httpclient.PosthogClient, model InsightResourceTFModel) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
+	return client.GetInsight(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o InsightOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.InsightRequest) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
-	return client.UpdateInsight(ctx, id, req)
+func (o InsightOps) Update(ctx context.Context, client httpclient.PosthogClient, model InsightResourceTFModel, req httpclient.InsightRequest) (httpclient.Insight, httpclient.HTTPStatusCode, error) {
+	return client.UpdateInsight(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
-func (o InsightOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteInsight(ctx, id)
+func (o InsightOps) Delete(ctx context.Context, client httpclient.PosthogClient, model InsightResourceTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteInsight(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
 // normalizeQueryForState takes the API response query and the user's configured query,

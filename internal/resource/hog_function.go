@@ -18,11 +18,15 @@ import (
 )
 
 func NewHogFunction() resource.Resource {
-	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](HogFunctionOps{})
+	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](
+		HogFunctionOps{},
+		core.ProjectScopedImportParser[HogFunctionResourceTFModel](),
+	)
 }
 
 type HogFunctionResourceTFModel struct {
 	core.BaseStringIdentifiable
+	core.BaseProjectID
 	Type           types.String `tfsdk:"type"`
 	Name           types.String `tfsdk:"name"`
 	Description    types.String `tfsdk:"description"`
@@ -54,6 +58,7 @@ func (o HogFunctionOps) Schema() schema.Schema {
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"project_id": core.ProjectIDSchemaAttribute(),
 			"type": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
@@ -323,20 +328,20 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	return diags
 }
 
-func (o HogFunctionOps) Create(ctx context.Context, client httpclient.PosthogClient, req httpclient.HogFunctionRequest) (httpclient.HogFunction, error) {
-	return client.CreateHogFunction(ctx, req)
+func (o HogFunctionOps) Create(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel, req httpclient.HogFunctionRequest) (httpclient.HogFunction, error) {
+	return client.CreateHogFunction(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o HogFunctionOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
-	return client.GetHogFunction(ctx, id)
+func (o HogFunctionOps) Read(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
+	return client.GetHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o HogFunctionOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.HogFunctionRequest) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
-	return client.UpdateHogFunction(ctx, id, req)
+func (o HogFunctionOps) Update(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel, req httpclient.HogFunctionRequest) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
+	return client.UpdateHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
-func (o HogFunctionOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteHogFunction(ctx, id)
+func (o HogFunctionOps) Delete(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
 // normalizeJSONForState takes the API response data and user's configured JSON,
