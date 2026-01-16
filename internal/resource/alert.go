@@ -21,18 +21,19 @@ func NewAlert() resource.Resource {
 
 type AlertResourceTFModel struct {
 	core.BaseStringIdentifiable
-	Name                   types.String  `tfsdk:"name"`
-	Insight                types.Int64   `tfsdk:"insight"`
-	Enabled                types.Bool    `tfsdk:"enabled"`
-	SubscribedUsers        types.Set     `tfsdk:"subscribed_users"`
-	ThresholdType          types.String  `tfsdk:"threshold_type"`
-	ThresholdLower         types.Float64 `tfsdk:"threshold_lower"`
-	ThresholdUpper         types.Float64 `tfsdk:"threshold_upper"`
-	ConditionType          types.String  `tfsdk:"condition_type"`
-	SeriesIndex            types.Int64   `tfsdk:"series_index"`
-	CheckOngoingInterval   types.Bool    `tfsdk:"check_ongoing_interval"`
-	CalculationInterval    types.String  `tfsdk:"calculation_interval"`
-	SkipWeekend            types.Bool    `tfsdk:"skip_weekend"`
+	core.BaseProjectID
+	Name                 types.String  `tfsdk:"name"`
+	Insight              types.Int64   `tfsdk:"insight"`
+	Enabled              types.Bool    `tfsdk:"enabled"`
+	SubscribedUsers      types.Set     `tfsdk:"subscribed_users"`
+	ThresholdType        types.String  `tfsdk:"threshold_type"`
+	ThresholdLower       types.Float64 `tfsdk:"threshold_lower"`
+	ThresholdUpper       types.Float64 `tfsdk:"threshold_upper"`
+	ConditionType        types.String  `tfsdk:"condition_type"`
+	SeriesIndex          types.Int64   `tfsdk:"series_index"`
+	CheckOngoingInterval types.Bool    `tfsdk:"check_ongoing_interval"`
+	CalculationInterval  types.String  `tfsdk:"calculation_interval"`
+	SkipWeekend          types.Bool    `tfsdk:"skip_weekend"`
 }
 
 type AlertOps struct{}
@@ -52,6 +53,7 @@ func (o AlertOps) Schema() schema.Schema {
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"project_id": core.ProjectIDSchemaAttribute(),
 			"name": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Name of the alert.",
@@ -290,18 +292,18 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 	return diags
 }
 
-func (o AlertOps) Create(ctx context.Context, client httpclient.PosthogClient, req httpclient.AlertRequest) (httpclient.Alert, error) {
-	return client.CreateAlert(ctx, req)
+func (o AlertOps) Create(ctx context.Context, client httpclient.PosthogClient, model AlertResourceTFModel, req httpclient.AlertRequest) (httpclient.Alert, error) {
+	return client.CreateAlert(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o AlertOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.Alert, httpclient.HTTPStatusCode, error) {
-	return client.GetAlert(ctx, id)
+func (o AlertOps) Read(ctx context.Context, client httpclient.PosthogClient, model AlertResourceTFModel) (httpclient.Alert, httpclient.HTTPStatusCode, error) {
+	return client.GetAlert(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o AlertOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.AlertRequest) (httpclient.Alert, httpclient.HTTPStatusCode, error) {
-	return client.UpdateAlert(ctx, id, req)
+func (o AlertOps) Update(ctx context.Context, client httpclient.PosthogClient, model AlertResourceTFModel, req httpclient.AlertRequest) (httpclient.Alert, httpclient.HTTPStatusCode, error) {
+	return client.UpdateAlert(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
-func (o AlertOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteAlert(ctx, id)
+func (o AlertOps) Delete(ctx context.Context, client httpclient.PosthogClient, model AlertResourceTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteAlert(ctx, model.GetEffectiveProjectID(), model.GetID())
 }

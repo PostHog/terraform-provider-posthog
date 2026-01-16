@@ -12,10 +12,8 @@ import (
 
 func testAccProjectPreCheck(t *testing.T) {
 	t.Helper()
-	testAccPreCheck(t)
-	if os.Getenv("POSTHOG_ORGANIZATION_ID") == "" {
-		t.Fatal("POSTHOG_ORGANIZATION_ID must be set for project acceptance tests")
-	}
+	testAccBasePreCheck(t)
+	skipIfNoOrganizationID(t)
 }
 
 func getOrganizationID() string {
@@ -195,4 +193,56 @@ resource "posthog_project" "test" {
   timezone        = %q
 }
 `, orgID, name, timezone)
+}
+
+// TestProject_UseProjectIDForResources tests the workflow where a user creates a project
+// and then uses the project's ID for other resources. This validates that project_id
+// is optional at the provider level and can be specified per-resource.
+func TestProject_UseProjectIDForResources(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	flagKey := acctest.RandomWithPrefix("tf-acc-flag")
+	orgID := getOrganizationID()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccProjectPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectWithFeatureFlag(orgID, rName, flagKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Verify project was created
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
+					// Verify feature flag was created in the new project
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", flagKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+					// Verify feature flag's project_id matches the project's id
+					resource.TestCheckResourceAttrPair(
+						"posthog_feature_flag.test", "project_id",
+						"posthog_project.test", "id",
+					),
+				),
+			},
+		},
+	})
+}
+
+func testAccProjectWithFeatureFlag(orgID, projectName, flagKey string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_project" "test" {
+  organization_id = %q
+  name            = %q
+}
+
+resource "posthog_feature_flag" "test" {
+  project_id = posthog_project.test.id
+  key        = %q
+  name       = "Test flag in new project"
+  active     = true
+}
+`, orgID, projectName, flagKey)
 }

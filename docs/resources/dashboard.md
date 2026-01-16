@@ -24,6 +24,7 @@ PostHog Dashboard resource
 - `deleted` (Boolean) Whether the dashboard is deleted (soft delete)
 - `description` (String) Dashboard description
 - `pinned` (Boolean) Whether the dashboard is pinned
+- `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `tags` (Set of String) Set of tags for the dashboard
 
 ### Read-Only

@@ -14,6 +14,11 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
+type ProviderDefaults struct {
+	ProjectID      string
+	OrganizationID string
+}
+
 // ResourceOperations defines the resource-specific operations that must be provided.
 // This interface bridges the generic CRUD flow and resource-specific logic.
 type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] interface {
@@ -30,16 +35,17 @@ type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] inter
 	// MapResponseToModel maps an API response to the Terraform resource model.
 	MapResponseToModel(ctx context.Context, resp APIResponse, model *TFModel) diag.Diagnostics
 
-	Create(ctx context.Context, client httpclient.PosthogClient, req APIRequest) (APIResponse, error)
-	Read(ctx context.Context, client httpclient.PosthogClient, id string) (APIResponse, httpclient.HTTPStatusCode, error)
-	Update(ctx context.Context, client httpclient.PosthogClient, id string, req APIRequest) (APIResponse, httpclient.HTTPStatusCode, error)
-	Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error)
+	Create(ctx context.Context, client httpclient.PosthogClient, model TFModel, req APIRequest) (APIResponse, error)
+	Read(ctx context.Context, client httpclient.PosthogClient, model TFModel) (APIResponse, httpclient.HTTPStatusCode, error)
+	Update(ctx context.Context, client httpclient.PosthogClient, model TFModel, req APIRequest) (APIResponse, httpclient.HTTPStatusCode, error)
+	Delete(ctx context.Context, client httpclient.PosthogClient, model TFModel) (httpclient.HTTPStatusCode, error)
 }
 
 // GenericResource implements resource.Resource using the provided operations.
 type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
-	client httpclient.PosthogClient
-	ops    ResourceOperations[TFModel, APIRequest, APIResponse]
+	client   httpclient.PosthogClient
+	defaults ProviderDefaults
+	ops      ResourceOperations[TFModel, APIRequest, APIResponse]
 }
 
 var (
@@ -92,6 +98,17 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Configure(
 	}
 
 	r.client = providerData.Client
+	r.defaults = ProviderDefaults{
+		ProjectID: providerData.DefaultProjectID,
+	}
+}
+
+// initializeScope sets provider defaults on the model's embedded structs and
+// populates the state fields. Call once early in each CRUD operation.
+func (r *GenericResource[TFModel, APIRequest, APIResponse]) initializeScope(model *TFModel) {
+	if init, ok := any(model).(ProjectIDInitializer); ok {
+		init.InitializeProjectID(r.defaults.ProjectID)
+	}
 }
 
 func (r *GenericResource[TFModel, APIRequest, APIResponse]) Create(
@@ -115,7 +132,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Create(
 
 	tflog.Debug(ctx, fmt.Sprintf("Creating PostHog %s", r.ops.ResourceName()))
 
-	response, err := r.ops.Create(ctx, r.client, request)
+	r.initializeScope(&plan)
+	response, err := r.ops.Create(ctx, r.client, plan, request)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			fmt.Sprintf("Error creating %s", r.ops.ResourceName()),
@@ -158,7 +176,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Read(
 		"id": state.GetID(),
 	})
 
-	response, statusCode, err := r.ops.Read(ctx, r.client, state.GetID())
+	r.initializeScope(&state)
+	response, statusCode, err := r.ops.Read(ctx, r.client, state)
 	if err != nil {
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource not found, removing from state", map[string]any{"id": state.GetID()})
@@ -203,6 +222,10 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 		"id": state.GetID(),
 	})
 
+	// Set provider defaults on embedded structs (use state for project_id as it shouldn't change)
+	r.initializeScope(&state)
+	r.initializeScope(&plan)
+
 	// Build request using resource-specific logic
 	request, diags := r.ops.BuildUpdateRequest(ctx, plan, state)
 	resp.Diagnostics.Append(diags...)
@@ -210,7 +233,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 		return
 	}
 
-	response, statusCode, err := r.ops.Update(ctx, r.client, state.GetID(), request)
+	// Use state's project_id for the API call (shouldn't change during update)
+	response, statusCode, err := r.ops.Update(ctx, r.client, state, request)
 	if err != nil {
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource not found during update, removing from state", map[string]any{"id": state.GetID()})
@@ -262,7 +286,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Delete(
 		"id": state.GetID(),
 	})
 
-	statusCode, err := r.ops.Delete(ctx, r.client, state.GetID())
+	r.initializeScope(&state)
+	statusCode, err := r.ops.Delete(ctx, r.client, state)
 	if err != nil {
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource already deleted, removing from state", map[string]any{"id": state.GetID()})
@@ -286,8 +311,38 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
 ) {
-	// Read the resource to populate state
-	response, _, err := r.ops.Read(ctx, r.client, req.ID)
+	var state TFModel
+	var projectID, resourceID string
+
+	// Project-scoped: parse "project_id/resource_id" or just "resource_id"
+	projectID = r.defaults.ProjectID
+	resourceID = req.ID
+
+	if parts := strings.SplitN(req.ID, "/", 2); len(parts) == 2 {
+		projectID = parts[0]
+		resourceID = parts[1]
+		tflog.Debug(ctx, "Importing with explicit project_id", map[string]any{
+			"project_id":  projectID,
+			"resource_id": resourceID,
+		})
+	} else if projectID == "" {
+		resp.Diagnostics.AddError(
+			"Missing project_id for import",
+			"Cannot import resource: no project_id specified. "+
+				"Use import ID format 'project_id/resource_id' or set project_id in the provider configuration.",
+		)
+		return
+	}
+
+	// Set the IDs on the state
+	if setter, ok := any(&state).(IDSetter); ok {
+		setter.SetID(resourceID)
+	}
+	if init, ok := any(&state).(ProjectIDInitializer); ok {
+		init.InitializeProjectID(projectID)
+	}
+
+	response, _, err := r.ops.Read(ctx, r.client, state)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			fmt.Sprintf("Error reading %s during import", r.ops.ResourceName()),
@@ -296,7 +351,6 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 		return
 	}
 
-	var state TFModel
 	resp.Diagnostics.Append(r.ops.MapResponseToModel(ctx, response, &state)...)
 	if resp.Diagnostics.HasError() {
 		return

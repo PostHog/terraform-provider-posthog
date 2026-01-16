@@ -24,6 +24,7 @@ PostHog Feature Flag resource
 - `active` (Boolean) Whether the feature flag is active
 - `filters` (String) Feature flag filters as JSON
 - `name` (String) Feature flag name/description
+- `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `rollout_percentage` (Number) Rollout percentage (0-100)
 - `tags` (Set of String) Set of tags for the feature flag
 

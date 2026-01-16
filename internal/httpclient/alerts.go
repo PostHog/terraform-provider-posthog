@@ -79,23 +79,23 @@ type AlertCheck struct {
 	TargetsNotified bool     `json:"targets_notified"`
 }
 
-func (c *PosthogClient) CreateAlert(ctx context.Context, input AlertRequest) (Alert, error) {
-	path := fmt.Sprintf("/api/environments/%s/alerts/", c.projectID)
+func (c *PosthogClient) CreateAlert(ctx context.Context, projectID string, input AlertRequest) (Alert, error) {
+	path := fmt.Sprintf("/api/environments/%s/alerts/", projectID)
 	result, _, err := doPost[Alert](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetAlert(ctx context.Context, id string) (Alert, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", c.projectID, id)
+func (c *PosthogClient) GetAlert(ctx context.Context, projectID, id string) (Alert, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", projectID, id)
 	return doGet[Alert](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateAlert(ctx context.Context, id string, input AlertRequest) (Alert, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", c.projectID, id)
+func (c *PosthogClient) UpdateAlert(ctx context.Context, projectID, id string, input AlertRequest) (Alert, HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", projectID, id)
 	return doPatch[Alert](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteAlert(ctx context.Context, id string) (HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", c.projectID, id)
+func (c *PosthogClient) DeleteAlert(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
+	path := fmt.Sprintf("/api/environments/%s/alerts/%s/", projectID, id)
 	return doDelete(c, ctx, path)
 }

@@ -18,16 +18,16 @@ func testAccCheckAlertDestroy(s *terraform.State) error {
 	client := httpclient.NewDefaultClient(
 		os.Getenv("POSTHOG_HOST"),
 		os.Getenv("POSTHOG_API_KEY"),
-		os.Getenv("POSTHOG_PROJECT_ID"),
 		"test",
 	)
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
 
 	for _, rs := range s.RootModule().Resources {
 		if rs.Type != "posthog_alert" {
 			continue
 		}
 
-		_, status, err := client.GetAlert(context.Background(), rs.Primary.ID)
+		_, status, err := client.GetAlert(context.Background(), projectID, rs.Primary.ID)
 		if err == nil {
 			return fmt.Errorf("alert %s still exists", rs.Primary.ID)
 		}

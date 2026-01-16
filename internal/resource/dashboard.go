@@ -20,6 +20,7 @@ func NewDashboard() resource.Resource {
 
 type DashboardResourceTFModel struct {
 	core.BaseInt64Identifiable
+	core.BaseProjectID
 	Name        types.String `tfsdk:"name"`
 	Description types.String `tfsdk:"description"`
 	Pinned      types.Bool   `tfsdk:"pinned"`
@@ -44,6 +45,7 @@ func (o DashboardOps) Schema() schema.Schema {
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
+			"project_id": core.ProjectIDSchemaAttribute(),
 			"name": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Dashboard name",
@@ -136,18 +138,18 @@ func (o DashboardOps) MapResponseToModel(ctx context.Context, resp httpclient.Da
 	return diags
 }
 
-func (o DashboardOps) Create(ctx context.Context, client httpclient.PosthogClient, req httpclient.DashboardRequest) (httpclient.Dashboard, error) {
-	return client.CreateDashboard(ctx, req)
+func (o DashboardOps) Create(ctx context.Context, client httpclient.PosthogClient, model DashboardResourceTFModel, req httpclient.DashboardRequest) (httpclient.Dashboard, error) {
+	return client.CreateDashboard(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o DashboardOps) Read(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
-	return client.GetDashboard(ctx, id)
+func (o DashboardOps) Read(ctx context.Context, client httpclient.PosthogClient, model DashboardResourceTFModel) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
+	return client.GetDashboard(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o DashboardOps) Update(ctx context.Context, client httpclient.PosthogClient, id string, req httpclient.DashboardRequest) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
-	return client.UpdateDashboard(ctx, id, req)
+func (o DashboardOps) Update(ctx context.Context, client httpclient.PosthogClient, model DashboardResourceTFModel, req httpclient.DashboardRequest) (httpclient.Dashboard, httpclient.HTTPStatusCode, error) {
+	return client.UpdateDashboard(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
-func (o DashboardOps) Delete(ctx context.Context, client httpclient.PosthogClient, id string) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteDashboard(ctx, id)
+func (o DashboardOps) Delete(ctx context.Context, client httpclient.PosthogClient, model DashboardResourceTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteDashboard(ctx, model.GetEffectiveProjectID(), model.GetID())
 }

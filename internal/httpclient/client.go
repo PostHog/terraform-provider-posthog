@@ -18,12 +18,11 @@ type HTTPStatusCode int
 type PosthogClient struct {
 	host       string
 	apiKey     string
-	projectID  string
 	version    string
 	httpClient *http.Client
 }
 
-func NewDefaultClient(host, apiKey, projectID, version string, opts ...ClientOption) PosthogClient {
+func NewDefaultClient(host, apiKey, version string, opts ...ClientOption) PosthogClient {
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -43,13 +42,12 @@ func NewDefaultClient(host, apiKey, projectID, version string, opts ...ClientOpt
 	return PosthogClient{
 		host:       host,
 		apiKey:     apiKey,
-		projectID:  projectID,
 		version:    version,
 		httpClient: httpClient,
 	}
 }
 
-func NewClient(client *http.Client, host, apiKey, projectID, version string, opts ...ClientOption) PosthogClient {
+func NewClient(client *http.Client, host, apiKey, version string, opts ...ClientOption) PosthogClient {
 	for _, opt := range opts {
 		opt(client)
 	}
@@ -57,7 +55,6 @@ func NewClient(client *http.Client, host, apiKey, projectID, version string, opt
 	return PosthogClient{
 		host:       host,
 		apiKey:     apiKey,
-		projectID:  projectID,
 		version:    version,
 		httpClient: client,
 	}
