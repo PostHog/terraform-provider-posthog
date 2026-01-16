@@ -18,7 +18,10 @@ import (
 )
 
 func NewHogFunction() resource.Resource {
-	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](HogFunctionOps{})
+	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](
+		HogFunctionOps{},
+		core.ProjectScopedImportParser[HogFunctionResourceTFModel](),
+	)
 }
 
 type HogFunctionResourceTFModel struct {

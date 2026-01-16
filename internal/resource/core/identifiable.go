@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -12,7 +13,7 @@ type Identifiable interface {
 }
 
 type IDSetter interface {
-	SetID(string)
+	SetID(string) error
 }
 
 type BaseInt64Identifiable struct {
@@ -27,9 +28,13 @@ func (b BaseInt64Identifiable) GetID() string {
 	return strconv.FormatInt(b.ID.ValueInt64(), 10)
 }
 
-func (b *BaseInt64Identifiable) SetID(id string) {
-	intID, _ := strconv.ParseInt(id, 10, 64)
+func (b *BaseInt64Identifiable) SetID(id string) error {
+	intID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid int64 ID %q: %w", id, err)
+	}
 	b.ID = types.Int64Value(intID)
+	return nil
 }
 
 type BaseStringIdentifiable struct {
@@ -44,8 +49,9 @@ func (b BaseStringIdentifiable) GetID() string {
 	return b.ID.ValueString()
 }
 
-func (b *BaseStringIdentifiable) SetID(id string) {
+func (b *BaseStringIdentifiable) SetID(id string) error {
 	b.ID = types.StringValue(id)
+	return nil
 }
 
 type ProjectIDInitializer interface {
@@ -67,7 +73,7 @@ func (b *BaseProjectID) GetEffectiveProjectID() string {
 
 func (b *BaseProjectID) InitializeProjectID(defaultProjectID string) {
 	b.defaultProjectID = defaultProjectID
-	if b.ProjectID.IsNull() || b.ProjectID.ValueString() == "" {
+	if b.ProjectID.IsNull() || b.ProjectID.IsUnknown() || b.ProjectID.ValueString() == "" {
 		b.ProjectID = types.StringValue(defaultProjectID)
 	}
 }
@@ -83,4 +89,13 @@ func (b *BaseOrganizationID) GetEffectiveOrganizationID() string {
 		return b.OrganizationID.ValueString()
 	}
 	return b.defaultOrganizationID
+}
+
+// OrganizationIDSetter is implemented by models that need organization_id set during import.
+type OrganizationIDSetter interface {
+	SetOrganizationID(string)
+}
+
+func (b *BaseOrganizationID) SetOrganizationID(organizationID string) {
+	b.OrganizationID = types.StringValue(organizationID)
 }

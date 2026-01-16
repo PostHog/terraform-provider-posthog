@@ -19,6 +19,10 @@ type ProviderDefaults struct {
 	OrganizationID string
 }
 
+// ImportIDParser parses an import ID string and returns a model with the appropriate IDs set.
+// This allows different resources to use different import ID formats.
+type ImportIDParser[TFModel Identifiable] func(importID string, defaults ProviderDefaults) (TFModel, error)
+
 // ResourceOperations defines the resource-specific operations that must be provided.
 // This interface bridges the generic CRUD flow and resource-specific logic.
 type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] interface {
@@ -43,9 +47,10 @@ type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] inter
 
 // GenericResource implements resource.Resource using the provided operations.
 type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
-	client   httpclient.PosthogClient
-	defaults ProviderDefaults
-	ops      ResourceOperations[TFModel, APIRequest, APIResponse]
+	client       httpclient.PosthogClient
+	defaults     ProviderDefaults
+	ops          ResourceOperations[TFModel, APIRequest, APIResponse]
+	importParser ImportIDParser[TFModel]
 }
 
 var (
@@ -55,9 +60,11 @@ var (
 
 func NewGenericResource[TFModel Identifiable, APIRequest, APIResponse any](
 	ops ResourceOperations[TFModel, APIRequest, APIResponse],
+	importParser ImportIDParser[TFModel],
 ) resource.Resource {
 	return &GenericResource[TFModel, APIRequest, APIResponse]{
-		ops: ops,
+		ops:          ops,
+		importParser: importParser,
 	}
 }
 
@@ -311,35 +318,13 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 	req resource.ImportStateRequest,
 	resp *resource.ImportStateResponse,
 ) {
-	var state TFModel
-	var projectID, resourceID string
-
-	// Project-scoped: parse "project_id/resource_id" or just "resource_id"
-	projectID = r.defaults.ProjectID
-	resourceID = req.ID
-
-	if parts := strings.SplitN(req.ID, "/", 2); len(parts) == 2 {
-		projectID = parts[0]
-		resourceID = parts[1]
-		tflog.Debug(ctx, "Importing with explicit project_id", map[string]any{
-			"project_id":  projectID,
-			"resource_id": resourceID,
-		})
-	} else if projectID == "" {
+	state, err := r.importParser(req.ID, r.defaults)
+	if err != nil {
 		resp.Diagnostics.AddError(
-			"Missing project_id for import",
-			"Cannot import resource: no project_id specified. "+
-				"Use import ID format 'project_id/resource_id' or set project_id in the provider configuration.",
+			fmt.Sprintf("Error importing %s", r.ops.ResourceName()),
+			err.Error(),
 		)
 		return
-	}
-
-	// Set the IDs on the state
-	if setter, ok := any(&state).(IDSetter); ok {
-		setter.SetID(resourceID)
-	}
-	if init, ok := any(&state).(ProjectIDInitializer); ok {
-		init.InitializeProjectID(projectID)
 	}
 
 	response, _, err := r.ops.Read(ctx, r.client, state)

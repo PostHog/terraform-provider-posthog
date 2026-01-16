@@ -15,7 +15,10 @@ import (
 )
 
 func NewDashboard() resource.Resource {
-	return core.NewGenericResource[DashboardResourceTFModel, httpclient.DashboardRequest, httpclient.Dashboard](DashboardOps{})
+	return core.NewGenericResource[DashboardResourceTFModel, httpclient.DashboardRequest, httpclient.Dashboard](
+		DashboardOps{},
+		core.ProjectScopedImportParser[DashboardResourceTFModel](),
+	)
 }
 
 type DashboardResourceTFModel struct {

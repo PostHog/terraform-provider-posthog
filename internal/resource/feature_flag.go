@@ -18,7 +18,10 @@ import (
 )
 
 func NewFeatureFlag() resource.Resource {
-	return core.NewGenericResource[FeatureFlagTFModel, httpclient.FeatureFlagRequest, httpclient.FeatureFlag](FeatureFlagOps{})
+	return core.NewGenericResource[FeatureFlagTFModel, httpclient.FeatureFlagRequest, httpclient.FeatureFlag](
+		FeatureFlagOps{},
+		core.ProjectScopedImportParser[FeatureFlagTFModel](),
+	)
 }
 
 type FeatureFlagTFModel struct {

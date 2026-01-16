@@ -19,7 +19,10 @@ import (
 )
 
 func NewInsight() resource.Resource {
-	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](InsightOps{})
+	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](
+		InsightOps{},
+		core.ProjectScopedImportParser[InsightResourceTFModel](),
+	)
 }
 
 type InsightResourceTFModel struct {

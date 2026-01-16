@@ -16,7 +16,10 @@ import (
 )
 
 func NewAlert() resource.Resource {
-	return core.NewGenericResource[AlertResourceTFModel, httpclient.AlertRequest, httpclient.Alert](AlertOps{})
+	return core.NewGenericResource[AlertResourceTFModel, httpclient.AlertRequest, httpclient.Alert](
+		AlertOps{},
+		core.ProjectScopedImportParser[AlertResourceTFModel](),
+	)
 }
 
 type AlertResourceTFModel struct {

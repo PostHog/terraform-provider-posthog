@@ -73,7 +73,7 @@ func TestProject_Update(t *testing.T) {
 	})
 }
 
-// TestProject_Import tests importing an existing project by organization_id:project_id.
+// TestProject_Import tests importing an existing project by organization_id/project_id.
 func TestProject_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -146,7 +146,7 @@ func testAccProjectImportStateIdFunc(resourceName string) resource.ImportStateId
 		orgID := rs.Primary.Attributes["organization_id"]
 		projectID := rs.Primary.Attributes["id"]
 
-		return fmt.Sprintf("%s:%s", orgID, projectID), nil
+		return fmt.Sprintf("%s/%s", orgID, projectID), nil
 	}
 }
 

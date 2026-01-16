@@ -15,7 +15,10 @@ import (
 )
 
 func NewProject() resource.Resource {
-	return core.NewGenericResource[ProjectTFModel, httpclient.ProjectRequest, httpclient.Project](ProjectOps{})
+	return core.NewGenericResource[ProjectTFModel, httpclient.ProjectRequest, httpclient.Project](
+		ProjectOps{},
+		core.OrganizationScopedImportParser[ProjectTFModel](),
+	)
 }
 
 type ProjectTFModel struct {
