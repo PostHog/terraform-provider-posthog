@@ -18,7 +18,7 @@ Manages a PostHog project within an organization.
 ### Required
 
 - `name` (String) The name of the project.
-- `organization_id` (String) The identifier of the organization this project belongs to.
+- `organization_id` (String) The identifier of the organization this resource belongs to.
 
 ### Optional
 
