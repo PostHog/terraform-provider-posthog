@@ -134,7 +134,8 @@ func (o DashboardOps) MapResponseToModel(ctx context.Context, resp httpclient.Da
 	model.Pinned = core.PtrToBool(resp.Pinned)
 	model.Deleted = core.PtrToBool(resp.Deleted)
 
-	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
+	// Tags - preserve user's configured tags if API returns empty
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 

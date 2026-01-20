@@ -188,23 +188,23 @@ func TestTagsToSetPreserveEmpty(t *testing.T) {
 	nullSet := types.SetNull(types.StringType)
 	emptySet, _ := types.SetValueFrom(ctx, types.StringType, []string{})
 	nonEmptySet, _ := types.SetValueFrom(ctx, types.StringType, []string{"existing"})
+	multiTagSet, _ := types.SetValueFrom(ctx, types.StringType, []string{"tag1", "tag2"})
 
 	tests := map[string]struct {
 		tags         []string
 		currentModel types.Set
 		wantNull     bool
-		wantEmpty    bool
-		wantLen      int
+		wantTags     []string
 	}{
-		"tags with values, null model - returns set with values": {
+		"tags with values, null model - returns set with API values": {
 			tags:         []string{"a", "b"},
 			currentModel: nullSet,
-			wantLen:      2,
+			wantTags:     []string{"a", "b"},
 		},
-		"tags with values, non-null model - returns set with values": {
+		"tags with values, non-null model - returns set with API values": {
 			tags:         []string{"a", "b"},
 			currentModel: nonEmptySet,
-			wantLen:      2,
+			wantTags:     []string{"a", "b"},
 		},
 		"empty tags, null model - returns null": {
 			tags:         []string{},
@@ -216,20 +216,25 @@ func TestTagsToSetPreserveEmpty(t *testing.T) {
 			currentModel: nullSet,
 			wantNull:     true,
 		},
-		"empty tags, non-null model - returns empty set (preserves intent)": {
+		"empty tags, non-empty model - preserves user's configured tags": {
 			tags:         []string{},
 			currentModel: nonEmptySet,
-			wantEmpty:    true,
+			wantTags:     []string{"existing"},
 		},
-		"empty tags, empty model - returns empty set (preserves intent)": {
+		"empty tags, multi-tag model - preserves all user's configured tags": {
+			tags:         []string{},
+			currentModel: multiTagSet,
+			wantTags:     []string{"tag1", "tag2"},
+		},
+		"empty tags, empty model - returns null (no user tags to preserve)": {
 			tags:         []string{},
 			currentModel: emptySet,
-			wantEmpty:    true,
+			wantNull:     true,
 		},
 		"single value returns set with one element": {
 			tags:         []string{"test"},
 			currentModel: nullSet,
-			wantLen:      1,
+			wantTags:     []string{"test"},
 		},
 	}
 
@@ -242,11 +247,10 @@ func TestTagsToSetPreserveEmpty(t *testing.T) {
 				return
 			}
 			require.False(t, got.IsNull(), "expected non-null")
-			if tc.wantEmpty {
-				assert.Empty(t, got.Elements(), "expected empty set")
-				return
-			}
-			assert.Len(t, got.Elements(), tc.wantLen)
+			var gotTags []string
+			diags = got.ElementsAs(ctx, &gotTags, false)
+			require.False(t, diags.HasError(), "failed to extract tags: %v", diags)
+			assert.ElementsMatch(t, tc.wantTags, gotTags)
 		})
 	}
 }

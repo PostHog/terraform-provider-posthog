@@ -93,6 +93,8 @@ func TestDashboard_Update(t *testing.T) {
 }
 
 // TestDashboard_Tags tests creating, updating, and removing tags.
+// This test verifies the fix for the "Provider produced inconsistent result after apply" error
+// where tags were being returned as null after creation/update.
 func TestDashboard_Tags(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -102,11 +104,13 @@ func TestDashboard_Tags(t *testing.T) {
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Create with tags
+			// Create with tags - verify both count and specific values
 			{
 				Config: testAccDashboardWithTags(rName, []string{"tag1", "tag2"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_dashboard.test", "tags.#", "2"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag2"),
 				),
 			},
 			// Add more tags
@@ -114,6 +118,9 @@ func TestDashboard_Tags(t *testing.T) {
 				Config: testAccDashboardWithTags(rName, []string{"tag1", "tag2", "tag3"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_dashboard.test", "tags.#", "3"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag2"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag3"),
 				),
 			},
 			// Remove tags
@@ -121,6 +128,7 @@ func TestDashboard_Tags(t *testing.T) {
 				Config: testAccDashboardWithTags(rName, []string{"tag1"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_dashboard.test", "tags.#", "1"),
+					resource.TestCheckTypeSetElemAttr("posthog_dashboard.test", "tags.*", "tag1"),
 				),
 			},
 		},

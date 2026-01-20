@@ -63,8 +63,10 @@ func TagsToSet(ctx context.Context, tags []string) (types.Set, diag.Diagnostics)
 }
 
 // TagsToSetPreserveEmpty converts []string to types.Set.
-// If tags is empty but currentModel is not null, returns an empty set (preserving the user's intent).
-// If tags is empty and currentModel is null, returns null set.
+// If tags has values, returns a set with those values.
+// If tags is empty but currentModel has values, returns currentModel (preserving user's configured tags).
+// If tags is empty and currentModel is null or empty, returns null set.
+// This handles the case where the API doesn't return tags in the response but the user configured them.
 func TagsToSetPreserveEmpty(ctx context.Context, tags []string, currentModel types.Set) (types.Set, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if len(tags) > 0 {
@@ -72,10 +74,9 @@ func TagsToSetPreserveEmpty(ctx context.Context, tags []string, currentModel typ
 		diags.Append(d...)
 		return result, diags
 	}
-	if !currentModel.IsNull() {
-		result, d := types.SetValueFrom(ctx, types.StringType, []string{})
-		diags.Append(d...)
-		return result, diags
+	// API returned empty tags - preserve user's configured tags if they exist
+	if !currentModel.IsNull() && !currentModel.IsUnknown() && len(currentModel.Elements()) > 0 {
+		return currentModel, diags
 	}
 	return types.SetNull(types.StringType), diags
 }

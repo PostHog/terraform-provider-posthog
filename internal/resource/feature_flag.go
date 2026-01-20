@@ -248,8 +248,8 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.RolloutPercentage = types.Int64Null()
 	}
 
-	// Set tags
-	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
+	// Set tags - preserve user's configured tags if API returns empty
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 

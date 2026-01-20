@@ -232,6 +232,8 @@ func TestFeatureFlag_ToggleActive(t *testing.T) {
 }
 
 // TestFeatureFlag_Tags tests creating, updating, and removing tags.
+// This test verifies the fix for the "Provider produced inconsistent result after apply" error
+// where tags were being returned as null after creation/update.
 func TestFeatureFlag_Tags(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -241,11 +243,13 @@ func TestFeatureFlag_Tags(t *testing.T) {
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Create with tags
+			// Create with tags - verify both count and specific values
 			{
 				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1", "tag2"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "2"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag2"),
 				),
 			},
 			// Add more tags
@@ -253,6 +257,9 @@ func TestFeatureFlag_Tags(t *testing.T) {
 				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1", "tag2", "tag3"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "3"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag2"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag3"),
 				),
 			},
 			// Remove tags
@@ -260,6 +267,7 @@ func TestFeatureFlag_Tags(t *testing.T) {
 				Config: testAccFeatureFlagWithTags(rKey, []string{"tag1"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "1"),
+					resource.TestCheckTypeSetElemAttr("posthog_feature_flag.test", "tags.*", "tag1"),
 				),
 			},
 		},

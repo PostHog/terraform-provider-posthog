@@ -198,6 +198,8 @@ func TestInsight_Update(t *testing.T) {
 }
 
 // TestInsight_Tags tests creating, updating, and removing tags.
+// This test verifies the fix for the "Provider produced inconsistent result after apply" error
+// where tags were being returned as null/empty after creation/update.
 func TestInsight_Tags(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -207,11 +209,13 @@ func TestInsight_Tags(t *testing.T) {
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// Create with tags
+			// Create with tags - verify both count and specific values
 			{
 				Config: testAccInsightWithTags(rName, []string{"tag1", "tag2"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "tags.#", "2"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag2"),
 				),
 			},
 			// Add more tags
@@ -219,6 +223,9 @@ func TestInsight_Tags(t *testing.T) {
 				Config: testAccInsightWithTags(rName, []string{"tag1", "tag2", "tag3"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "tags.#", "3"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag1"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag2"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag3"),
 				),
 			},
 			// Remove tags
@@ -226,6 +233,7 @@ func TestInsight_Tags(t *testing.T) {
 				Config: testAccInsightWithTags(rName, []string{"tag1"}),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "tags.#", "1"),
+					resource.TestCheckTypeSetElemAttr("posthog_insight.test", "tags.*", "tag1"),
 				),
 			},
 		},
