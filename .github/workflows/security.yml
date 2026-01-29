@@ -30,7 +30,9 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: |
+          govulncheck ./...
+          cd tools && govulncheck ./...
 
   # Static analysis with gosec
   gosec:
