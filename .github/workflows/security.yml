@@ -30,7 +30,9 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: |
+          govulncheck ./...
+          cd tools && govulncheck ./...
 
   # Static analysis with gosec
   gosec:
@@ -51,6 +53,16 @@ jobs:
         with:
           # Path to SARIF file relative to the root of the repository
           sarif_file: results.sarif
+      - name: Run gosec on tools
+        uses: securego/gosec@424fc4cd9c82ea0fd6bee9cd49c2db2c3cc0c93f # v2.22.11
+        with:
+          args: '-no-fail -fmt sarif -out results-tools.sarif ./...'
+        working-directory: tools
+      - name: Upload SARIF file for tools
+        uses: github/codeql-action/upload-sarif@ce729e4d353d580e6cacd6a8cf2921b72e5e310a # v2.23.6
+        with:
+          sarif_file: tools/results-tools.sarif
+          category: tools
 
   # Dependency review for PRs
   dependency-review:
