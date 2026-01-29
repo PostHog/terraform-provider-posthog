@@ -33,6 +33,7 @@ type FeatureFlagTFModel struct {
 	Filters           types.String `tfsdk:"filters"`
 	RolloutPercentage types.Int64  `tfsdk:"rollout_percentage"`
 	Tags              types.Set    `tfsdk:"tags"`
+	Deleted           types.Bool   `tfsdk:"deleted"`
 }
 
 type FeatureFlagOps struct{}
@@ -90,6 +91,14 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				ElementType:         types.StringType,
 				Optional:            true,
 				MarkdownDescription: "Set of tags for the feature flag",
+			},
+			"deleted": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.",
+				PlanModifiers: []planmodifier.Bool{
+					core.DefaultBoolFalse{},
+				},
 			},
 		},
 	}
@@ -154,6 +163,10 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		diags.Append(d...)
 		req.Tags = tags
 	}
+
+	// Always set deleted to false on create
+	deleted := false
+	req.Deleted = &deleted
 
 	return req, diags
 }
@@ -220,6 +233,10 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Tags = tags
 	}
 
+	// Always include deleted - the plan modifier ensures it defaults to false
+	deleted := plan.Deleted.ValueBool()
+	req.Deleted = &deleted
+
 	return req, diags
 }
 
@@ -231,6 +248,20 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Active = core.PtrToBool(resp.Active)
 
+	// Extract rollout_percentage from filters.groups[0].rollout_percentage if it exists
+	// The API doesn't return a top-level rollout_percentage field
+	var rolloutPercentage *int32
+	if len(resp.Filters) > 0 {
+		if groups, ok := resp.Filters["groups"].([]interface{}); ok && len(groups) > 0 {
+			if firstGroup, ok := groups[0].(map[string]interface{}); ok {
+				if rp, ok := firstGroup["rollout_percentage"].(float64); ok {
+					percentage := int32(rp)
+					rolloutPercentage = &percentage
+				}
+			}
+		}
+	}
+
 	// Set filters if present
 	if len(resp.Filters) > 0 {
 		filtersJSON, err := json.Marshal(resp.Filters)
@@ -241,9 +272,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.Filters = types.StringNull()
 	}
 
-	// Set rollout_percentage if present
-	if resp.RolloutPercentage != nil {
-		model.RolloutPercentage = types.Int64Value(int64(*resp.RolloutPercentage))
+	// Set rollout_percentage if extracted from filters
+	if rolloutPercentage != nil {
+		model.RolloutPercentage = types.Int64Value(int64(*rolloutPercentage))
 	} else {
 		model.RolloutPercentage = types.Int64Null()
 	}
@@ -253,6 +284,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	diags.Append(d...)
 	model.Tags = tagsSet
 
+	// Set deleted status
+	model.Deleted = core.PtrToBool(resp.Deleted)
+
 	return diags
 }
 
@@ -261,11 +295,7 @@ func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogCli
 }
 
 func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	flag, statusCode, err := client.GetFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
-	if err != nil {
-		return flag, statusCode, err
-	}
-	return core.CheckSoftDeleted(flag, statusCode)
+	return client.GetFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {

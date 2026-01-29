@@ -3,9 +3,6 @@ package core
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -13,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 func PtrToStringNullIfEmptyTrimmed(v *string) types.String {
@@ -113,6 +109,26 @@ func StringPtr(s string) *string {
 	return &s
 }
 
+// DefaultBoolFalse is a plan modifier that sets the value to false if not configured.
+// This is useful for soft-delete fields where we want Terraform to restore deleted
+// resources by defaulting to deleted=false when not explicitly set.
+type DefaultBoolFalse struct{}
+
+func (m DefaultBoolFalse) Description(_ context.Context) string {
+	return "Defaults to false if not configured"
+}
+
+func (m DefaultBoolFalse) MarkdownDescription(_ context.Context) string {
+	return "Defaults to false if not configured"
+}
+
+func (m DefaultBoolFalse) PlanModifyBool(_ context.Context, req planmodifier.BoolRequest, resp *planmodifier.BoolResponse) {
+	// If the config value is null (not specified), set to false
+	if req.ConfigValue.IsNull() {
+		resp.PlanValue = types.BoolValue(false)
+	}
+}
+
 func ProjectIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
 		Optional:            true,
@@ -133,25 +149,4 @@ func OrganizationIDSchemaAttribute() schema.StringAttribute {
 			stringplanmodifier.RequiresReplace(),
 		},
 	}
-}
-
-// SoftDeletable is implemented by API response types that support soft deletion.
-// Some PostHog resources use soft deletes where the API returns HTTP 200 with Deleted=true
-// instead of returning HTTP 404 when a resource is deleted.
-// This interface enables generic drift detection for such resources.
-//
-// When to use: Only implement this interface for resources where the PostHog API returns
-// HTTP 200 with a "deleted": true field instead of HTTP 404 when fetching a deleted resource.
-type SoftDeletable interface {
-	IsSoftDeleted() bool
-}
-
-func CheckSoftDeleted[T SoftDeletable](response T, originalStatusCode httpclient.HTTPStatusCode) (T, httpclient.HTTPStatusCode, error) {
-	if response.IsSoftDeleted() {
-		// Use reflection to get the type name for the error message
-		typeName := reflect.TypeOf(response).Name()
-		// Return a 404 so that the generic resource framework removes it from the TF state
-		return response, http.StatusNotFound, fmt.Errorf("%s was deleted externally", typeName)
-	}
-	return response, originalStatusCode, nil
 }

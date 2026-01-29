@@ -568,8 +568,8 @@ resource "posthog_feature_flag" "test" {
 }
 
 // TestFeatureFlag_ExternalDeletion tests that Terraform detects when a feature flag
-// is deleted externally (e.g., via the PostHog UI) and properly removes it from state.
-// This verifies drift detection for soft-deleted feature flags.
+// is soft-deleted externally (e.g., via the PostHog UI) and restores it on apply.
+// This verifies that soft-deleted flags are kept in state and restored via update.
 func TestFeatureFlag_ExternalDeletion(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -591,6 +591,7 @@ func TestFeatureFlag_ExternalDeletion(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
 					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "deleted", "false"),
 					// Capture the ID for external deletion
 					func(s *terraform.State) error {
 						rs, ok := s.RootModule().Resources["posthog_feature_flag.test"]
@@ -603,7 +604,8 @@ func TestFeatureFlag_ExternalDeletion(t *testing.T) {
 				),
 			},
 			// Step 2: Delete the flag externally via the API (soft delete)
-			// Then verify Terraform detects the deletion and plans to recreate
+			// Terraform should detect drift (deleted changed from false to true)
+			// and plan an update to restore it
 			{
 				PreConfig: func() {
 					// Delete the feature flag externally using the provider's client
@@ -612,12 +614,16 @@ func TestFeatureFlag_ExternalDeletion(t *testing.T) {
 						t.Fatalf("Failed to delete feature flag externally: %v", err)
 					}
 				},
-				Config: testAccFeatureFlagWithName(rKey, "External Deletion Test", true),
-				// ExpectNonEmptyPlan: true means Terraform detected drift and will recreate
+				Config:             testAccFeatureFlagWithName(rKey, "External Deletion Test", true),
+				PlanOnly:           true,
 				ExpectNonEmptyPlan: true,
-				// The plan should show the resource will be created (since it was deleted externally)
+			},
+			// Step 3: Apply to restore the soft-deleted flag
+			{
+				Config: testAccFeatureFlagWithName(rKey, "External Deletion Test", true),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "deleted", "false"),
 				),
 			},
 		},
