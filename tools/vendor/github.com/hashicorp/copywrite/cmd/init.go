@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2023, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package cmd
@@ -101,7 +101,7 @@ for any unknown values. If you are running this command in CI, please use the
 		// Render it out!
 		f, err := os.Create(".copywrite.hcl")
 		cobra.CheckErr(err)
-		defer f.Close()
+		defer func() { cobra.CheckErr(f.Close()) }()
 
 		err = configToHCL(*newConfig, f)
 		cobra.CheckErr(err)
