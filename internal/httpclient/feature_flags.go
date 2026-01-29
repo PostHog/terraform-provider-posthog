@@ -16,6 +16,10 @@ type FeatureFlag struct {
 	Deleted           *bool                  `json:"deleted,omitempty"`
 }
 
+func (f FeatureFlag) IsSoftDeleted() bool {
+	return f.Deleted != nil && *f.Deleted
+}
+
 type FeatureFlagRequest struct {
 	Key     string                 `json:"key"`
 	Name    *string                `json:"name,omitempty"`

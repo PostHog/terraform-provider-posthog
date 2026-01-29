@@ -3,6 +3,9 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -10,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 func PtrToStringNullIfEmptyTrimmed(v *string) types.String {
@@ -129,4 +133,25 @@ func OrganizationIDSchemaAttribute() schema.StringAttribute {
 			stringplanmodifier.RequiresReplace(),
 		},
 	}
+}
+
+// SoftDeletable is implemented by API response types that support soft deletion.
+// Some PostHog resources use soft deletes where the API returns HTTP 200 with Deleted=true
+// instead of returning HTTP 404 when a resource is deleted.
+// This interface enables generic drift detection for such resources.
+//
+// When to use: Only implement this interface for resources where the PostHog API returns
+// HTTP 200 with a "deleted": true field instead of HTTP 404 when fetching a deleted resource.
+type SoftDeletable interface {
+	IsSoftDeleted() bool
+}
+
+func CheckSoftDeleted[T SoftDeletable](response T, originalStatusCode httpclient.HTTPStatusCode) (T, httpclient.HTTPStatusCode, error) {
+	if response.IsSoftDeleted() {
+		// Use reflection to get the type name for the error message
+		typeName := reflect.TypeOf(response).Name()
+		// Return a 404 so that the generic resource framework removes it from the TF state
+		return response, http.StatusNotFound, fmt.Errorf("%s was deleted externally", typeName)
+	}
+	return response, originalStatusCode, nil
 }

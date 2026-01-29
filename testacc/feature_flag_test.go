@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 // TestFeatureFlag_Basic tests creating a feature flag with only the required field (key).
@@ -563,4 +565,61 @@ resource "posthog_feature_flag" "test" {
   })
 }
 `, key)
+}
+
+// TestFeatureFlag_ExternalDeletion tests that Terraform detects when a feature flag
+// is deleted externally (e.g., via the PostHog UI) and properly removes it from state.
+// This verifies drift detection for soft-deleted feature flags.
+func TestFeatureFlag_ExternalDeletion(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	host := os.Getenv("POSTHOG_HOST")
+	apiKey := os.Getenv("POSTHOG_API_KEY")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(host, apiKey, "acceptance-test")
+
+	var flagID string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create the feature flag
+			{
+				Config: testAccFeatureFlagWithName(rKey, "External Deletion Test", true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+					// Capture the ID for external deletion
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_feature_flag.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_feature_flag.test")
+						}
+						flagID = rs.Primary.ID
+						return nil
+					},
+				),
+			},
+			// Step 2: Delete the flag externally via the API (soft delete)
+			// Then verify Terraform detects the deletion and plans to recreate
+			{
+				PreConfig: func() {
+					// Delete the feature flag externally using the provider's client
+					_, err := (&client).DeleteFeatureFlag(context.Background(), projectID, flagID)
+					if err != nil {
+						t.Fatalf("Failed to delete feature flag externally: %v", err)
+					}
+				},
+				Config: testAccFeatureFlagWithName(rKey, "External Deletion Test", true),
+				// ExpectNonEmptyPlan: true means Terraform detected drift and will recreate
+				ExpectNonEmptyPlan: true,
+				// The plan should show the resource will be created (since it was deleted externally)
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+				),
+			},
+		},
+	})
 }

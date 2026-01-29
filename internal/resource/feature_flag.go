@@ -261,7 +261,11 @@ func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogCli
 }
 
 func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.GetFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+	flag, statusCode, err := client.GetFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+	if err != nil {
+		return flag, statusCode, err
+	}
+	return core.CheckSoftDeleted(flag, statusCode)
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
