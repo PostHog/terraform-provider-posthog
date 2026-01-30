@@ -284,8 +284,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	diags.Append(d...)
 	model.Tags = tagsSet
 
-	// Set deleted status
-	model.Deleted = core.PtrToBool(resp.Deleted)
+	// Set deleted status - treat nil as false to avoid perpetual diffs
+	deleted := resp.Deleted != nil && *resp.Deleted
+	model.Deleted = types.BoolValue(deleted)
 
 	return diags
 }

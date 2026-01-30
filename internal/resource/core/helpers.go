@@ -109,26 +109,6 @@ func StringPtr(s string) *string {
 	return &s
 }
 
-// DefaultBoolFalse is a plan modifier that sets the value to false if not configured.
-// This is useful for soft-delete fields where we want Terraform to restore deleted
-// resources by defaulting to deleted=false when not explicitly set.
-type DefaultBoolFalse struct{}
-
-func (m DefaultBoolFalse) Description(_ context.Context) string {
-	return "Defaults to false if not configured"
-}
-
-func (m DefaultBoolFalse) MarkdownDescription(_ context.Context) string {
-	return "Defaults to false if not configured"
-}
-
-func (m DefaultBoolFalse) PlanModifyBool(_ context.Context, req planmodifier.BoolRequest, resp *planmodifier.BoolResponse) {
-	// If the config value is null (not specified), set to false
-	if req.ConfigValue.IsNull() {
-		resp.PlanValue = types.BoolValue(false)
-	}
-}
-
 func ProjectIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
 		Optional:            true,
