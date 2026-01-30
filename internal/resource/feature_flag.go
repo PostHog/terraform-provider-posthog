@@ -248,20 +248,6 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Active = core.PtrToBool(resp.Active)
 
-	// Extract rollout_percentage from filters.groups[0].rollout_percentage if it exists
-	// The API doesn't return a top-level rollout_percentage field
-	var rolloutPercentage *int32
-	if len(resp.Filters) > 0 {
-		if groups, ok := resp.Filters["groups"].([]interface{}); ok && len(groups) > 0 {
-			if firstGroup, ok := groups[0].(map[string]interface{}); ok {
-				if rp, ok := firstGroup["rollout_percentage"].(float64); ok {
-					percentage := int32(rp)
-					rolloutPercentage = &percentage
-				}
-			}
-		}
-	}
-
 	// Set filters if present
 	if len(resp.Filters) > 0 {
 		filtersJSON, err := json.Marshal(resp.Filters)
@@ -272,12 +258,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.Filters = types.StringNull()
 	}
 
-	// Set rollout_percentage if extracted from filters
-	if rolloutPercentage != nil {
-		model.RolloutPercentage = types.Int64Value(int64(*rolloutPercentage))
-	} else {
-		model.RolloutPercentage = types.Int64Null()
-	}
+	model.RolloutPercentage = extractRolloutPercentage(resp)
 
 	// Set tags
 	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
@@ -305,4 +286,30 @@ func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogCli
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+func extractRolloutPercentage(resp httpclient.FeatureFlag) types.Int64 {
+	// Try top-level field first
+	if resp.RolloutPercentage != nil {
+		return types.Int64Value(int64(*resp.RolloutPercentage))
+	}
+
+	// Fall back to extracting from filters.groups[0].rollout_percentage
+	if len(resp.Filters) > 0 {
+		groups, ok := resp.Filters["groups"].([]interface{})
+		if !ok || len(groups) == 0 {
+			return types.Int64Null()
+		}
+
+		firstGroup, ok := groups[0].(map[string]interface{})
+		if !ok {
+			return types.Int64Null()
+		}
+
+		if rp, ok := firstGroup["rollout_percentage"].(float64); ok {
+			return types.Int64Value(int64(rp))
+		}
+	}
+
+	return types.Int64Null()
 }
