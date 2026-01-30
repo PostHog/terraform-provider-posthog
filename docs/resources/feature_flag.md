@@ -22,6 +22,7 @@ PostHog Feature Flag resource
 ### Optional
 
 - `active` (Boolean) Whether the feature flag is active
+- `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
 - `filters` (String) Feature flag filters as JSON
 - `name` (String) Feature flag name/description
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.

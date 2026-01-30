@@ -33,6 +33,7 @@ type FeatureFlagTFModel struct {
 	Filters           types.String `tfsdk:"filters"`
 	RolloutPercentage types.Int64  `tfsdk:"rollout_percentage"`
 	Tags              types.Set    `tfsdk:"tags"`
+	Deleted           types.Bool   `tfsdk:"deleted"`
 }
 
 type FeatureFlagOps struct{}
@@ -90,6 +91,14 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				ElementType:         types.StringType,
 				Optional:            true,
 				MarkdownDescription: "Set of tags for the feature flag",
+			},
+			"deleted": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.",
+				PlanModifiers: []planmodifier.Bool{
+					core.DefaultBoolFalse{},
+				},
 			},
 		},
 	}
@@ -154,6 +163,10 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		diags.Append(d...)
 		req.Tags = tags
 	}
+
+	// Always set deleted to false on create
+	deleted := false
+	req.Deleted = &deleted
 
 	return req, diags
 }
@@ -220,6 +233,10 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Tags = tags
 	}
 
+	// Always include deleted - the plan modifier ensures it defaults to false
+	deleted := plan.Deleted.ValueBool()
+	req.Deleted = &deleted
+
 	return req, diags
 }
 
@@ -241,17 +258,16 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.Filters = types.StringNull()
 	}
 
-	// Set rollout_percentage if present
-	if resp.RolloutPercentage != nil {
-		model.RolloutPercentage = types.Int64Value(int64(*resp.RolloutPercentage))
-	} else {
-		model.RolloutPercentage = types.Int64Null()
-	}
+	model.RolloutPercentage = extractRolloutPercentage(resp)
 
 	// Set tags
 	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
 	diags.Append(d...)
 	model.Tags = tagsSet
+
+	// Set deleted status - treat nil as false to avoid perpetual diffs
+	deleted := resp.Deleted != nil && *resp.Deleted
+	model.Deleted = types.BoolValue(deleted)
 
 	return diags
 }
@@ -270,4 +286,30 @@ func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogCli
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+func extractRolloutPercentage(resp httpclient.FeatureFlag) types.Int64 {
+	// Try top-level field first
+	if resp.RolloutPercentage != nil {
+		return types.Int64Value(int64(*resp.RolloutPercentage))
+	}
+
+	// Fall back to extracting from filters.groups[0].rollout_percentage
+	if len(resp.Filters) > 0 {
+		groups, ok := resp.Filters["groups"].([]interface{})
+		if !ok || len(groups) == 0 {
+			return types.Int64Null()
+		}
+
+		firstGroup, ok := groups[0].(map[string]interface{})
+		if !ok {
+			return types.Int64Null()
+		}
+
+		if rp, ok := firstGroup["rollout_percentage"].(float64); ok {
+			return types.Int64Value(int64(rp))
+		}
+	}
+
+	return types.Int64Null()
 }
