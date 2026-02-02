@@ -80,7 +80,7 @@ func (o RoleMembershipOps) Schema() schema.Schema {
 	}
 }
 
-func (o RoleMembershipOps) BuildCreateRequest(ctx context.Context, model RoleMembershipTFModel) (httpclient.RoleMembershipRequest, diag.Diagnostics) {
+func (o RoleMembershipOps) BuildCreateRequest(_ context.Context, model RoleMembershipTFModel) (httpclient.RoleMembershipRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	req := httpclient.RoleMembershipRequest{
@@ -90,7 +90,7 @@ func (o RoleMembershipOps) BuildCreateRequest(ctx context.Context, model RoleMem
 	return req, diags
 }
 
-func (o RoleMembershipOps) BuildUpdateRequest(ctx context.Context, plan, state RoleMembershipTFModel) (httpclient.RoleMembershipRequest, diag.Diagnostics) {
+func (o RoleMembershipOps) BuildUpdateRequest(_ context.Context, _, _ RoleMembershipTFModel) (httpclient.RoleMembershipRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	diags.AddError(
 		"Update not supported",
@@ -99,7 +99,7 @@ func (o RoleMembershipOps) BuildUpdateRequest(ctx context.Context, plan, state R
 	return httpclient.RoleMembershipRequest{}, diags
 }
 
-func (o RoleMembershipOps) MapResponseToModel(ctx context.Context, resp httpclient.RoleMembership, model *RoleMembershipTFModel) diag.Diagnostics {
+func (o RoleMembershipOps) MapResponseToModel(_ context.Context, resp httpclient.RoleMembership, model *RoleMembershipTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	model.ID = types.StringValue(resp.ID)
@@ -126,7 +126,7 @@ func (o RoleMembershipOps) Read(ctx context.Context, client httpclient.PosthogCl
 	return client.GetRoleMembership(ctx, model.GetEffectiveOrganizationID(), model.GetRoleID(), model.GetID())
 }
 
-func (o RoleMembershipOps) Update(ctx context.Context, client httpclient.PosthogClient, model RoleMembershipTFModel, req httpclient.RoleMembershipRequest) (httpclient.RoleMembership, httpclient.HTTPStatusCode, error) {
+func (o RoleMembershipOps) Update(ctx context.Context, client httpclient.PosthogClient, _ RoleMembershipTFModel, _ httpclient.RoleMembershipRequest) (httpclient.RoleMembership, httpclient.HTTPStatusCode, error) {
 	return httpclient.RoleMembership{}, 0, fmt.Errorf("role memberships do not support updates; this is a bug if you see this error")
 }
 

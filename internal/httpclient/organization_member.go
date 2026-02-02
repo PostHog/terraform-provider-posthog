@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
@@ -50,20 +50,18 @@ func (c *PosthogClient) ListOrganizationMembers(ctx context.Context, organizatio
 			break
 		}
 
-		// The next URL may be absolute or relative - extract just the path
-		nextURL := *result.Next
-		if strings.HasPrefix(nextURL, "http") {
-			// Extract path from full URL (everything after the host)
-			if idx := strings.Index(nextURL, "/api/"); idx != -1 {
-				path = nextURL[idx:]
-			} else {
-				tflog.Warn(ctx, "unexpected pagination URL format, stopping pagination", map[string]any{
-					"next_url": nextURL,
-				})
-				break
-			}
-		} else {
-			path = nextURL
+		// Parse the next URL - handles both absolute and relative URLs
+		parsed, err := url.Parse(*result.Next)
+		if err != nil {
+			tflog.Warn(ctx, "failed to parse pagination URL", map[string]any{
+				"next_url": *result.Next,
+				"error":    err.Error(),
+			})
+			break
+		}
+		path = parsed.Path
+		if parsed.RawQuery != "" {
+			path += "?" + parsed.RawQuery
 		}
 	}
 

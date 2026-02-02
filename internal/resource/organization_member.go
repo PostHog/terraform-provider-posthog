@@ -165,7 +165,7 @@ func (o OrganizationMemberOps) Schema() schema.Schema {
 	}
 }
 
-func (o OrganizationMemberOps) BuildCreateRequest(ctx context.Context, model OrganizationMemberTFModel) (httpclient.OrganizationMemberRequest, diag.Diagnostics) {
+func (o OrganizationMemberOps) BuildCreateRequest(_ context.Context, model OrganizationMemberTFModel) (httpclient.OrganizationMemberRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	req := httpclient.OrganizationMemberRequest{}
@@ -180,7 +180,7 @@ func (o OrganizationMemberOps) BuildUpdateRequest(ctx context.Context, plan, _ O
 	return o.BuildCreateRequest(ctx, plan)
 }
 
-func (o OrganizationMemberOps) MapResponseToModel(ctx context.Context, resp httpclient.OrganizationMember, model *OrganizationMemberTFModel) diag.Diagnostics {
+func (o OrganizationMemberOps) MapResponseToModel(_ context.Context, resp httpclient.OrganizationMember, model *OrganizationMemberTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	model.ID = types.StringValue(resp.ID)

@@ -68,7 +68,7 @@ func (o RoleOps) Schema() schema.Schema {
 	}
 }
 
-func (o RoleOps) BuildCreateRequest(ctx context.Context, model RoleTFModel) (httpclient.RoleRequest, diag.Diagnostics) {
+func (o RoleOps) BuildCreateRequest(_ context.Context, model RoleTFModel) (httpclient.RoleRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	req := httpclient.RoleRequest{
@@ -78,11 +78,11 @@ func (o RoleOps) BuildCreateRequest(ctx context.Context, model RoleTFModel) (htt
 	return req, diags
 }
 
-func (o RoleOps) BuildUpdateRequest(ctx context.Context, plan, state RoleTFModel) (httpclient.RoleRequest, diag.Diagnostics) {
+func (o RoleOps) BuildUpdateRequest(ctx context.Context, plan, _ RoleTFModel) (httpclient.RoleRequest, diag.Diagnostics) {
 	return o.BuildCreateRequest(ctx, plan)
 }
 
-func (o RoleOps) MapResponseToModel(ctx context.Context, resp httpclient.Role, model *RoleTFModel) diag.Diagnostics {
+func (o RoleOps) MapResponseToModel(_ context.Context, resp httpclient.Role, model *RoleTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	model.ID = types.StringValue(resp.ID)
