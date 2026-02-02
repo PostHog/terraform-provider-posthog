@@ -65,11 +65,11 @@ func OrganizationScopedImportParser[TFModel Identifiable]() ImportIDParser[TFMod
 			return model, fmt.Errorf("invalid resource ID %q: %w", resourceID, err)
 		}
 
-		orgSetter, ok := any(&model).(OrganizationIDSetter)
+		orgInit, ok := any(&model).(OrganizationIDInitializer)
 		if !ok {
-			return model, fmt.Errorf("model %T does not implement OrganizationIDSetter", model)
+			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
 		}
-		orgSetter.SetOrganizationID(organizationID)
+		orgInit.InitializeOrganizationID(organizationID)
 
 		return model, nil
 	}

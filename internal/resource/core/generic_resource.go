@@ -106,7 +106,8 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Configure(
 
 	r.client = providerData.Client
 	r.defaults = ProviderDefaults{
-		ProjectID: providerData.DefaultProjectID,
+		ProjectID:      providerData.DefaultProjectID,
+		OrganizationID: providerData.DefaultOrganizationID,
 	}
 }
 
@@ -115,6 +116,9 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Configure(
 func (r *GenericResource[TFModel, APIRequest, APIResponse]) initializeScope(model *TFModel) {
 	if init, ok := any(model).(ProjectIDInitializer); ok {
 		init.InitializeProjectID(r.defaults.ProjectID)
+	}
+	if init, ok := any(model).(OrganizationIDInitializer); ok {
+		init.InitializeOrganizationID(r.defaults.OrganizationID)
 	}
 }
 

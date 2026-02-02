@@ -123,10 +123,12 @@ func ProjectIDSchemaAttribute() schema.StringAttribute {
 
 func OrganizationIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
-		Required:            true,
-		MarkdownDescription: "The identifier of the organization this resource belongs to.",
+		Optional:            true,
+		Computed:            true,
+		MarkdownDescription: "Organization ID for this resource. Overrides the provider-level organization_id.",
 		PlanModifiers: []planmodifier.String{
-			stringplanmodifier.RequiresReplace(),
+			stringplanmodifier.RequiresReplaceIfConfigured(),
+			stringplanmodifier.UseStateForUnknown(),
 		},
 	}
 }

@@ -78,6 +78,10 @@ func (b *BaseProjectID) InitializeProjectID(defaultProjectID string) {
 	}
 }
 
+type OrganizationIDInitializer interface {
+	InitializeOrganizationID(string)
+}
+
 // BaseOrganizationID should be embedded in models that belong to an organization (e.g., Project).
 type BaseOrganizationID struct {
 	OrganizationID        types.String `tfsdk:"organization_id"`
@@ -91,11 +95,9 @@ func (b *BaseOrganizationID) GetEffectiveOrganizationID() string {
 	return b.defaultOrganizationID
 }
 
-// OrganizationIDSetter is implemented by models that need organization_id set during import.
-type OrganizationIDSetter interface {
-	SetOrganizationID(string)
-}
-
-func (b *BaseOrganizationID) SetOrganizationID(organizationID string) {
-	b.OrganizationID = types.StringValue(organizationID)
+func (b *BaseOrganizationID) InitializeOrganizationID(defaultOrganizationID string) {
+	b.defaultOrganizationID = defaultOrganizationID
+	if b.OrganizationID.IsNull() || b.OrganizationID.IsUnknown() || b.OrganizationID.ValueString() == "" {
+		b.OrganizationID = types.StringValue(defaultOrganizationID)
+	}
 }
