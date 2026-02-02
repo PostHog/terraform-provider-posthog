@@ -101,3 +101,21 @@ func (b *BaseOrganizationID) InitializeOrganizationID(defaultOrganizationID stri
 		b.OrganizationID = types.StringValue(defaultOrganizationID)
 	}
 }
+
+// BaseRoleID should be embedded in models that are scoped to a role (e.g., RoleMembership).
+type BaseRoleID struct {
+	RoleID types.String `tfsdk:"role_id"`
+}
+
+func (b *BaseRoleID) GetRoleID() string {
+	return b.RoleID.ValueString()
+}
+
+// RoleIDSetter is implemented by models that need role_id set during import.
+type RoleIDSetter interface {
+	SetRoleID(string)
+}
+
+func (b *BaseRoleID) SetRoleID(roleID string) {
+	b.RoleID = types.StringValue(roleID)
+}

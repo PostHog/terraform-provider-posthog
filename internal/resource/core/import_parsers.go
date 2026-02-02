@@ -74,3 +74,44 @@ func OrganizationScopedImportParser[TFModel Identifiable]() ImportIDParser[TFMod
 		return model, nil
 	}
 }
+
+// RoleMembershipImportParser returns an import parser for role membership resources.
+// Import format: "organization_id/role_id/membership_id".
+func RoleMembershipImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
+	return func(importID string, defaults ProviderDefaults) (TFModel, error) {
+		var model TFModel
+
+		parts := strings.SplitN(importID, "/", 3)
+		if len(parts) != 3 {
+			return model, fmt.Errorf(
+				"invalid import ID format %q: expected 'organization_id/role_id/membership_id'", importID,
+			)
+		}
+
+		organizationID := parts[0]
+		roleID := parts[1]
+		membershipID := parts[2]
+
+		orgInit, ok := any(&model).(OrganizationIDInitializer)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
+		}
+		orgInit.InitializeOrganizationID(organizationID)
+
+		roleSetter, ok := any(&model).(RoleIDSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement RoleIDSetter", model)
+		}
+		roleSetter.SetRoleID(roleID)
+
+		setter, ok := any(&model).(IDSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement IDSetter", model)
+		}
+		if err := setter.SetID(membershipID); err != nil {
+			return model, fmt.Errorf("invalid membership ID %q: %w", membershipID, err)
+		}
+
+		return model, nil
+	}
+}
