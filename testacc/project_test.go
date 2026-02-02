@@ -20,6 +20,30 @@ func getOrganizationID() string {
 	return os.Getenv("POSTHOG_ORGANIZATION_ID")
 }
 
+// TestProject_ProviderLevelOrganizationID tests that a project inherits organization_id from the provider.
+func TestProject_ProviderLevelOrganizationID(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	orgID := getOrganizationID()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccProjectPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectWithProviderOrganizationID(orgID, rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					// Verify organization_id is set from provider default
+					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", orgID),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
+				),
+			},
+		},
+	})
+}
+
 // TestProject_Basic tests creating a project with only the required fields.
 func TestProject_Basic(t *testing.T) {
 	skipIfNotAcceptance(t)
@@ -245,4 +269,16 @@ resource "posthog_feature_flag" "test" {
   active     = true
 }
 `, orgID, projectName, flagKey)
+}
+
+func testAccProjectWithProviderOrganizationID(orgID, name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {
+  organization_id = %q
+}
+
+resource "posthog_project" "test" {
+  name = %q
+}
+`, orgID, name)
 }
