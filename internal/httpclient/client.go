@@ -148,6 +148,26 @@ func doPatch[T any](c *PosthogClient, ctx context.Context, path string, body any
 	return result, status, nil
 }
 
+func doPut[T any](c *PosthogClient, ctx context.Context, path string, body any) (T, HTTPStatusCode, error) {
+	var result T
+	respBody, status, err := c.doRequest(ctx, http.MethodPut, path, body)
+	if err != nil {
+		return result, status, fmt.Errorf("failed to send PUT request: %w", err)
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return result, status, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return result, status, nil
+}
+
+func doPutNoContent(c *PosthogClient, ctx context.Context, path string, body any) (HTTPStatusCode, error) {
+	_, status, err := c.doRequest(ctx, http.MethodPut, path, body)
+	if err != nil {
+		return status, fmt.Errorf("failed to send PUT request: %w", err)
+	}
+	return status, nil
+}
+
 func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCode, error) {
 	_, status, err := c.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
