@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	EnvPostHogAPIKey    = "POSTHOG_API_KEY"
-	EnvPostHogHost      = "POSTHOG_HOST"
-	EnvPostHogProjectId = "POSTHOG_PROJECT_ID"
+	EnvPostHogAPIKey         = "POSTHOG_API_KEY"
+	EnvPostHogHost           = "POSTHOG_HOST"
+	EnvPostHogProjectId      = "POSTHOG_PROJECT_ID"
+	EnvPostHogOrganizationId = "POSTHOG_ORGANIZATION_ID"
 )
 
 var (
@@ -31,9 +32,10 @@ var (
 )
 
 type PostHogProviderModel struct {
-	Host      types.String `tfsdk:"host"`
-	APIKey    types.String `tfsdk:"api_key"`
-	ProjectID types.String `tfsdk:"project_id"`
+	Host           types.String `tfsdk:"host"`
+	APIKey         types.String `tfsdk:"api_key"`
+	ProjectID      types.String `tfsdk:"project_id"`
+	OrganizationID types.String `tfsdk:"organization_id"`
 }
 
 type PostHogProvider struct {
@@ -75,6 +77,12 @@ func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 					"Default project ID (environment) to target. Can be set via `%s` environment variable.", EnvPostHogProjectId,
 				),
 			},
+			"organization_id": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: fmt.Sprintf(
+					"Default organization ID. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
+				),
+			},
 		},
 	}
 }
@@ -109,11 +117,17 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		projectID = data.ProjectID.ValueString()
 	}
 
+	organizationID := os.Getenv(EnvPostHogOrganizationId)
+	if !data.OrganizationID.IsNull() {
+		organizationID = data.OrganizationID.ValueString()
+	}
+
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client:           httpclient.NewDefaultClient(host, apiKey, p.version),
-		DefaultProjectID: projectID,
+		Client:                httpclient.NewDefaultClient(host, apiKey, p.version),
+		DefaultProjectID:      projectID,
+		DefaultOrganizationID: organizationID,
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData

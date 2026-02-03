@@ -6,6 +6,7 @@ import (
 
 // ProviderData passes configured client to resources.
 type ProviderData struct {
-	Client           httpclient.PosthogClient
-	DefaultProjectID string
+	Client                httpclient.PosthogClient
+	DefaultProjectID      string
+	DefaultOrganizationID string
 }
