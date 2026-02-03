@@ -18,10 +18,10 @@ Manages a PostHog project within an organization.
 ### Required
 
 - `name` (String) The name of the project.
-- `organization_id` (String) The identifier of the organization this resource belongs to.
 
 ### Optional
 
+- `organization_id` (String) Organization ID for this resource. Overrides the provider-level organization_id.
 - `timezone` (String) The timezone for this project (e.g., 'UTC', 'America/New_York', 'Europe/London'). Defaults to 'UTC'.
 
 ### Read-Only
