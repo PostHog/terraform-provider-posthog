@@ -56,3 +56,21 @@ func skipIfNoOrganizationID(t *testing.T) {
 		t.Skip("Skipping test: POSTHOG_ORGANIZATION_ID not set")
 	}
 }
+
+// skipIfNoTestUserEmail skips the test if POSTHOG_TEST_USER_EMAIL is not set.
+func skipIfNoTestUserEmail(t *testing.T) {
+	t.Helper()
+	if os.Getenv("POSTHOG_TEST_USER_EMAIL") == "" {
+		t.Skip("Skipping test: POSTHOG_TEST_USER_EMAIL not set")
+	}
+}
+
+// getOrganizationID returns the POSTHOG_ORGANIZATION_ID environment variable.
+func getOrganizationID() string {
+	return os.Getenv("POSTHOG_ORGANIZATION_ID")
+}
+
+// getTestUserEmail returns the POSTHOG_TEST_USER_EMAIL environment variable.
+func getTestUserEmail() string {
+	return os.Getenv("POSTHOG_TEST_USER_EMAIL")
+}
