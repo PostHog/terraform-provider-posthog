@@ -114,11 +114,6 @@ func IntPtr(i int) *int {
 	return &i
 }
 
-// BoolPtr returns a pointer to the given bool.
-func BoolPtr(b bool) *bool {
-	return &b
-}
-
 func ProjectIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
 		Optional:            true,
