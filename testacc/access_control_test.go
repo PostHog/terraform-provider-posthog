@@ -28,7 +28,7 @@ func TestAccessControl_Basic(t *testing.T) {
 				Config: testAccAccessControlBasic(orgID, rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
-					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "feature_flags"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "feature_flag"),
 					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "editor"),
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "role"),
 				),
@@ -77,7 +77,7 @@ func TestAccessControl_OrganizationMember(t *testing.T) {
 				Config: testAccAccessControlWithMember(orgID, userEmail),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
-					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "dashboards"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "dashboard"),
 					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "editor"),
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "organization_member"),
 				),
@@ -153,7 +153,7 @@ func TestAccessControl_ResourceInstance(t *testing.T) {
 				Config: testAccAccessControlResourceInstance(orgID, rName, dashboardName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
-					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "dashboards"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "dashboard"),
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "resource_id"),
 					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "viewer"),
 					resource.TestCheckResourceAttrSet("posthog_access_control.test", "role"),
@@ -177,7 +177,7 @@ resource "posthog_role" "test" {
 }
 
 resource "posthog_access_control" "test" {
-  resource     = "feature_flags"
+  resource     = "feature_flag"
   access_level = %q
   role         = posthog_role.test.id
 }
@@ -200,7 +200,7 @@ resource "posthog_organization_member" "test" {
 }
 
 resource "posthog_access_control" "test" {
-  resource            = "dashboards"
+  resource            = "dashboard"
   access_level        = "editor"
   organization_member = posthog_organization_member.test.id
 }
@@ -221,7 +221,7 @@ resource "posthog_dashboard" "test" {
 }
 
 resource "posthog_access_control" "test" {
-  resource     = "dashboards"
+  resource     = "dashboard"
   resource_id  = posthog_dashboard.test.id
   access_level = "viewer"
   role         = posthog_role.test.id

@@ -88,35 +88,35 @@ resource "posthog_role_membership" "bob_support" {
 
 # Engineering team can edit feature flags
 resource "posthog_access_control" "engineering_feature_flags" {
-  resource     = "feature_flags"
+  resource     = "feature_flag"
   access_level = "editor"
   role         = posthog_role.engineering.id
 }
 
 # Engineering team can edit experiments
 resource "posthog_access_control" "engineering_experiments" {
-  resource     = "experiments"
+  resource     = "experiment"
   access_level = "editor"
   role         = posthog_role.engineering.id
 }
 
 # Support team can view dashboards
 resource "posthog_access_control" "support_dashboards" {
-  resource     = "dashboards"
+  resource     = "dashboard"
   access_level = "viewer"
   role         = posthog_role.support.id
 }
 
 # Support team can view session recordings
 resource "posthog_access_control" "support_recordings" {
-  resource     = "session_recordings"
+  resource     = "session_recording"
   access_level = "viewer"
   role         = posthog_role.support.id
 }
 
 # Support team cannot access feature flags (explicit deny)
 resource "posthog_access_control" "support_no_feature_flags" {
-  resource     = "feature_flags"
+  resource     = "feature_flag"
   access_level = "none"
   role         = posthog_role.support.id
 }
@@ -127,8 +127,8 @@ resource "posthog_access_control" "support_no_feature_flags" {
 
 # Give Bob editor access to a specific dashboard (overrides role permissions)
 resource "posthog_access_control" "bob_specific_dashboard" {
-  resource            = "dashboards"
-  resource_id         = "12345"  # specific dashboard ID
+  resource            = "dashboard"
+  resource_id         = "12345" # specific dashboard ID
   access_level        = "editor"
   organization_member = posthog_organization_member.bob.id
 }

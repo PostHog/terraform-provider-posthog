@@ -73,8 +73,9 @@ func (c *PosthogClient) DeleteAccessControl(ctx context.Context, projectID strin
 // accessControlPath returns the appropriate API path based on whether resourceID is set.
 func (c *PosthogClient) accessControlPath(projectID, resourceType string, resourceID *string) string {
 	if resourceID != nil && *resourceID != "" {
-		// Instance-level: /api/projects/{project}/{resource_type}/{resource_id}/access_controls/
-		return fmt.Sprintf("/api/projects/%s/%s/%s/access_controls/", projectID, resourceType, *resourceID)
+		// Instance-level: /api/projects/{project}/{resource_type_plural}/{resource_id}/access_controls/
+		// URL path requires plural form (e.g., "dashboards"), but resource field uses singular (e.g., "dashboard")
+		return fmt.Sprintf("/api/projects/%s/%ss/%s/access_controls/", projectID, resourceType, *resourceID)
 	}
 	// Resource-Type-level: /api/projects/{project}/resource_access_controls/
 	return fmt.Sprintf("/api/projects/%s/resource_access_controls/", projectID)

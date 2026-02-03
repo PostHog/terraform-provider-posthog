@@ -27,21 +27,21 @@ You can set permissions at two levels:
 ```terraform
 # Grant a role editor access to all feature flags in the project
 resource "posthog_access_control" "engineering_feature_flags" {
-  resource     = "feature_flags"
+  resource     = "feature_flag"
   access_level = "editor"
   role         = posthog_role.engineering.id
 }
 
 # Grant a role viewer access to all dashboards
 resource "posthog_access_control" "support_dashboards" {
-  resource     = "dashboards"
+  resource     = "dashboard"
   access_level = "viewer"
   role         = posthog_role.support.id
 }
 
 # Grant a role viewer access to a specific dashboard
 resource "posthog_access_control" "support_analytics_dashboard" {
-  resource     = "dashboards"
+  resource     = "dashboard"
   resource_id  = posthog_dashboard.analytics.id
   access_level = "viewer"
   role         = posthog_role.support.id
@@ -49,7 +49,7 @@ resource "posthog_access_control" "support_analytics_dashboard" {
 
 # Grant a specific user editor access to a specific dashboard
 resource "posthog_access_control" "alice_analytics_dashboard" {
-  resource            = "dashboards"
+  resource            = "dashboard"
   resource_id         = posthog_dashboard.analytics.id
   access_level        = "editor"
   organization_member = posthog_organization_member.alice.id
@@ -57,7 +57,7 @@ resource "posthog_access_control" "alice_analytics_dashboard" {
 
 # Explicitly deny a role access to experiments (access_level = "none")
 resource "posthog_access_control" "support_no_experiments" {
-  resource     = "experiments"
+  resource     = "experiment"
   access_level = "none"
   role         = posthog_role.support.id
 }
@@ -69,7 +69,7 @@ resource "posthog_access_control" "support_no_experiments" {
 ### Required
 
 - `access_level` (String) The access level to grant. Common values are `none`, `viewer`, `editor`, `admin`
-- `resource` (String) The resource type to control access for (use plural form matching the API path). Valid values include: `actions`, `alerts`, `annotations`, `cohorts`, `dashboards`, `experiments`, `feature_flags`, `insights`, `notebooks`, `session_recordings`, etc.
+- `resource` (String) The resource type to control access for. Valid values include: `action`, `alert`, `annotation`, `cohort`, `dashboard`, `experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, etc.
 
 ### Optional
 
@@ -93,17 +93,17 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 ```shell
 # Import format for resource-type level access control:
 # project_id/resource_type/role/role_id
-terraform import posthog_access_control.engineering_feature_flags 12345/feature_flags/role/abc-123-def
+terraform import posthog_access_control.engineering_feature_flags 12345/feature_flag/role/abc-123-def
 
 # Import format for resource-type level access control with organization member:
 # project_id/resource_type/member/member_id
-terraform import posthog_access_control.alice_dashboards 12345/dashboards/member/xyz-456-uvw
+terraform import posthog_access_control.alice_dashboards 12345/dashboard/member/xyz-456-uvw
 
 # Import format for resource-instance level access control:
 # project_id/resource_type/resource_id/role/role_id
-terraform import posthog_access_control.role_specific_dashboard 12345/dashboards/999/role/abc-123-def
+terraform import posthog_access_control.role_specific_dashboard 12345/dashboard/999/role/abc-123-def
 
 # Import format for resource-instance level access control with organization member:
 # project_id/resource_type/resource_id/member/member_id
-terraform import posthog_access_control.alice_specific_dashboard 12345/dashboards/999/member/xyz-456-uvw
+terraform import posthog_access_control.alice_specific_dashboard 12345/dashboard/999/member/xyz-456-uvw
 ```

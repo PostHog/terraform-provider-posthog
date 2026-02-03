@@ -64,6 +64,21 @@ func (m *AccessControlTFModel) SetAccessControlFields(resourceType, resourceID, 
 	}
 }
 
+// buildExpectedID constructs the composite ID from the model's fields.
+func (m AccessControlTFModel) buildExpectedID(projectID string) string {
+	resourcePart := m.Resource.ValueString()
+	if !m.ResourceID.IsNull() && !m.ResourceID.IsUnknown() && m.ResourceID.ValueString() != "" {
+		resourcePart = fmt.Sprintf("%s/%s", resourcePart, m.ResourceID.ValueString())
+	}
+	if !m.Role.IsNull() && !m.Role.IsUnknown() && m.Role.ValueString() != "" {
+		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetRole, m.Role.ValueString())
+	}
+	if !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() && m.OrganizationMember.ValueString() != "" {
+		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetMember, m.OrganizationMember.ValueString())
+	}
+	return ""
+}
+
 type AccessControlOps struct{}
 
 func (o AccessControlOps) ResourceName() string {
@@ -92,9 +107,9 @@ You can set permissions at two levels:
 			"project_id": core.ProjectIDSchemaAttribute(),
 			"resource": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "The resource type to control access for (use plural form matching the API path). " +
-					"Valid values include: `actions`, `alerts`, `annotations`, `cohorts`, `dashboards`, " +
-					"`experiments`, `feature_flags`, `insights`, `notebooks`, `session_recordings`, etc.",
+				MarkdownDescription: "The resource type to control access for. " +
+					"Valid values include: `action`, `alert`, `annotation`, `cohort`, `dashboard`, " +
+					"`experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, etc.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -194,8 +209,8 @@ func (o AccessControlOps) Read(ctx context.Context, client httpclient.PosthogCli
 	}
 
 	// Find the matching access control by comparing composite IDs
-	targetID := model.ID.ValueString()
 	projectID := model.GetEffectiveProjectID()
+	targetID := model.buildExpectedID(projectID)
 	for _, ac := range result.AccessControls {
 		if ac.BuildCompositeID(projectID) == targetID {
 			return ac, status, nil
