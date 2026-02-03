@@ -75,6 +75,38 @@ func OrganizationScopedImportParser[TFModel Identifiable]() ImportIDParser[TFMod
 	}
 }
 
+// OrganizationMemberImportParser returns an import parser for organization member resources.
+// Import format: "organization_id/user_uuid".
+func OrganizationMemberImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
+	return func(importID string, defaults ProviderDefaults) (TFModel, error) {
+		var model TFModel
+
+		parts := strings.SplitN(importID, "/", 2)
+		if len(parts) != 2 {
+			return model, fmt.Errorf(
+				"invalid import ID format %q: expected 'organization_id/user_uuid'", importID,
+			)
+		}
+
+		organizationID := parts[0]
+		userUUID := parts[1]
+
+		orgInit, ok := any(&model).(OrganizationIDInitializer)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
+		}
+		orgInit.InitializeOrganizationID(organizationID)
+
+		userSetter, ok := any(&model).(UserUUIDSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement UserUUIDSetter", model)
+		}
+		userSetter.SetUserUUID(userUUID)
+
+		return model, nil
+	}
+}
+
 // RoleMembershipImportParser returns an import parser for role membership resources.
 // Import format: "organization_id/role_id/membership_id".
 func RoleMembershipImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {

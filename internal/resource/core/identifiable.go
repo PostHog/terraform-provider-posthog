@@ -119,3 +119,8 @@ type RoleIDSetter interface {
 func (b *BaseRoleID) SetRoleID(roleID string) {
 	b.RoleID = types.StringValue(roleID)
 }
+
+// UserUUIDSetter is implemented by models that need user_uuid set during import.
+type UserUUIDSetter interface {
+	SetUserUUID(string)
+}

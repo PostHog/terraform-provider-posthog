@@ -98,7 +98,9 @@ func (o OrganizationMemberOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: `Manages a user's membership in a PostHog organization.
 
-~> **Warning:** Destroying this resource will **remove the user from the organization entirely**. Users must already be members of the organization (e.g., via invite) before this resource can manage them.`,
+~> **Warning:** By default, destroying this resource will **remove the user from the organization entirely**.
+Set ` + "`retain_on_destroy = true`" + ` to keep the user in the organization when the resource is destroyed.
+Users must already be members of the organization (e.g., via invite) before this resource can manage them.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -125,6 +127,10 @@ func (o OrganizationMemberOps) Schema() schema.Schema {
 				Validators: []validator.String{
 					stringvalidator.OneOf(membershipLevelNames...),
 				},
+			},
+			"retain_on_destroy": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "If true, the user will remain in the organization when this resource is destroyed. Defaults to false.",
 			},
 			"email": schema.StringAttribute{
 				Computed:            true,
@@ -234,5 +240,9 @@ func (o OrganizationMemberOps) Update(ctx context.Context, client httpclient.Pos
 }
 
 func (o OrganizationMemberOps) Delete(ctx context.Context, client httpclient.PosthogClient, model OrganizationMemberTFModel) (httpclient.HTTPStatusCode, error) {
+	if model.RetainOnDestroy.ValueBool() {
+		// User requested to keep the member in the organization on destroy
+		return http.StatusOK, nil
+	}
 	return client.DeleteOrganizationMember(ctx, model.GetEffectiveOrganizationID(), model.UserUUID.ValueString())
 }

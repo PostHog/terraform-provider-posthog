@@ -31,6 +31,7 @@ func TestOrganizationMember_Basic(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_organization_member.test", "organization_id", orgID),
 					resource.TestCheckResourceAttr("posthog_organization_member.test", "level", "member"),
+					resource.TestCheckResourceAttr("posthog_organization_member.test", "retain_on_destroy", "true"),
 					resource.TestCheckResourceAttrSet("posthog_organization_member.test", "id"),
 					resource.TestCheckResourceAttrSet("posthog_organization_member.test", "user_uuid"),
 					resource.TestCheckResourceAttrSet("posthog_organization_member.test", "email"),
@@ -92,10 +93,11 @@ func TestOrganizationMember_Import(t *testing.T) {
 				),
 			},
 			{
-				ResourceName:      "posthog_organization_member.test",
-				ImportState:       true,
-				ImportStateVerify: true,
-				ImportStateIdFunc: testAccOrganizationMemberImportStateIdFunc("posthog_organization_member.test"),
+				ResourceName:            "posthog_organization_member.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"retain_on_destroy"},
+				ImportStateIdFunc:       testAccOrganizationMemberImportStateIdFunc("posthog_organization_member.test"),
 			},
 		},
 	})
@@ -125,9 +127,10 @@ data "posthog_user" "test" {
 }
 
 resource "posthog_organization_member" "test" {
-  organization_id = %q
-  user_uuid       = data.posthog_user.test.uuid
-  level           = %q
+  organization_id   = %q
+  user_uuid         = data.posthog_user.test.uuid
+  level             = %q
+  retain_on_destroy = true
 }
 `, orgID, userEmail, orgID, level)
 }
