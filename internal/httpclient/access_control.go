@@ -16,6 +16,23 @@ type AccessControl struct {
 	UpdatedAt          *string `json:"updated_at,omitempty"`
 }
 
+// BuildCompositeID constructs a unique identifier for this access control.
+// Format: project_id/resource[/resource_id]/role|member/target_id
+func (ac AccessControl) BuildCompositeID(projectID string) string {
+	resourcePart := ac.Resource
+	if ac.ResourceID != nil && *ac.ResourceID != "" {
+		resourcePart = fmt.Sprintf("%s/%s", ac.Resource, *ac.ResourceID)
+	}
+
+	if ac.Role != nil {
+		return fmt.Sprintf("%s/%s/role/%s", projectID, resourcePart, *ac.Role)
+	}
+	if ac.OrganizationMember != nil {
+		return fmt.Sprintf("%s/%s/member/%s", projectID, resourcePart, *ac.OrganizationMember)
+	}
+	return ""
+}
+
 type AccessControlRequest struct {
 	AccessLevel        *string `json:"access_level"`
 	Resource           string  `json:"resource"`

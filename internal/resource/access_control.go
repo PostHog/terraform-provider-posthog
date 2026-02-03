@@ -156,27 +156,21 @@ func (o AccessControlOps) BuildUpdateRequest(_ context.Context, plan, _ AccessCo
 func (o AccessControlOps) MapResponseToModel(_ context.Context, resp httpclient.AccessControl, model *AccessControlTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	// Build composite ID: project_id/resource[/resource_id]/role|member/target_id
-	projectID := model.GetEffectiveProjectID()
-	resourcePart := resp.Resource
+	model.ID = types.StringValue(resp.BuildCompositeID(model.GetEffectiveProjectID()))
+
+	model.Resource = types.StringValue(resp.Resource)
 	if resp.ResourceID != nil && *resp.ResourceID != "" {
-		resourcePart = fmt.Sprintf("%s/%s", resp.Resource, *resp.ResourceID)
 		model.ResourceID = types.StringValue(*resp.ResourceID)
 	}
-
 	if resp.Role != nil {
-		model.ID = types.StringValue(fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetRole, *resp.Role))
 		model.Role = types.StringValue(*resp.Role)
-	} else if resp.OrganizationMember != nil {
-		model.ID = types.StringValue(fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetMember, *resp.OrganizationMember))
+	}
+	if resp.OrganizationMember != nil {
 		model.OrganizationMember = types.StringValue(*resp.OrganizationMember)
 	}
-
 	if resp.AccessLevel != nil {
 		model.AccessLevel = types.StringValue(*resp.AccessLevel)
 	}
-
-	model.Resource = types.StringValue(resp.Resource)
 	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
 	model.UpdatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.UpdatedAt)
 
@@ -199,9 +193,11 @@ func (o AccessControlOps) Read(ctx context.Context, client httpclient.PosthogCli
 		return httpclient.AccessControl{}, status, err
 	}
 
-	// Find the matching access control
+	// Find the matching access control by comparing composite IDs
+	targetID := model.ID.ValueString()
+	projectID := model.GetEffectiveProjectID()
 	for _, ac := range result.AccessControls {
-		if matchesAccessControl(ac, model) {
+		if ac.BuildCompositeID(projectID) == targetID {
 			return ac, status, nil
 		}
 	}
@@ -242,35 +238,4 @@ func buildAccessControlRequest(model AccessControlTFModel) httpclient.AccessCont
 	}
 
 	return req
-}
-
-func matchesAccessControl(ac httpclient.AccessControl, model AccessControlTFModel) bool {
-	if ac.Resource != model.Resource.ValueString() {
-		return false
-	}
-
-	// Check resource_id matches (both nil/empty, or both equal)
-	modelResourceID := ""
-	if !model.ResourceID.IsNull() && !model.ResourceID.IsUnknown() {
-		modelResourceID = model.ResourceID.ValueString()
-	}
-	acResourceID := ""
-	if ac.ResourceID != nil {
-		acResourceID = *ac.ResourceID
-	}
-	if modelResourceID != acResourceID {
-		return false
-	}
-
-	// Match by role
-	if !model.Role.IsNull() && !model.Role.IsUnknown() {
-		return ac.Role != nil && *ac.Role == model.Role.ValueString()
-	}
-
-	// Match by organization member
-	if !model.OrganizationMember.IsNull() && !model.OrganizationMember.IsUnknown() {
-		return ac.OrganizationMember != nil && *ac.OrganizationMember == model.OrganizationMember.ValueString()
-	}
-
-	return false
 }
