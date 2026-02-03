@@ -72,20 +72,25 @@ func levelToString(value *int) string {
 func NewOrganizationMember() resource.Resource {
 	return core.NewGenericResource[OrganizationMemberTFModel, httpclient.OrganizationMemberRequest, httpclient.OrganizationMember](
 		OrganizationMemberOps{},
-		core.OrganizationScopedImportParser[OrganizationMemberTFModel](),
+		core.OrganizationMemberImportParser[OrganizationMemberTFModel](),
 	)
 }
 
 type OrganizationMemberTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseOrganizationID
-	UserUUID     types.String `tfsdk:"user_uuid"`
-	Level        types.String `tfsdk:"level"`
-	Email        types.String `tfsdk:"email"`
-	FirstName    types.String `tfsdk:"first_name"`
-	LastName     types.String `tfsdk:"last_name"`
-	JoinedAt     types.String `tfsdk:"joined_at"`
-	Is2FAEnabled types.Bool   `tfsdk:"is_2fa_enabled"`
+	UserUUID        types.String `tfsdk:"user_uuid"`
+	Level           types.String `tfsdk:"level"`
+	RetainOnDestroy types.Bool   `tfsdk:"retain_on_destroy"`
+	Email           types.String `tfsdk:"email"`
+	FirstName       types.String `tfsdk:"first_name"`
+	LastName        types.String `tfsdk:"last_name"`
+	JoinedAt        types.String `tfsdk:"joined_at"`
+	Is2FAEnabled    types.Bool   `tfsdk:"is_2fa_enabled"`
+}
+
+func (m *OrganizationMemberTFModel) SetUserUUID(userUUID string) {
+	m.UserUUID = types.StringValue(userUUID)
 }
 
 type OrganizationMemberOps struct{}
