@@ -128,7 +128,7 @@ resource "posthog_access_control" "support_no_feature_flags" {
 # Give Bob editor access to a specific dashboard (overrides role permissions)
 resource "posthog_access_control" "bob_specific_dashboard" {
   resource            = "dashboards"
-  resource_id         = "12345"  # specific dashboard ID
+  resource_id         = "12345" # specific dashboard ID
   access_level        = "editor"
   organization_member = posthog_organization_member.bob.id
 }
