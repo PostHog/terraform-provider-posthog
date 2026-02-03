@@ -24,7 +24,7 @@ func TestListOrganizationMembers_SinglePage(t *testing.T) {
 			Next: nil,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -53,7 +53,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 				},
 				Next: &nextURL,
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case "/api/organizations/org-123/members/?cursor=page2":
 			nextURL := "/api/organizations/org-123/members/?cursor=page3"
@@ -63,7 +63,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 				},
 				Next: &nextURL,
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case "/api/organizations/org-123/members/?cursor=page3":
 			resp := OrganizationMembersList{
@@ -72,7 +72,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 				},
 				Next: nil,
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		default:
 			t.Errorf("unexpected request URI: %s", requestURI)
@@ -117,7 +117,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 				},
 				Next: &nextURL,
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		} else {
 			resp := OrganizationMembersList{
 				Results: []OrganizationMember{
@@ -125,7 +125,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 				},
 				Next: nil,
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}
 	}))
 	defer server.Close()
@@ -149,7 +149,7 @@ func TestGetOrganizationMember_Found(t *testing.T) {
 			Next: nil,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -172,7 +172,7 @@ func TestGetOrganizationMember_NotFound(t *testing.T) {
 			Next: nil,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
