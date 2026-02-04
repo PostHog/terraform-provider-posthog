@@ -1,56 +1,46 @@
 # Complete RBAC Example
 #
-# This example demonstrates how to set up role-based access control in PostHog:
-# 1. Look up existing users by email
-# 2. Manage their organization membership levels
-# 3. Create roles
-# 4. Assign users to roles
-# 5. Grant roles access to resources via access controls
+# This example demonstrates the full role-based access control workflow in PostHog:
+# 1. Create a project
+# 2. Create roles
+# 3. Set restrictive project defaults (deny by default)
+# 4. Grant roles access to the project
+# 5. Configure fine-grained resource access controls
+# 6. Optionally: look up users and assign to roles / specific permissions
 
 variable "organization_id" {
   description = "PostHog organization UUID"
   type        = string
 }
 
-# =============================================================================
-# Step 1: Look up users by email
-# =============================================================================
-
-data "posthog_user" "alice" {
-  organization_id = var.organization_id
-  email           = "alice@example.com"
-}
-
-data "posthog_user" "bob" {
-  organization_id = var.organization_id
-  email           = "bob@example.com"
+variable "project_name" {
+  description = "Name for the new project"
+  type        = string
+  default     = "Production Analytics"
 }
 
 # =============================================================================
-# Step 2: Manage organization membership levels
+# Step 1: Create the project
 # =============================================================================
 
-# Make Alice an admin
-resource "posthog_organization_member" "alice" {
+resource "posthog_project" "main" {
   organization_id = var.organization_id
-  user_uuid       = data.posthog_user.alice.uuid
-  level           = "admin"
-}
-
-# Bob stays as a regular member
-resource "posthog_organization_member" "bob" {
-  organization_id = var.organization_id
-  user_uuid       = data.posthog_user.bob.uuid
-  level           = "member"
+  name            = var.project_name
+  timezone        = "UTC"
 }
 
 # =============================================================================
-# Step 3: Create roles
+# Step 2: Create roles
 # =============================================================================
 
 resource "posthog_role" "engineering" {
   organization_id = var.organization_id
   name            = "Engineering"
+}
+
+resource "posthog_role" "product_managers" {
+  organization_id = var.organization_id
+  name            = "Product Managers"
 }
 
 resource "posthog_role" "support" {
@@ -59,90 +49,195 @@ resource "posthog_role" "support" {
 }
 
 # =============================================================================
-# Step 4: Assign users to roles
+# Step 3: Set project default access to "none" (most restrictive)
+# Only explicitly granted roles/members will have access
 # =============================================================================
 
-# Alice is on the Engineering team
-resource "posthog_role_membership" "alice_engineering" {
-  organization_id = var.organization_id
-  role_id         = posthog_role.engineering.id
-  user_uuid       = data.posthog_user.alice.uuid
-}
-
-# Bob is on both Engineering and Support teams
-resource "posthog_role_membership" "bob_engineering" {
-  organization_id = var.organization_id
-  role_id         = posthog_role.engineering.id
-  user_uuid       = data.posthog_user.bob.uuid
-}
-
-resource "posthog_role_membership" "bob_support" {
-  organization_id = var.organization_id
-  role_id         = posthog_role.support.id
-  user_uuid       = data.posthog_user.bob.uuid
-}
-
-# =============================================================================
-# Step 5: Configure access controls for roles
-# =============================================================================
-
-# Engineering team can edit feature flags
-resource "posthog_access_control" "engineering_feature_flags" {
-  resource     = "feature_flag"
-  access_level = "editor"
-  role         = posthog_role.engineering.id
-}
-
-# Engineering team can edit experiments
-resource "posthog_access_control" "engineering_experiments" {
-  resource     = "experiment"
-  access_level = "editor"
-  role         = posthog_role.engineering.id
-}
-
-# Support team can view dashboards
-resource "posthog_access_control" "support_dashboards" {
-  resource     = "dashboard"
-  access_level = "viewer"
-  role         = posthog_role.support.id
-}
-
-# Support team can view session recordings
-resource "posthog_access_control" "support_recordings" {
-  resource     = "session_recording"
-  access_level = "viewer"
-  role         = posthog_role.support.id
-}
-
-# Support team cannot access feature flags (explicit deny)
-resource "posthog_access_control" "support_no_feature_flags" {
-  resource     = "feature_flag"
+resource "posthog_project_default_access" "restrictive" {
+  project_id   = posthog_project.main.id
   access_level = "none"
+}
+
+# =============================================================================
+# Step 4: Grant roles access to the project
+# =============================================================================
+
+# Engineering team gets admin access to the project
+resource "posthog_project_member" "engineering" {
+  project_id   = posthog_project.main.id
+  role         = posthog_role.engineering.id
+  access_level = "admin"
+}
+
+# Product managers get member access
+resource "posthog_project_member" "product_managers" {
+  project_id   = posthog_project.main.id
+  role         = posthog_role.product_managers.id
+  access_level = "member"
+}
+
+# Support team gets member access
+resource "posthog_project_member" "support" {
+  project_id   = posthog_project.main.id
   role         = posthog_role.support.id
+  access_level = "member"
 }
 
 # =============================================================================
-# Step 6: Grant individual users access to specific resources (optional)
+# Step 5: Configure fine-grained resource access controls
+# Access levels: none, viewer, editor
 # =============================================================================
 
-# Give Bob editor access to a specific dashboard (overrides role permissions)
-resource "posthog_access_control" "bob_specific_dashboard" {
-  resource            = "dashboard"
-  resource_id         = "12345" # specific dashboard ID
-  access_level        = "editor"
-  organization_member = posthog_organization_member.bob.id
+# --- Feature Flags: Only engineering can edit ---
+
+resource "posthog_access_control" "feature_flags_engineering" {
+  project_id   = posthog_project.main.id
+  resource     = "feature_flag"
+  role         = posthog_role.engineering.id
+  access_level = "editor"
 }
+
+resource "posthog_access_control" "feature_flags_product" {
+  project_id   = posthog_project.main.id
+  resource     = "feature_flag"
+  role         = posthog_role.product_managers.id
+  access_level = "viewer"
+}
+
+resource "posthog_access_control" "feature_flags_support" {
+  project_id   = posthog_project.main.id
+  resource     = "feature_flag"
+  role         = posthog_role.support.id
+  access_level = "none"
+}
+
+# --- Dashboards: Only view permissions ---
+
+resource "posthog_access_control" "dashboards_engineering" {
+  project_id   = posthog_project.main.id
+  resource     = "dashboard"
+  role         = posthog_role.engineering.id
+  access_level = "viewer"
+}
+
+resource "posthog_access_control" "dashboards_support" {
+  project_id   = posthog_project.main.id
+  resource     = "dashboard"
+  role         = posthog_role.support.id
+  access_level = "viewer"
+}
+
+# --- Experiments: Product managers can edit ---
+
+resource "posthog_access_control" "experiments_product" {
+  project_id   = posthog_project.main.id
+  resource     = "experiment"
+  role         = posthog_role.product_managers.id
+  access_level = "editor"
+}
+
+resource "posthog_access_control" "experiments_engineering" {
+  project_id   = posthog_project.main.id
+  resource     = "experiment"
+  role         = posthog_role.engineering.id
+  access_level = "viewer"
+}
+
+# --- Session Recordings: Support and engineering have no access (explicitly configured) ---
+
+resource "posthog_access_control" "recordings_support" {
+  project_id   = posthog_project.main.id
+  resource     = "session_recording"
+  role         = posthog_role.support.id
+  access_level = "none"
+}
+
+resource "posthog_access_control" "recordings_engineering" {
+  project_id   = posthog_project.main.id
+  resource     = "session_recording"
+  role         = posthog_role.engineering.id
+  access_level = "none"
+}
+
+# =============================================================================
+# Step 6 (Optional): Look up users and assign to roles
+# =============================================================================
+
+# Uncomment to use:
+
+# # Look up the user
+# data "posthog_user" "alice" {
+#   organization_id = var.organization_id
+#   email           = "alice@example.com"
+# }
+#
+# # Option A: Add user to a role (inherits role's permissions)
+# resource "posthog_role_membership" "alice_engineering" {
+#   organization_id = var.organization_id
+#   role_id         = posthog_role.engineering.id
+#   user_uuid       = data.posthog_user.alice.uuid
+# }
+#
+# # Option B: Give user direct project access (independent of roles)
+# resource "posthog_project_member" "alice_direct" {
+#   project_id          = posthog_project.main.id
+#   organization_member = data.posthog_user.alice.uuid
+#   access_level        = "admin"  # or "member", "none"
+# }
+#
+# # Option C: Give user specific resource-type permissions
+# resource "posthog_access_control" "alice_feature_flags" {
+#   project_id          = posthog_project.main.id
+#   resource            = "feature_flag"
+#   organization_member = data.posthog_user.alice.uuid
+#   access_level        = "editor"
+# }
+#
+# resource "posthog_access_control" "alice_dashboards" {
+#   project_id          = posthog_project.main.id
+#   resource            = "dashboard"
+#   organization_member = data.posthog_user.alice.uuid
+#   access_level        = "viewer"
+# }
+#
+# # Option D: Give user access to a specific resource instance
+# resource "posthog_access_control" "alice_exec_dashboard" {
+#   project_id          = posthog_project.main.id
+#   resource            = "dashboard"
+#   resource_id         = posthog_dashboard.executive_summary.id  # specific dashboard
+#   organization_member = data.posthog_user.alice.uuid
+#   access_level        = "editor"
+# }
+
 
 # =============================================================================
 # Outputs
 # =============================================================================
 
-output "engineering_role_id" {
-  description = "Engineering role ID"
-  value       = posthog_role.engineering.id
+output "project" {
+  description = "Created project details"
+  value = {
+    id       = posthog_project.main.id
+    name     = posthog_project.main.name
+    timezone = posthog_project.main.timezone
+  }
 }
 
-output "support_role_id" {
-  description = "Support role ID"
-  value       = posthog_role.support.id
+output "roles" {
+  description = "Created role IDs"
+  value = {
+    engineering      = posthog_role.engineering.id
+    product_managers = posthog_role.product_managers.id
+    support          = posthog_role.support.id
+  }
+}
+
+output "project_access" {
+  description = "Project access configuration"
+  value = {
+    default_access = posthog_project_default_access.restrictive.access_level
+    engineering    = posthog_project_member.engineering.access_level
+    product        = posthog_project_member.product_managers.access_level
+    support        = posthog_project_member.support.access_level
+  }
 }
