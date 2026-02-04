@@ -43,12 +43,10 @@ func (m AccessControlTFModel) GetID() string {
 }
 
 // HasValidID returns true if we have enough information to identify the access control.
-// For access controls, this means having resource + (role or organization_member).
+// For access controls, this means having resource. Role and organization_member are optional
+// (when neither is set, it's a project-level default).
 func (m AccessControlTFModel) HasValidID() bool {
-	hasResource := !m.Resource.IsNull() && !m.Resource.IsUnknown() && m.Resource.ValueString() != ""
-	hasRole := !m.Role.IsNull() && !m.Role.IsUnknown() && m.Role.ValueString() != ""
-	hasMember := !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() && m.OrganizationMember.ValueString() != ""
-	return hasResource && (hasRole || hasMember)
+	return !m.Resource.IsNull() && !m.Resource.IsUnknown() && m.Resource.ValueString() != ""
 }
 
 func (m *AccessControlTFModel) SetAccessControlFields(resourceType, resourceID, targetType, targetID string) {
@@ -57,9 +55,9 @@ func (m *AccessControlTFModel) SetAccessControlFields(resourceType, resourceID, 
 		m.ResourceID = types.StringValue(resourceID)
 	}
 	switch targetType {
-	case core.AccessControlTargetRole:
+	case httpclient.AccessControlTargetRole:
 		m.Role = types.StringValue(targetID)
-	case core.AccessControlTargetMember:
+	case httpclient.AccessControlTargetMember:
 		m.OrganizationMember = types.StringValue(targetID)
 	}
 }
@@ -71,12 +69,13 @@ func (m AccessControlTFModel) buildExpectedID(projectID string) string {
 		resourcePart = fmt.Sprintf("%s/%s", resourcePart, m.ResourceID.ValueString())
 	}
 	if !m.Role.IsNull() && !m.Role.IsUnknown() && m.Role.ValueString() != "" {
-		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetRole, m.Role.ValueString())
+		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, httpclient.AccessControlTargetRole, m.Role.ValueString())
 	}
 	if !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() && m.OrganizationMember.ValueString() != "" {
-		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, core.AccessControlTargetMember, m.OrganizationMember.ValueString())
+		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, httpclient.AccessControlTargetMember, m.OrganizationMember.ValueString())
 	}
-	return ""
+	// Project default (no role or member specified)
+	return fmt.Sprintf("%s/%s/%s", projectID, resourcePart, httpclient.AccessControlTargetDefault)
 }
 
 type AccessControlOps struct{}
@@ -89,13 +88,20 @@ func (o AccessControlOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: `Manages access control for resources within a PostHog project.
 
-This resource allows you to grant roles or specific organization members access to resource types (like feature flags, dashboards, etc.) at different access levels.
+This resource allows you to set access levels for resource types (like feature flags, dashboards, etc.).
 
-You can set permissions at two levels:
+You can set permissions at three levels:
+- **Project default**: Applies to everyone in the project for this resource type. Omit both ` + "`role`" + ` and ` + "`organization_member`" + `.
+- **Role-specific**: Applies to members of a specific role. Set ` + "`role`" + `.
+- **Member-specific**: Applies to a specific organization member. Set ` + "`organization_member`" + `.
+
+Additionally, you can scope to:
 - **Resource-type level**: Applies to all resources of a type (e.g., all dashboards). Omit ` + "`resource_id`" + `.
 - **Resource-instance level**: Applies to a specific resource (e.g., one dashboard). Set ` + "`resource_id`" + `.
 
-~> **Note:** You must specify either ` + "`role`" + ` or ` + "`organization_member`" + `, but not both.` + core.EnterpriseRBACNote,
+You can combine these: set a project default for all dashboards, or set a project default for a specific dashboard.
+
+~> **Note:** ` + "`role`" + ` and ` + "`organization_member`" + ` are mutually exclusive - you cannot specify both. Omit both for project defaults.` + core.EnterpriseRBACNote,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -109,7 +115,7 @@ You can set permissions at two levels:
 				Required: true,
 				MarkdownDescription: "The resource type to control access for. " +
 					"Valid values include: `action`, `alert`, `annotation`, `cohort`, `dashboard`, " +
-					"`experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, etc.",
+					"`experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, `survey`, etc.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -124,23 +130,27 @@ You can set permissions at two levels:
 			},
 			"access_level": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The access level to grant. Common values are `none`, `viewer`, `editor`, `admin`",
+				MarkdownDescription: "The access level to grant. Common values are `none`, `viewer`, `editor`.",
 			},
 			"role": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "The UUID of the role to grant access to. Mutually exclusive with `organization_member`.",
+				Optional: true,
+				MarkdownDescription: "The UUID of the role to grant access to. " +
+					"Mutually exclusive with `organization_member`. " +
+					"If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 				Validators: []validator.String{
-					stringvalidator.ExactlyOneOf(path.Expressions{
+					stringvalidator.ConflictsWith(path.Expressions{
 						path.MatchRoot("organization_member"),
 					}...),
 				},
 			},
 			"organization_member": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "The UUID of the organization member to grant access to. Mutually exclusive with `role`.",
+				Optional: true,
+				MarkdownDescription: "The organization member ID to grant access to (either `organization_member_id` from `posthog_user` data source, or `posthog_organization_member.<name>.id`). " +
+					"Mutually exclusive with `role`. " +
+					"If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},

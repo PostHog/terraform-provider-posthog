@@ -5,6 +5,13 @@ import (
 	"fmt"
 )
 
+// Access control target types used in composite IDs.
+const (
+	AccessControlTargetRole    = "role"
+	AccessControlTargetMember  = "member"
+	AccessControlTargetDefault = "default"
+)
+
 type AccessControl struct {
 	AccessLevel        *string `json:"access_level"`
 	Resource           string  `json:"resource"`
@@ -17,7 +24,10 @@ type AccessControl struct {
 }
 
 // BuildCompositeID constructs a unique identifier for this access control.
-// Format: project_id/resource[/resource_id]/role|member/target_id
+// Formats:
+//   - Role-specific: project_id/resource[/resource_id]/role/role_id
+//   - Member-specific: project_id/resource[/resource_id]/member/member_id
+//   - Project default: project_id/resource[/resource_id]/default
 func (ac AccessControl) BuildCompositeID(projectID string) string {
 	resourcePart := ac.Resource
 	if ac.ResourceID != nil && *ac.ResourceID != "" {
@@ -30,7 +40,8 @@ func (ac AccessControl) BuildCompositeID(projectID string) string {
 	if ac.OrganizationMember != nil {
 		return fmt.Sprintf("%s/%s/member/%s", projectID, resourcePart, *ac.OrganizationMember)
 	}
-	return ""
+	// Project default (no role or member specified)
+	return fmt.Sprintf("%s/%s/%s", projectID, resourcePart, AccessControlTargetDefault)
 }
 
 type AccessControlRequest struct {

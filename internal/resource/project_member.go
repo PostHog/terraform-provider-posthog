@@ -67,9 +67,9 @@ func (m ProjectMemberModel) buildCompositeID(projectID string) string {
 // SetProjectMemberFields sets the role or organization_member field based on import parsing.
 func (m *ProjectMemberModel) SetProjectMemberFields(targetType, targetID string) {
 	switch targetType {
-	case core.AccessControlTargetRole:
+	case httpclient.AccessControlTargetRole:
 		m.Role = types.StringValue(targetID)
-	case core.AccessControlTargetMember:
+	case httpclient.AccessControlTargetMember:
 		m.OrganizationMember = types.StringValue(targetID)
 	}
 }

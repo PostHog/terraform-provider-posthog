@@ -228,3 +228,106 @@ resource "posthog_access_control" "test" {
 }
 `, orgID, roleName, dashboardName)
 }
+
+func TestAccessControl_ProjectDefault(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccAccessControlPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAccessControlProjectDefault("editor"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "survey"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "editor"),
+					// Verify neither role nor organization_member is set
+					resource.TestCheckNoResourceAttr("posthog_access_control.test", "role"),
+					resource.TestCheckNoResourceAttr("posthog_access_control.test", "organization_member"),
+				),
+			},
+			{
+				Config: testAccAccessControlProjectDefault("viewer"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "viewer"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccessControl_ProjectDefaultImport(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccAccessControlPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAccessControlProjectDefault("editor"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
+				),
+			},
+			{
+				ResourceName:            "posthog_access_control.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"project_id"},
+			},
+		},
+	})
+}
+
+func TestAccessControl_ProjectDefaultResourceInstance(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	dashboardName := acctest.RandomWithPrefix("tf-acc-dashboard")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccAccessControlPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAccessControlProjectDefaultResourceInstance(dashboardName, "none"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_access_control.test", "id"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "resource", "dashboard"),
+					resource.TestCheckResourceAttrSet("posthog_access_control.test", "resource_id"),
+					resource.TestCheckResourceAttr("posthog_access_control.test", "access_level", "none"),
+					// Verify neither role nor organization_member is set
+					resource.TestCheckNoResourceAttr("posthog_access_control.test", "role"),
+					resource.TestCheckNoResourceAttr("posthog_access_control.test", "organization_member"),
+				),
+			},
+		},
+	})
+}
+
+func testAccAccessControlProjectDefault(accessLevel string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_access_control" "test" {
+  resource     = "survey"
+  access_level = %q
+}
+`, accessLevel)
+}
+
+func testAccAccessControlProjectDefaultResourceInstance(dashboardName, accessLevel string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_dashboard" "test" {
+  name = %q
+}
+
+resource "posthog_access_control" "test" {
+  resource     = "dashboard"
+  resource_id  = posthog_dashboard.test.id
+  access_level = %q
+}
+`, dashboardName, accessLevel)
+}

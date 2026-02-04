@@ -3,12 +3,8 @@ package core
 import (
 	"fmt"
 	"strings"
-)
 
-// Access control target types used in import IDs and field setters.
-const (
-	AccessControlTargetRole   = "role"
-	AccessControlTargetMember = "member"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 // ProjectScopedImportParser returns an import parser for project-scoped resources.
@@ -201,9 +197,9 @@ func ProjectMemberImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 		targetType := parts[1]
 		targetID := parts[2]
 
-		if targetType != AccessControlTargetRole && targetType != AccessControlTargetMember {
+		if targetType != httpclient.AccessControlTargetRole && targetType != httpclient.AccessControlTargetMember {
 			return model, fmt.Errorf(
-				"invalid target type %q in import ID: expected %q or %q", targetType, AccessControlTargetRole, AccessControlTargetMember,
+				"invalid target type %q in import ID: expected %q or %q", targetType, httpclient.AccessControlTargetRole, httpclient.AccessControlTargetMember,
 			)
 		}
 
@@ -226,6 +222,8 @@ func ProjectMemberImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 // AccessControlImportParser returns an import parser for access control resources.
 //
 // Import formats:
+//   - project_id/resource_type/default (project default for resource type)
+//   - project_id/resource_type/resource_id/default (project default for specific resource)
 //   - project_id/resource_type/role/role_id
 //   - project_id/resource_type/member/member_id
 //   - project_id/resource_type/resource_id/role/role_id
@@ -238,14 +236,34 @@ func AccessControlImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 
 		var projectID, resourceType, resourceID, targetType, targetID string
 
+		// 3 parts: project_id/resource/default (project default, no resource_id)
 		// 4 parts: project_id/resource/role|member/target_id (no resource_id)
+		//      OR: project_id/resource/resource_id/default (project default with resource_id)
 		// 5 parts: project_id/resource/resource_id/role|member/target_id (with resource_id)
 		switch len(parts) {
-		case 4:
+		case 3:
+			// project_id/resource/default
 			projectID = parts[0]
 			resourceType = parts[1]
 			targetType = parts[2]
-			targetID = parts[3]
+			if targetType != httpclient.AccessControlTargetDefault {
+				return model, fmt.Errorf(
+					"invalid import ID format %q: 3-part format must end with '%s'", importID, httpclient.AccessControlTargetDefault,
+				)
+			}
+		case 4:
+			projectID = parts[0]
+			resourceType = parts[1]
+			// Could be: resource/default (with resource_id) OR role|member/target_id (without resource_id)
+			if parts[3] == httpclient.AccessControlTargetDefault {
+				// project_id/resource/resource_id/default
+				resourceID = parts[2]
+				targetType = parts[3]
+			} else {
+				// project_id/resource/role|member/target_id
+				targetType = parts[2]
+				targetID = parts[3]
+			}
 		case 5:
 			projectID = parts[0]
 			resourceType = parts[1]
@@ -254,14 +272,16 @@ func AccessControlImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 			targetID = parts[4]
 		default:
 			return model, fmt.Errorf(
-				"invalid import ID format %q: expected 'project_id/resource/role/role_id' or "+
-					"'project_id/resource/resource_id/role/role_id' (or 'member' instead of 'role')", importID,
+				"invalid import ID format %q: expected 'project_id/resource/default', "+
+					"'project_id/resource/role/role_id', or 'project_id/resource/resource_id/role/role_id' "+
+					"(use 'member' instead of 'role' for member-specific, or 'default' for project defaults)", importID,
 			)
 		}
 
-		if targetType != AccessControlTargetRole && targetType != AccessControlTargetMember {
+		if targetType != httpclient.AccessControlTargetRole && targetType != httpclient.AccessControlTargetMember && targetType != httpclient.AccessControlTargetDefault {
 			return model, fmt.Errorf(
-				"invalid target type %q in import ID: expected %q or %q", targetType, AccessControlTargetRole, AccessControlTargetMember,
+				"invalid target type %q in import ID: expected %q, %q, or %q",
+				targetType, httpclient.AccessControlTargetRole, httpclient.AccessControlTargetMember, httpclient.AccessControlTargetDefault,
 			)
 		}
 

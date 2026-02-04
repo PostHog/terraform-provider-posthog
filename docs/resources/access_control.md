@@ -4,10 +4,13 @@ page_title: "posthog_access_control Resource - posthog"
 subcategory: ""
 description: |-
   Manages access control for resources within a PostHog project.
-  This resource allows you to grant roles or specific organization members access to resource types (like feature flags, dashboards, etc.) at different access levels.
-  You can set permissions at two levels:
+  This resource allows you to set access levels for resource types (like feature flags, dashboards, etc.).
+  You can set permissions at three levels:
+  Project default: Applies to everyone in the project for this resource type. Omit both role and organization_member.Role-specific: Applies to members of a specific role. Set role.Member-specific: Applies to a specific organization member. Set organization_member.
+  Additionally, you can scope to:
   Resource-type level: Applies to all resources of a type (e.g., all dashboards). Omit resource_id.Resource-instance level: Applies to a specific resource (e.g., one dashboard). Set resource_id.
-  ~> Note: You must specify either role or organization_member, but not both.
+  You can combine these: set a project default for all dashboards, or set a project default for a specific dashboard.
+  ~> Note: role and organization_member are mutually exclusive - you cannot specify both. Omit both for project defaults.
   ~> Enterprise Feature: Role-based access control (RBAC) requires a PostHog Enterprise plan. See Access Control documentation https://posthog.com/docs/settings/access-control for more details.
 ---
 
@@ -15,19 +18,43 @@ description: |-
 
 Manages access control for resources within a PostHog project.
 
-This resource allows you to grant roles or specific organization members access to resource types (like feature flags, dashboards, etc.) at different access levels.
+This resource allows you to set access levels for resource types (like feature flags, dashboards, etc.).
 
-You can set permissions at two levels:
+You can set permissions at three levels:
+- **Project default**: Applies to everyone in the project for this resource type. Omit both `role` and `organization_member`.
+- **Role-specific**: Applies to members of a specific role. Set `role`.
+- **Member-specific**: Applies to a specific organization member. Set `organization_member`.
+
+Additionally, you can scope to:
 - **Resource-type level**: Applies to all resources of a type (e.g., all dashboards). Omit `resource_id`.
 - **Resource-instance level**: Applies to a specific resource (e.g., one dashboard). Set `resource_id`.
 
-~> **Note:** You must specify either `role` or `organization_member`, but not both.
+You can combine these: set a project default for all dashboards, or set a project default for a specific dashboard.
+
+~> **Note:** `role` and `organization_member` are mutually exclusive - you cannot specify both. Omit both for project defaults.
 
 ~> **Enterprise Feature:** Role-based access control (RBAC) requires a PostHog Enterprise plan. See [Access Control documentation](https://posthog.com/docs/settings/access-control) for more details.
 
 ## Example Usage
 
 ```terraform
+# --- Project Defaults (no role or organization_member) ---
+
+# Set project-wide default: everyone can view surveys
+resource "posthog_access_control" "surveys_project_default" {
+  resource     = "survey"
+  access_level = "viewer"
+}
+
+# Set default for a specific dashboard: everyone can view this dashboard
+resource "posthog_access_control" "analytics_dashboard_default" {
+  resource     = "dashboard"
+  resource_id  = posthog_dashboard.analytics.id
+  access_level = "viewer"
+}
+
+# --- Role-based Access ---
+
 # Grant a role editor access to all feature flags in the project
 resource "posthog_access_control" "engineering_feature_flags" {
   resource     = "feature_flag"
@@ -50,19 +77,21 @@ resource "posthog_access_control" "support_analytics_dashboard" {
   role         = posthog_role.support.id
 }
 
+# Explicitly deny a role access to experiments (access_level = "none")
+resource "posthog_access_control" "support_no_experiments" {
+  resource     = "experiment"
+  access_level = "none"
+  role         = posthog_role.support.id
+}
+
+# --- User-specific Access ---
+
 # Grant a specific user editor access to a specific dashboard
 resource "posthog_access_control" "alice_analytics_dashboard" {
   resource            = "dashboard"
   resource_id         = posthog_dashboard.analytics.id
   access_level        = "editor"
   organization_member = posthog_organization_member.alice.id
-}
-
-# Explicitly deny a role access to experiments (access_level = "none")
-resource "posthog_access_control" "support_no_experiments" {
-  resource     = "experiment"
-  access_level = "none"
-  role         = posthog_role.support.id
 }
 ```
 
@@ -71,15 +100,15 @@ resource "posthog_access_control" "support_no_experiments" {
 
 ### Required
 
-- `access_level` (String) The access level to grant. Common values are `none`, `viewer`, `editor`, `admin`
-- `resource` (String) The resource type to control access for. Valid values include: `action`, `alert`, `annotation`, `cohort`, `dashboard`, `experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, etc.
+- `access_level` (String) The access level to grant. Common values are `none`, `viewer`, `editor`.
+- `resource` (String) The resource type to control access for. Valid values include: `action`, `alert`, `annotation`, `cohort`, `dashboard`, `experiment`, `feature_flag`, `insight`, `notebook`, `session_recording`, `survey`, etc.
 
 ### Optional
 
-- `organization_member` (String) The UUID of the organization member to grant access to. Mutually exclusive with `role`.
+- `organization_member` (String) The organization member ID to grant access to (use `organization_member_id` from `posthog_user` data source). Mutually exclusive with `role`. If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `resource_id` (String) The ID of a specific resource to control access for. If omitted, the access control applies to all resources of the specified type.
-- `role` (String) The UUID of the role to grant access to. Mutually exclusive with `organization_member`.
+- `role` (String) The UUID of the role to grant access to. Mutually exclusive with `organization_member`. If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.
 
 ### Read-Only
 
@@ -94,19 +123,27 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Import format for resource-type level access control:
+# Import format for project default (all resources of a type):
+# project_id/resource_type/default
+terraform import posthog_access_control.surveys_project_default 12345/survey/default
+
+# Import format for project default on a specific resource:
+# project_id/resource_type/resource_id/default
+terraform import posthog_access_control.analytics_dashboard_default 12345/dashboard/999/default
+
+# Import format for role-based access control (resource type level):
 # project_id/resource_type/role/role_id
 terraform import posthog_access_control.engineering_feature_flags 12345/feature_flag/role/abc-123-def
 
-# Import format for resource-type level access control with organization member:
+# Import format for member-based access control (resource type level):
 # project_id/resource_type/member/member_id
 terraform import posthog_access_control.alice_dashboards 12345/dashboard/member/xyz-456-uvw
 
-# Import format for resource-instance level access control:
+# Import format for role-based access control (specific resource):
 # project_id/resource_type/resource_id/role/role_id
 terraform import posthog_access_control.role_specific_dashboard 12345/dashboard/999/role/abc-123-def
 
-# Import format for resource-instance level access control with organization member:
+# Import format for member-based access control (specific resource):
 # project_id/resource_type/resource_id/member/member_id
 terraform import posthog_access_control.alice_specific_dashboard 12345/dashboard/999/member/xyz-456-uvw
 ```

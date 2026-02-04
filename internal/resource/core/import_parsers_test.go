@@ -3,6 +3,7 @@ package core
 import (
 	"testing"
 
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,9 +88,9 @@ func (m testProjectMemberModel) HasValidID() bool {
 
 func (m *testProjectMemberModel) SetProjectMemberFields(targetType, targetID string) {
 	switch targetType {
-	case AccessControlTargetRole:
+	case httpclient.AccessControlTargetRole:
 		m.Role = targetID
-	case AccessControlTargetMember:
+	case httpclient.AccessControlTargetMember:
 		m.OrganizationMember = targetID
 	}
 }
@@ -170,6 +171,137 @@ func TestProjectSingletonImportParser(t *testing.T) {
 
 			require.NoError(t, err, "parser should successfully parse import ID")
 			assert.Equal(t, tc.wantProjectID, model.GetEffectiveProjectID(), "project_id should be set from import ID")
+		})
+	}
+}
+
+type testAccessControlModel struct {
+	BaseProjectID
+	Resource           string
+	ResourceID         string
+	Role               string
+	OrganizationMember string
+}
+
+func (m testAccessControlModel) GetID() string {
+	return ""
+}
+
+func (m testAccessControlModel) HasValidID() bool {
+	return m.Resource != ""
+}
+
+func (m *testAccessControlModel) SetAccessControlFields(resourceType, resourceID, targetType, targetID string) {
+	m.Resource = resourceType
+	m.ResourceID = resourceID
+	switch targetType {
+	case httpclient.AccessControlTargetRole:
+		m.Role = targetID
+	case httpclient.AccessControlTargetMember:
+		m.OrganizationMember = targetID
+	}
+}
+
+func TestAccessControlImportParser(t *testing.T) {
+	parser := AccessControlImportParser[testAccessControlModel]()
+
+	tests := map[string]struct {
+		importID      string
+		wantErr       bool
+		wantProjectID string
+		wantResource  string
+		wantResID     string
+		wantRole      string
+		wantMember    string
+	}{
+		// 3-part: project default for resource type
+		"project default for resource type": {
+			importID:      "project-123/survey/default",
+			wantProjectID: "project-123",
+			wantResource:  "survey",
+		},
+		// 4-part: project default for specific resource
+		"project default for specific resource": {
+			importID:      "project-123/dashboard/999/default",
+			wantProjectID: "project-123",
+			wantResource:  "dashboard",
+			wantResID:     "999",
+		},
+		// 4-part: role for resource type
+		"role for resource type": {
+			importID:      "project-123/feature_flag/role/role-456",
+			wantProjectID: "project-123",
+			wantResource:  "feature_flag",
+			wantRole:      "role-456",
+		},
+		// 4-part: member for resource type
+		"member for resource type": {
+			importID:      "project-123/dashboard/member/member-789",
+			wantProjectID: "project-123",
+			wantResource:  "dashboard",
+			wantMember:    "member-789",
+		},
+		// 5-part: role for specific resource
+		"role for specific resource": {
+			importID:      "project-123/dashboard/999/role/role-456",
+			wantProjectID: "project-123",
+			wantResource:  "dashboard",
+			wantResID:     "999",
+			wantRole:      "role-456",
+		},
+		// 5-part: member for specific resource
+		"member for specific resource": {
+			importID:      "project-123/dashboard/999/member/member-789",
+			wantProjectID: "project-123",
+			wantResource:  "dashboard",
+			wantResID:     "999",
+			wantMember:    "member-789",
+		},
+		// UUID format
+		"UUID format": {
+			importID:      "019a90e1-4e8e-0000-4fed-6d6380020c63/experiment/role/019b1234-5678-0000-abcd-ef1234567890",
+			wantProjectID: "019a90e1-4e8e-0000-4fed-6d6380020c63",
+			wantResource:  "experiment",
+			wantRole:      "019b1234-5678-0000-abcd-ef1234567890",
+		},
+		// Error cases
+		"3-part without default is invalid": {
+			importID: "project-123/survey/viewer",
+			wantErr:  true,
+		},
+		"invalid target type": {
+			importID: "project-123/dashboard/admin/user-456",
+			wantErr:  true,
+		},
+		"too few parts": {
+			importID: "project-123/dashboard",
+			wantErr:  true,
+		},
+		"too many parts": {
+			importID: "project-123/dashboard/999/role/role-456/extra",
+			wantErr:  true,
+		},
+		"one part is invalid": {
+			importID: "project-123",
+			wantErr:  true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			model, err := parser(tc.importID, ProviderDefaults{})
+
+			if tc.wantErr {
+				require.Error(t, err, "expected parser to return an error for invalid import ID format")
+				return
+			}
+
+			require.NoError(t, err, "parser should successfully parse valid import ID")
+			assert.Equal(t, tc.wantProjectID, model.GetEffectiveProjectID(), "project_id should be extracted")
+			assert.Equal(t, tc.wantResource, model.Resource, "resource should be extracted")
+			assert.Equal(t, tc.wantResID, model.ResourceID, "resource_id should be extracted when present")
+			assert.Equal(t, tc.wantRole, model.Role, "role should be extracted when target type is 'role'")
+			assert.Equal(t, tc.wantMember, model.OrganizationMember, "organization_member should be extracted when target type is 'member'")
 		})
 	}
 }

@@ -159,6 +159,40 @@ resource "posthog_access_control" "recordings_engineering" {
   access_level = "none"
 }
 
+# --- Project-level defaults for resource types ---
+# When neither role nor organization_member is specified, the access control
+# applies as a project-wide default for that resource type.
+
+# Surveys: Default to viewer access for everyone in the project
+resource "posthog_access_control" "surveys_project_default" {
+  project_id   = posthog_project.main.id
+  resource     = "survey"
+  access_level = "viewer"
+}
+
+# Notebooks: Default to no access (must be explicitly granted)
+resource "posthog_access_control" "notebooks_project_default" {
+  project_id   = posthog_project.main.id
+  resource     = "notebook"
+  access_level = "none"
+}
+
+# --- Project-level default for a specific resource instance ---
+# You can also set the default for a specific resource (e.g., one dashboard)
+# This applies to everyone in the project who doesn't have a more specific permission
+
+# resource "posthog_dashboard" "public_metrics" {
+#   name        = "Public Metrics"
+#   description = "Dashboard visible to everyone in the project"
+# }
+#
+# resource "posthog_access_control" "public_dashboard_default" {
+#   project_id   = posthog_project.main.id
+#   resource     = "dashboard"
+#   resource_id  = posthog_dashboard.public_metrics.id
+#   access_level = "viewer"  # Everyone can view this specific dashboard
+# }
+
 # =============================================================================
 # Step 6 (Optional): Look up users and assign to roles
 # =============================================================================
@@ -181,7 +215,7 @@ resource "posthog_access_control" "recordings_engineering" {
 # # Option B: Give user direct project access (independent of roles)
 # resource "posthog_project_member" "alice_direct" {
 #   project_id          = posthog_project.main.id
-#   organization_member = data.posthog_user.alice.uuid
+#   organization_member = data.posthog_user.alice.organization_member_id
 #   access_level        = "admin"  # or "member", "none"
 # }
 #
@@ -189,14 +223,14 @@ resource "posthog_access_control" "recordings_engineering" {
 # resource "posthog_access_control" "alice_feature_flags" {
 #   project_id          = posthog_project.main.id
 #   resource            = "feature_flag"
-#   organization_member = data.posthog_user.alice.uuid
+#   organization_member = data.posthog_user.alice.organization_member_id
 #   access_level        = "editor"
 # }
 #
 # resource "posthog_access_control" "alice_dashboards" {
 #   project_id          = posthog_project.main.id
 #   resource            = "dashboard"
-#   organization_member = data.posthog_user.alice.uuid
+#   organization_member = data.posthog_user.alice.organization_member_id
 #   access_level        = "viewer"
 # }
 #
@@ -205,7 +239,7 @@ resource "posthog_access_control" "recordings_engineering" {
 #   project_id          = posthog_project.main.id
 #   resource            = "dashboard"
 #   resource_id         = posthog_dashboard.executive_summary.id  # specific dashboard
-#   organization_member = data.posthog_user.alice.uuid
+#   organization_member = data.posthog_user.alice.organization_member_id
 #   access_level        = "editor"
 # }
 
