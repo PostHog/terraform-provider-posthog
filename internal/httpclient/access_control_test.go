@@ -3,6 +3,7 @@ package httpclient
 import (
 	"testing"
 
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -16,7 +17,7 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource: "feature_flag",
-				Role:     strPtr("role-456"),
+				Role:     util.StringPtr("role-456"),
 			},
 			expected: "proj-123/feature_flag/role/role-456",
 		},
@@ -24,8 +25,8 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource:   "dashboard",
-				ResourceID: strPtr("dash-789"),
-				Role:       strPtr("role-456"),
+				ResourceID: util.StringPtr("dash-789"),
+				Role:       util.StringPtr("role-456"),
 			},
 			expected: "proj-123/dashboard/dash-789/role/role-456",
 		},
@@ -33,7 +34,7 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource:           "experiment",
-				OrganizationMember: strPtr("member-abc"),
+				OrganizationMember: util.StringPtr("member-abc"),
 			},
 			expected: "proj-123/experiment/member/member-abc",
 		},
@@ -41,8 +42,8 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource:           "dashboard",
-				ResourceID:         strPtr("dash-789"),
-				OrganizationMember: strPtr("member-abc"),
+				ResourceID:         util.StringPtr("dash-789"),
+				OrganizationMember: util.StringPtr("member-abc"),
 			},
 			expected: "proj-123/dashboard/dash-789/member/member-abc",
 		},
@@ -50,8 +51,8 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource:   "feature_flag",
-				ResourceID: strPtr(""),
-				Role:       strPtr("role-456"),
+				ResourceID: util.StringPtr(""),
+				Role:       util.StringPtr("role-456"),
 			},
 			expected: "proj-123/feature_flag/role/role-456",
 		},
@@ -70,8 +71,4 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
-}
-
-func strPtr(s string) *string {
-	return &s
 }

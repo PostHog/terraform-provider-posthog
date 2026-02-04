@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 func NewDashboard() resource.Resource {
@@ -114,7 +115,7 @@ func (o DashboardOps) BuildUpdateRequest(ctx context.Context, plan, state Dashbo
 
 	// Clear description if removed from config
 	if core.ShouldClearString(plan.Description, state.Description) {
-		req.Description = core.StringPtr("")
+		req.Description = util.StringPtr("")
 	}
 
 	if !plan.Deleted.IsNull() {

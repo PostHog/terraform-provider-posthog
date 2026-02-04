@@ -3,7 +3,7 @@ package resource
 import (
 	"testing"
 
-	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,15 +50,15 @@ func TestLevelToString(t *testing.T) {
 		expected string
 	}{
 		"member level": {
-			input:    core.IntPtr(MembershipLevelMember.Value),
+			input:    util.IntPtr(MembershipLevelMember.Value),
 			expected: "member",
 		},
 		"admin level": {
-			input:    core.IntPtr(MembershipLevelAdmin.Value),
+			input:    util.IntPtr(MembershipLevelAdmin.Value),
 			expected: "admin",
 		},
 		"owner level": {
-			input:    core.IntPtr(MembershipLevelOwner.Value),
+			input:    util.IntPtr(MembershipLevelOwner.Value),
 			expected: "owner",
 		},
 		"nil defaults to member": {
@@ -66,7 +66,7 @@ func TestLevelToString(t *testing.T) {
 			expected: "member",
 		},
 		"unknown int defaults to member": {
-			input:    core.IntPtr(999),
+			input:    util.IntPtr(999),
 			expected: "member",
 		},
 	}

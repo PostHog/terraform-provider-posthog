@@ -104,16 +104,6 @@ func ShouldClearString(plan, state types.String) bool {
 	return plan.IsNull() && !state.IsNull()
 }
 
-// StringPtr returns a pointer to the given string.
-func StringPtr(s string) *string {
-	return &s
-}
-
-// IntPtr returns a pointer to the given int.
-func IntPtr(i int) *int {
-	return &i
-}
-
 func ProjectIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
 		Optional:            true,

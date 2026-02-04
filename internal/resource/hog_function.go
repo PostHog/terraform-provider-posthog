@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 func NewHogFunction() resource.Resource {
@@ -232,7 +233,7 @@ func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, state HogF
 
 	// Clear description if removed from config
 	if core.ShouldClearString(plan.Description, state.Description) {
-		req.Description = core.StringPtr("")
+		req.Description = util.StringPtr("")
 	}
 
 	return req, diags
