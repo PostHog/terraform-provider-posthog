@@ -74,3 +74,8 @@ func getOrganizationID() string {
 func getTestUserEmail() string {
 	return os.Getenv("POSTHOG_TEST_USER_EMAIL")
 }
+
+// getProjectID returns the POSTHOG_PROJECT_ID environment variable.
+func getProjectID() string {
+	return os.Getenv("POSTHOG_PROJECT_ID")
+}
