@@ -24,12 +24,13 @@ type UserDataSource struct {
 }
 
 type UserDataSourceModel struct {
-	OrganizationID  types.String `tfsdk:"organization_id"`
-	Email           types.String `tfsdk:"email"`
-	UUID            types.String `tfsdk:"uuid"`
-	FirstName       types.String `tfsdk:"first_name"`
-	LastName        types.String `tfsdk:"last_name"`
-	IsEmailVerified types.Bool   `tfsdk:"is_email_verified"`
+	OrganizationID       types.String `tfsdk:"organization_id"`
+	Email                types.String `tfsdk:"email"`
+	UUID                 types.String `tfsdk:"uuid"`
+	OrganizationMemberID types.String `tfsdk:"organization_member_id"`
+	FirstName            types.String `tfsdk:"first_name"`
+	LastName             types.String `tfsdk:"last_name"`
+	IsEmailVerified      types.Bool   `tfsdk:"is_email_verified"`
 }
 
 var (
@@ -57,6 +58,10 @@ func (d *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			"uuid": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "The UUID of the user.",
+			},
+			"organization_member_id": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "The organization membership ID. Use this for `organization_member` in access controls.",
 			},
 			"first_name": schema.StringAttribute{
 				Computed:            true,
@@ -149,6 +154,7 @@ func (d *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	}
 
 	config.UUID = types.StringValue(found.User.UUID)
+	config.OrganizationMemberID = types.StringValue(found.ID)
 	config.FirstName = core.PtrToStringNullIfEmptyTrimmed(found.User.FirstName)
 	config.LastName = core.PtrToStringNullIfEmptyTrimmed(found.User.LastName)
 	config.IsEmailVerified = core.PtrToBool(found.User.IsEmailVerified)

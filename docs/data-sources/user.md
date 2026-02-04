@@ -45,4 +45,5 @@ output "alice_name" {
 - `first_name` (String) The first name of the user.
 - `is_email_verified` (Boolean) Whether the user's email address has been verified.
 - `last_name` (String) The last name of the user.
+- `organization_member_id` (String) The organization membership ID. Use this for `organization_member` in access controls.
 - `uuid` (String) The UUID of the user.
