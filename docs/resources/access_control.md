@@ -105,7 +105,7 @@ resource "posthog_access_control" "alice_analytics_dashboard" {
 
 ### Optional
 
-- `organization_member` (String) The organization member ID to grant access to (use `organization_member_id` from `posthog_user` data source). Mutually exclusive with `role`. If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.
+- `organization_member` (String) The organization member ID to grant access to (either `organization_member_id` from `posthog_user` data source, or `posthog_organization_member.<name>.id`). Mutually exclusive with `role`. If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `resource_id` (String) The ID of a specific resource to control access for. If omitted, the access control applies to all resources of the specified type.
 - `role` (String) The UUID of the role to grant access to. Mutually exclusive with `organization_member`. If neither `role` nor `organization_member` is set, this becomes the project default for the resource type.
