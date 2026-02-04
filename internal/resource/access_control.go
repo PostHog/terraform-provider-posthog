@@ -217,7 +217,7 @@ func (o AccessControlOps) Read(ctx context.Context, client httpclient.PosthogCli
 		}
 	}
 
-	return httpclient.AccessControl{}, http.StatusNotFound, fmt.Errorf("access control not found")
+	return httpclient.AccessControl{}, http.StatusNotFound, fmt.Errorf("access control not found for %s", targetID)
 }
 
 func (o AccessControlOps) Update(ctx context.Context, client httpclient.PosthogClient, model AccessControlTFModel, req httpclient.AccessControlRequest) (httpclient.AccessControl, httpclient.HTTPStatusCode, error) {

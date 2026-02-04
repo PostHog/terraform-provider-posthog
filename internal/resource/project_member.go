@@ -183,7 +183,7 @@ func (o ProjectMemberOps) Read(ctx context.Context, client httpclient.PosthogCli
 		}
 	}
 
-	return httpclient.ProjectAccessControl{}, http.StatusNotFound, fmt.Errorf("project member access not found")
+	return httpclient.ProjectAccessControl{}, http.StatusNotFound, fmt.Errorf("project member access not found for %s", expectedID)
 }
 
 func (o ProjectMemberOps) Update(ctx context.Context, client httpclient.PosthogClient, model ProjectMemberModel, req httpclient.ProjectAccessControlRequest) (httpclient.ProjectAccessControl, httpclient.HTTPStatusCode, error) {
