@@ -15,15 +15,6 @@ import (
 	"github.com/posthog/terraform-provider/internal/resource/core"
 )
 
-// Project access levels (different from resource-type access levels).
-const (
-	projectAccessLevelNone   = "none"
-	projectAccessLevelMember = "member"
-	projectAccessLevelAdmin  = "admin"
-)
-
-var projectAccessLevels = []string{projectAccessLevelNone, projectAccessLevelMember, projectAccessLevelAdmin}
-
 func NewProjectDefaultAccess() resource.Resource {
 	return core.NewGenericResource[ProjectDefaultAccessModel, httpclient.ProjectAccessControlRequest, httpclient.ProjectAccessControlListResponse](
 		ProjectDefaultAccessOps{},
@@ -76,7 +67,7 @@ This determines the baseline access level for all organization members who don't
 				Required:            true,
 				MarkdownDescription: "The default access level for the project. Valid values are `none`, `member`, or `admin`.",
 				Validators: []validator.String{
-					stringvalidator.OneOf(projectAccessLevels...),
+					stringvalidator.OneOf(ProjectAccessLevels...),
 				},
 			},
 		},
@@ -134,7 +125,7 @@ func (o ProjectDefaultAccessOps) Update(ctx context.Context, client httpclient.P
 
 func (o ProjectDefaultAccessOps) Delete(ctx context.Context, client httpclient.PosthogClient, model ProjectDefaultAccessModel) (httpclient.HTTPStatusCode, error) {
 	// Can't truly delete a default - reset to "none" (most restrictive)
-	noneLevel := projectAccessLevelNone
+	noneLevel := ProjectAccessLevelNone
 	req := httpclient.ProjectAccessControlRequest{
 		AccessLevel: &noneLevel,
 	}

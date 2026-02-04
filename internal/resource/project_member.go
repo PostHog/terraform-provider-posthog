@@ -119,7 +119,7 @@ This resource grants a specific role or organization member access to a project 
 				Required:            true,
 				MarkdownDescription: "The access level to grant. Valid values are `none`, `member`, or `admin`.",
 				Validators: []validator.String{
-					stringvalidator.OneOf(projectAccessLevels...),
+					stringvalidator.OneOf(ProjectAccessLevels...),
 				},
 			},
 			"created_at": schema.StringAttribute{
