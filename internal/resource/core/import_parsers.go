@@ -159,6 +159,70 @@ type AccessControlFieldsSetter interface {
 	SetAccessControlFields(resourceType, resourceID, targetType, targetID string)
 }
 
+// ProjectMemberFieldsSetter is implemented by models that need project member fields set during import.
+type ProjectMemberFieldsSetter interface {
+	SetProjectMemberFields(targetType, targetID string)
+}
+
+// ProjectSingletonImportParser returns an import parser for singleton project-scoped resources.
+// These resources have one instance per project (e.g., project_default_access).
+// Import format: just "project_id" (no resource_id needed).
+func ProjectSingletonImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
+	return func(importID string, _ ProviderDefaults) (TFModel, error) {
+		var model TFModel
+
+		init, ok := any(&model).(ProjectIDInitializer)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement ProjectIDInitializer", model)
+		}
+		init.InitializeProjectID(importID)
+
+		return model, nil
+	}
+}
+
+// ProjectMemberImportParser returns an import parser for project member resources.
+//
+// Import formats:
+//   - project_id/role/<role_id>
+//   - project_id/member/<member_id>
+func ProjectMemberImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
+	return func(importID string, defaults ProviderDefaults) (TFModel, error) {
+		var model TFModel
+
+		parts := strings.Split(importID, "/")
+		if len(parts) != 3 {
+			return model, fmt.Errorf(
+				"invalid import ID format %q: expected 'project_id/role/<role_id>' or 'project_id/member/<member_id>'", importID,
+			)
+		}
+
+		projectID := parts[0]
+		targetType := parts[1]
+		targetID := parts[2]
+
+		if targetType != AccessControlTargetRole && targetType != AccessControlTargetMember {
+			return model, fmt.Errorf(
+				"invalid target type %q in import ID: expected %q or %q", targetType, AccessControlTargetRole, AccessControlTargetMember,
+			)
+		}
+
+		init, ok := any(&model).(ProjectIDInitializer)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement ProjectIDInitializer", model)
+		}
+		init.InitializeProjectID(projectID)
+
+		pmSetter, ok := any(&model).(ProjectMemberFieldsSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement ProjectMemberFieldsSetter", model)
+		}
+		pmSetter.SetProjectMemberFields(targetType, targetID)
+
+		return model, nil
+	}
+}
+
 // AccessControlImportParser returns an import parser for access control resources.
 //
 // Import formats:
