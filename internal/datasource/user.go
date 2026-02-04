@@ -106,6 +106,15 @@ func (d *UserDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		orgID = d.defaultOrganizationID
 		config.OrganizationID = types.StringValue(orgID)
 	}
+
+	if orgID == "" {
+		resp.Diagnostics.AddError(
+			"Missing organization_id",
+			"organization_id must be set either in the data source or at the provider level",
+		)
+		return
+	}
+
 	email := strings.ToLower(strings.TrimSpace(config.Email.ValueString()))
 
 	tflog.Debug(ctx, "Looking up user by email", map[string]any{
