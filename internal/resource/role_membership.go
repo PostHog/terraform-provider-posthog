@@ -38,7 +38,7 @@ func (o RoleMembershipOps) ResourceName() string {
 
 func (o RoleMembershipOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "Manages a user's membership in a role within a PostHog organization.",
+		MarkdownDescription: "Manages a user's membership in a role within a PostHog organization." + core.EnterpriseRBACNote,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,

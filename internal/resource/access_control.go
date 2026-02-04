@@ -95,7 +95,7 @@ You can set permissions at two levels:
 - **Resource-type level**: Applies to all resources of a type (e.g., all dashboards). Omit ` + "`resource_id`" + `.
 - **Resource-instance level**: Applies to a specific resource (e.g., one dashboard). Set ` + "`resource_id`" + `.
 
-~> **Note:** You must specify either ` + "`role`" + ` or ` + "`organization_member`" + `, but not both.`,
+~> **Note:** You must specify either ` + "`role`" + ` or ` + "`organization_member`" + `, but not both.` + core.EnterpriseRBACNote,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,

@@ -4,11 +4,14 @@ page_title: "posthog_role Resource - posthog"
 subcategory: ""
 description: |-
   Manages a role within a PostHog organization.
+  ~> Enterprise Feature: Role-based access control (RBAC) requires a PostHog Enterprise plan. See Access Control documentation https://posthog.com/docs/settings/access-control for more details.
 ---
 
 # posthog_role (Resource)
 
 Manages a role within a PostHog organization.
+
+~> **Enterprise Feature:** Role-based access control (RBAC) requires a PostHog Enterprise plan. See [Access Control documentation](https://posthog.com/docs/settings/access-control) for more details.
 
 ## Example Usage
 
