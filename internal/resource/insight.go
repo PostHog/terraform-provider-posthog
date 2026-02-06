@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 func NewInsight() resource.Resource {
@@ -171,7 +172,7 @@ func (o InsightOps) BuildUpdateRequest(ctx context.Context, plan, state InsightR
 
 	// Clear description if removed from config
 	if core.ShouldClearString(plan.Description, state.Description) {
-		req.Description = core.StringPtr("")
+		req.Description = util.StringPtr("")
 	}
 
 	if !plan.Deleted.IsNull() {

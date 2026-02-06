@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	internaldata "github.com/posthog/terraform-provider/internal/data"
+	posthogdatasource "github.com/posthog/terraform-provider/internal/datasource"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	posthogresource "github.com/posthog/terraform-provider/internal/resource"
 )
@@ -135,12 +136,18 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 
 func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresource.Resource {
 	return []func() frameworkresource.Resource{
+		posthogresource.NewAccessControl,
 		posthogresource.NewAlert,
 		posthogresource.NewDashboard,
 		posthogresource.NewFeatureFlag,
 		posthogresource.NewHogFunction,
 		posthogresource.NewInsight,
+		posthogresource.NewOrganizationMember,
 		posthogresource.NewProject,
+		posthogresource.NewProjectDefaultAccess,
+		posthogresource.NewProjectMember,
+		posthogresource.NewRole,
+		posthogresource.NewRoleMembership,
 	}
 }
 
@@ -149,7 +156,9 @@ func (p *PostHogProvider) EphemeralResources(_ context.Context) []func() ephemer
 }
 
 func (p *PostHogProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		posthogdatasource.NewUser,
+	}
 }
 
 func (p *PostHogProvider) Functions(_ context.Context) []func() function.Function {

@@ -2,7 +2,6 @@ package tests
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -14,10 +13,6 @@ func testAccProjectPreCheck(t *testing.T) {
 	t.Helper()
 	testAccBasePreCheck(t)
 	skipIfNoOrganizationID(t)
-}
-
-func getOrganizationID() string {
-	return os.Getenv("POSTHOG_ORGANIZATION_ID")
 }
 
 // TestProject_ProviderLevelOrganizationID tests that a project inherits organization_id from the provider.
