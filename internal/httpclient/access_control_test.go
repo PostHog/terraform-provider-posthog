@@ -56,12 +56,12 @@ func TestAccessControl_BuildCompositeID(t *testing.T) {
 			},
 			expected: "proj-123/feature_flag/role/role-456",
 		},
-		"nil role and member returns empty": {
+		"nil role and member returns project default": {
 			projectID: "proj-123",
 			ac: AccessControl{
 				Resource: "dashboard",
 			},
-			expected: "",
+			expected: "proj-123/dashboard/default",
 		},
 	}
 
