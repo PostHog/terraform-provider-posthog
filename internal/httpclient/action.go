@@ -7,23 +7,24 @@ import (
 
 type Action struct {
 	ID                 int64                    `json:"id"`
-	Name               string                   `json:"name"`
+	Name               *string                  `json:"name,omitempty"`
 	Description        *string                  `json:"description,omitempty"`
 	Tags               []string                 `json:"tags,omitempty"`
 	PostToSlack        *bool                    `json:"post_to_slack,omitempty"`
 	SlackMessageFormat *string                  `json:"slack_message_format,omitempty"`
 	Steps              []map[string]interface{} `json:"steps,omitempty"`
+	CreatedAt          *string                  `json:"created_at,omitempty"`
 	Deleted            *bool                    `json:"deleted,omitempty"`
 }
 
 type ActionRequest struct {
-	Name               string                   `json:"name"`
-	Description        *string                  `json:"description,omitempty"`
-	Tags               []string                 `json:"tags,omitempty"`
-	PostToSlack        *bool                    `json:"post_to_slack,omitempty"`
-	SlackMessageFormat *string                  `json:"slack_message_format,omitempty"`
-	Steps              []map[string]interface{} `json:"steps,omitempty"`
-	Deleted            *bool                    `json:"deleted,omitempty"`
+	Name               *string                   `json:"name,omitempty"`
+	Description        *string                   `json:"description,omitempty"`
+	Tags               *[]string                 `json:"tags,omitempty"`
+	PostToSlack        *bool                     `json:"post_to_slack,omitempty"`
+	SlackMessageFormat *string                   `json:"slack_message_format,omitempty"`
+	Steps              *[]map[string]interface{} `json:"steps,omitempty"`
+	Deleted            *bool                     `json:"deleted,omitempty"`
 }
 
 func (c *PosthogClient) CreateAction(ctx context.Context, projectID string, input ActionRequest) (Action, error) {
@@ -43,16 +44,8 @@ func (c *PosthogClient) UpdateAction(ctx context.Context, projectID, id string, 
 }
 
 func (c *PosthogClient) DeleteAction(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
-	existing, _, err := c.GetAction(ctx, projectID, id)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get action for deletion: %w", err)
-	}
-
 	deleted := true
-	input := ActionRequest{
-		Name:    existing.Name,
-		Deleted: &deleted,
-	}
+	input := ActionRequest{Deleted: &deleted}
 	_, statusCode, err := c.UpdateAction(ctx, projectID, id, input)
 	return statusCode, err
 }

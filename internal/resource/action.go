@@ -35,6 +35,7 @@ type ActionTFModel struct {
 	PostToSlack        types.Bool   `tfsdk:"post_to_slack"`
 	SlackMessageFormat types.String `tfsdk:"slack_message_format"`
 	StepsJSON          types.String `tfsdk:"steps_json"`
+	CreatedAt          types.String `tfsdk:"created_at"`
 	Deleted            types.Bool   `tfsdk:"deleted"`
 }
 
@@ -92,7 +93,15 @@ func (o ActionOps) Schema() schema.Schema {
 			"steps_json": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "JSON-encoded array of action step objects",
+				MarkdownDescription: "JSON-encoded array of action step objects. " +
+					"See the [ActionStep schema](https://posthog.com/docs/api/actions) for available fields.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"created_at": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Timestamp when the action was created.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -112,8 +121,9 @@ func (o ActionOps) Schema() schema.Schema {
 func (o ActionOps) BuildCreateRequest(ctx context.Context, model ActionTFModel) (httpclient.ActionRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
+	name := model.Name.ValueString()
 	req := httpclient.ActionRequest{
-		Name: model.Name.ValueString(),
+		Name: &name,
 	}
 
 	if !model.Description.IsNull() && !model.Description.IsUnknown() {
@@ -139,18 +149,15 @@ func (o ActionOps) BuildCreateRequest(ctx context.Context, model ActionTFModel) 
 				diags.AddError("Invalid steps_json", fmt.Sprintf("steps_json must be a valid JSON array: %s", err.Error()))
 				return req, diags
 			}
-			req.Steps = steps
+			req.Steps = &steps
 		}
 	}
 
 	if !model.Tags.IsNull() {
 		tags, d := core.ExtractTags(ctx, model.Tags)
 		diags.Append(d...)
-		req.Tags = tags
+		req.Tags = &tags
 	}
-
-	deleted := false
-	req.Deleted = &deleted
 
 	return req, diags
 }
@@ -166,6 +173,18 @@ func (o ActionOps) BuildUpdateRequest(ctx context.Context, plan, state ActionTFM
 		req.SlackMessageFormat = util.StringPtr("")
 	}
 
+	// Clear tags if removed from config but previously set
+	if plan.Tags.IsNull() && !state.Tags.IsNull() {
+		empty := []string{}
+		req.Tags = &empty
+	}
+
+	// Clear steps if removed from config but previously set
+	if (plan.StepsJSON.IsNull() || plan.StepsJSON.ValueString() == "") && !state.StepsJSON.IsNull() {
+		empty := []map[string]interface{}{}
+		req.Steps = &empty
+	}
+
 	deleted := plan.Deleted.ValueBool()
 	req.Deleted = &deleted
 
@@ -176,13 +195,15 @@ func (o ActionOps) MapResponseToModel(ctx context.Context, resp httpclient.Actio
 	var diags diag.Diagnostics
 
 	model.ID = types.Int64Value(resp.ID)
-	model.Name = types.StringValue(resp.Name)
+	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
 	model.PostToSlack = core.PtrToBool(resp.PostToSlack)
 	model.SlackMessageFormat = core.PtrToStringNullIfEmptyTrimmed(resp.SlackMessageFormat)
+	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
 
 	if len(resp.Steps) > 0 {
-		// Round-trip through JSON to get generic []interface{} for normalizeJSONForState
+		// Round-trip through JSON to convert []map[string]interface{} to []interface{}
+		// which normalizeJSONForState requires for type assertions.
 		stepsBytes, err := json.Marshal(resp.Steps)
 		if err != nil {
 			diags.AddError("Failed to marshal steps", err.Error())
@@ -205,7 +226,7 @@ func (o ActionOps) MapResponseToModel(ctx context.Context, resp httpclient.Actio
 		model.StepsJSON = types.StringNull()
 	}
 
-	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 
