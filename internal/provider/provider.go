@@ -137,6 +137,7 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresource.Resource {
 	return []func() frameworkresource.Resource{
 		posthogresource.NewAccessControl,
+		posthogresource.NewAction,
 		posthogresource.NewAlert,
 		posthogresource.NewDashboard,
 		posthogresource.NewFeatureFlag,
