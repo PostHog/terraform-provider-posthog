@@ -45,6 +45,12 @@ type ResourceOperations[TFModel Identifiable, APIRequest, APIResponse any] inter
 	Delete(ctx context.Context, client httpclient.PosthogClient, model TFModel) (httpclient.HTTPStatusCode, error)
 }
 
+// ResourcePlanModifier is an optional interface. If the ops struct implements it,
+// GenericResource delegates ModifyPlan calls to it.
+type ResourcePlanModifier interface {
+	ModifyResourcePlan(context.Context, resource.ModifyPlanRequest, *resource.ModifyPlanResponse)
+}
+
 // GenericResource implements resource.Resource using the provided operations.
 type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
 	client       httpclient.PosthogClient
@@ -56,6 +62,7 @@ type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
 var (
 	_ resource.Resource                = (*GenericResource[Identifiable, any, any])(nil)
 	_ resource.ResourceWithImportState = (*GenericResource[Identifiable, any, any])(nil)
+	_ resource.ResourceWithModifyPlan  = (*GenericResource[Identifiable, any, any])(nil)
 )
 
 func NewGenericResource[TFModel Identifiable, APIRequest, APIResponse any](
@@ -346,4 +353,10 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+func (r *GenericResource[TFModel, APIRequest, APIResponse]) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if pm, ok := any(r.ops).(ResourcePlanModifier); ok {
+		pm.ModifyResourcePlan(ctx, req, resp)
+	}
 }

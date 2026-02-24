@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -58,9 +59,11 @@ var tilesObjectType = types.ObjectType{
 }
 
 type DashboardLayoutOps struct {
-	// planTiles is set by BuildUpdateRequest and consumed by Update so that the
-	// reconciled tile list from the plan is available during the PATCH call.
-	planTiles []TileTFModel
+	// planTilesByDashboard passes declared tiles from BuildUpdateRequest to Update,
+	// keyed by dashboard ID. A sync.Map is used because Terraform may process
+	// multiple resources of the same type concurrently; each dashboard ID is
+	// written by one goroutine and consumed (LoadAndDelete) by the same one.
+	planTilesByDashboard sync.Map // map[int64][]TileTFModel
 }
 
 func NewDashboardLayout() resource.Resource {
@@ -76,7 +79,7 @@ func (o *DashboardLayoutOps) ResourceName() string {
 
 func (o *DashboardLayoutOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "Manages the tile layout of a PostHog dashboard. This resource is fully authoritative: it manages all tile layouts on the dashboard. Tiles not declared in config will have their layouts cleared on apply.",
+		MarkdownDescription: "Manages the tile layout of a PostHog dashboard. This resource is fully authoritative: it manages all tiles on the dashboard. Unmanaged insight tiles will have their layouts cleared; unmanaged text tiles will be deleted. On destroy, all text tiles are removed and insight tile layouts are cleared.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.Int64Attribute{
 				Computed:            true,
@@ -101,9 +104,6 @@ func (o *DashboardLayoutOps) Schema() schema.Schema {
 						"tile_id": schema.Int64Attribute{
 							Computed:            true,
 							MarkdownDescription: "Server-assigned tile ID. Populated after the first apply.",
-							PlanModifiers: []planmodifier.Int64{
-								int64planmodifier.UseStateForUnknown(),
-							},
 						},
 						"insight_id": schema.Int64Attribute{
 							Optional:            true,
@@ -141,6 +141,128 @@ func (o *DashboardLayoutOps) Schema() schema.Schema {
 	}
 }
 
+// ModifyResourcePlan copies tile_id from state into the plan for existing tiles.
+// tile_id is Computed-only (server-assigned), so without this it would be Unknown in
+// every plan. Resolving it early means buildLayoutPatch can match text tiles by tile_id
+// instead of falling back to body matching, which enables in-place updates when a text
+// tile's body changes and avoids ambiguity with duplicate bodies.
+func (o *DashboardLayoutOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Skip during destroy.
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	// Skip during create — no prior state to match against.
+	if req.State.Raw.IsNull() {
+		return
+	}
+
+	var plan DashboardLayoutTFModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	var state DashboardLayoutTFModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	planTiles, d := extractTilesFromModel(ctx, plan)
+	resp.Diagnostics.Append(d...)
+	stateTiles, d := extractTilesFromModel(ctx, state)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() || planTiles == nil || stateTiles == nil {
+		return
+	}
+
+	if resolved := resolveTileIDs(planTiles, stateTiles); resolved != nil {
+		tilesList, d := types.ListValueFrom(ctx, tilesObjectType, resolved)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("tiles"), tilesList)...)
+	}
+}
+
+// resolveTileIDs matches plan tiles to state tiles by semantic identity and copies
+// the tile_id from state into the plan. It returns a new slice with resolved tile_ids,
+// or nil if no tile_id was resolved.
+func resolveTileIDs(planTiles, stateTiles []TileTFModel) []TileTFModel {
+	// Build state lookups.
+	insightToTileID := make(map[int64]int64, len(stateTiles))
+	bodyToTileIDs := make(map[string][]int64, len(stateTiles))
+	tileIDToStateIdx := make(map[int64]int, len(stateTiles))
+	for si, st := range stateTiles {
+		tid := st.TileID.ValueInt64()
+		tileIDToStateIdx[tid] = si
+		if st.IsInsightTile() {
+			insightToTileID[st.InsightID.ValueInt64()] = tid
+		} else if st.IsTextTile() {
+			body := st.TextBody.ValueString()
+			bodyToTileIDs[body] = append(bodyToTileIDs[body], tid)
+		}
+	}
+
+	result := make([]TileTFModel, len(planTiles))
+	copy(result, planTiles)
+
+	// Pass 1: Match by semantic identity (insight_id, text_body).
+	matchedStateIdx := make(map[int]bool, len(stateTiles))
+	modified := false
+	for i, pt := range planTiles {
+		if !pt.TileID.IsUnknown() {
+			continue
+		}
+		var tileID int64
+		found := false
+		if pt.IsInsightTile() {
+			tileID, found = insightToTileID[pt.InsightID.ValueInt64()]
+		} else if pt.IsTextTile() {
+			body := pt.TextBody.ValueString()
+			if ids := bodyToTileIDs[body]; len(ids) > 0 {
+				tileID = ids[0]
+				bodyToTileIDs[body] = ids[1:]
+				found = true
+			}
+		}
+		if found && tileID != 0 {
+			result[i].TileID = types.Int64Value(tileID)
+			modified = true
+			matchedStateIdx[tileIDToStateIdx[tileID]] = true
+		}
+	}
+
+	// Pass 2: Positional fallback for remaining unmatched text tiles.
+	var unmatchedStateTileIDs []int64
+	for si, st := range stateTiles {
+		if !matchedStateIdx[si] && st.IsTextTile() {
+			unmatchedStateTileIDs = append(unmatchedStateTileIDs, st.TileID.ValueInt64())
+		}
+	}
+	positionalIdx := 0
+	for i := range result {
+		if !result[i].TileID.IsUnknown() || !result[i].IsTextTile() {
+			continue
+		}
+		if positionalIdx >= len(unmatchedStateTileIDs) {
+			break
+		}
+		tileID := unmatchedStateTileIDs[positionalIdx]
+		positionalIdx++
+		if tileID != 0 {
+			result[i].TileID = types.Int64Value(tileID)
+			modified = true
+		}
+	}
+
+	if !modified {
+		return nil
+	}
+	return result
+}
+
 func (o *DashboardLayoutOps) BuildCreateRequest(_ context.Context, _ DashboardLayoutTFModel) (httpclient.DashboardLayoutPatchRequest, diag.Diagnostics) {
 	// BuildCreateRequest returns an empty request because Create performs its own
 	// GET-reconcile-PATCH flow using the HTTP client directly.
@@ -152,7 +274,7 @@ func (o *DashboardLayoutOps) BuildUpdateRequest(ctx context.Context, plan, _ Das
 	if diags.HasError() {
 		return httpclient.DashboardLayoutPatchRequest{}, diags
 	}
-	o.planTiles = tiles
+	o.planTilesByDashboard.Store(plan.DashboardID.ValueInt64(), tiles)
 	return httpclient.DashboardLayoutPatchRequest{}, diags
 }
 
@@ -209,7 +331,12 @@ func (o *DashboardLayoutOps) Read(ctx context.Context, client httpclient.Posthog
 }
 
 func (o *DashboardLayoutOps) Update(ctx context.Context, client httpclient.PosthogClient, model DashboardLayoutTFModel, _ httpclient.DashboardLayoutPatchRequest) (httpclient.DashboardLayoutResponse, httpclient.HTTPStatusCode, error) {
-	return reconcileAndPatch(ctx, &client, model.GetEffectiveProjectID(), model.DashboardID.ValueInt64(), o.planTiles)
+	dashboardID := model.DashboardID.ValueInt64()
+	raw, ok := o.planTilesByDashboard.LoadAndDelete(dashboardID)
+	if !ok {
+		return httpclient.DashboardLayoutResponse{}, 0, fmt.Errorf("plan tiles not found for dashboard %d; this is a provider bug", dashboardID)
+	}
+	return reconcileAndPatch(ctx, &client, model.GetEffectiveProjectID(), dashboardID, raw.([]TileTFModel))
 }
 
 // reconcileAndPatch performs a GET-reconcile-PATCH flow.
@@ -257,11 +384,6 @@ func reconcileAndPatch(ctx context.Context, client *httpclient.PosthogClient, pr
 }
 
 func (o *DashboardLayoutOps) Delete(ctx context.Context, client httpclient.PosthogClient, model DashboardLayoutTFModel) (httpclient.HTTPStatusCode, error) {
-	declaredTiles, diags := extractTilesFromModel(ctx, model)
-	if diags.HasError() {
-		return 0, fmt.Errorf("extracting tiles from state for delete: %s", diags.Errors()[0].Detail())
-	}
-
 	projectID := model.GetEffectiveProjectID()
 	dashboardID := strconv.FormatInt(model.DashboardID.ValueInt64(), 10)
 
@@ -272,7 +394,7 @@ func (o *DashboardLayoutOps) Delete(ctx context.Context, client httpclient.Posth
 		return statusCode, fmt.Errorf("reading dashboard %s for delete: %w", dashboardID, err)
 	}
 
-	patchItems := buildDeletePatch(declaredTiles, apiResp.Tiles)
+	patchItems := buildDeletePatch(apiResp.Tiles)
 	if len(patchItems) == 0 {
 		return 200, nil
 	}
@@ -291,57 +413,96 @@ func extractTilesFromModel(ctx context.Context, model DashboardLayoutTFModel) ([
 	return tiles, diags
 }
 
-// buildTileLookupMaps indexes API tiles into two maps: insight tiles keyed by insight ID,
-// and text tiles keyed by tile ID.
-func buildTileLookupMaps(apiTiles []httpclient.DashboardTile) (insightByID, textByTileID map[int64]httpclient.DashboardTile) {
-	insightByID = make(map[int64]httpclient.DashboardTile, len(apiTiles))
-	textByTileID = make(map[int64]httpclient.DashboardTile, len(apiTiles))
-	for _, t := range apiTiles {
+// buildTileLookupMaps indexes API tiles by position: insight tiles keyed by insight ID,
+// and text tiles keyed by tile ID. Values are indices into the apiTiles slice.
+func buildTileLookupMaps(apiTiles []httpclient.DashboardTile) (insightIdx, textIdx map[int64]int) {
+	insightIdx = make(map[int64]int, len(apiTiles))
+	textIdx = make(map[int64]int, len(apiTiles))
+	for i, t := range apiTiles {
 		if t.Insight != nil {
-			insightByID[t.Insight.ID] = t
+			insightIdx[t.Insight.ID] = i
 		}
 		if t.Text != nil {
-			textByTileID[t.ID] = t
+			textIdx[t.ID] = i
 		}
 	}
-	return insightByID, textByTileID
+	return insightIdx, textIdx
 }
 
-// buildLayoutPatch builds the set of tile patch items for a PATCH request.
-// It correlates declared config tiles with API tiles, and enforces authoritative
-// behavior by clearing layouts on any unmanaged tile that has existing layouts.
-// Returns the patch items and a list of insight IDs that were declared but not found in the API.
-func buildLayoutPatch(ctx context.Context, declaredTiles []TileTFModel, apiTiles []httpclient.DashboardTile) ([]httpclient.DashboardTilePatchItem, []int64) {
-	insightTileMap, textTileMap := buildTileLookupMaps(apiTiles)
+// matchDeclaredTilesToAPI correlates declared config tiles with API tiles.
+// For insight tiles, it matches by insight_id. For text tiles, it tries tile_id
+// first, then falls back to body matching (skipping already-matched API tiles).
+// Returns one result per declared tile (same order) and the set of matched API tile IDs.
+func matchDeclaredTilesToAPI(declaredTiles []TileTFModel, apiTiles []httpclient.DashboardTile) ([]*httpclient.DashboardTile, map[int64]bool) {
+	insightIdxMap, textIdxMap := buildTileLookupMaps(apiTiles)
+	matchedIDs := make(map[int64]bool)
+	matches := make([]*httpclient.DashboardTile, len(declaredTiles))
 
-	matchedTileIDs := make(map[int64]bool)
-	var patchItems []httpclient.DashboardTilePatchItem
-	var missingInsightIDs []int64
-
-	for _, declared := range declaredTiles {
+	for i, declared := range declaredTiles {
 		if declared.IsInsightTile() {
-			insightID := declared.InsightID.ValueInt64()
-			if apiTile, ok := insightTileMap[insightID]; ok {
-				matchedTileIDs[apiTile.ID] = true
-				patchItems = append(patchItems, buildTilePatchItem(ctx, apiTile.ID, declared))
-			} else {
-				missingInsightIDs = append(missingInsightIDs, insightID)
+			if idx, ok := insightIdxMap[declared.InsightID.ValueInt64()]; ok {
+				matchedIDs[apiTiles[idx].ID] = true
+				matches[i] = &apiTiles[idx]
 			}
 		} else if declared.IsTextTile() {
 			tileID := declared.TileID.ValueInt64()
-			if apiTile, ok := textTileMap[tileID]; ok {
-				matchedTileIDs[apiTile.ID] = true
-				patchItems = append(patchItems, buildTilePatchItem(ctx, apiTile.ID, declared))
-			} else {
-				// New text tile (tile_id is zero/unknown on first apply).
-				patchItems = append(patchItems, buildNewTextTilePatchItem(ctx, declared))
+			if tileID != 0 {
+				if idx, ok := textIdxMap[tileID]; ok {
+					matchedIDs[apiTiles[idx].ID] = true
+					matches[i] = &apiTiles[idx]
+					continue
+				}
+			}
+			// Fall back to body matching. tile_id is Computed and will be
+			// unknown/zero during create, so body is the only stable identity.
+			for j := range apiTiles {
+				if apiTiles[j].Text != nil && !matchedIDs[apiTiles[j].ID] && apiTiles[j].Text.Body == declared.TextBody.ValueString() {
+					matchedIDs[apiTiles[j].ID] = true
+					matches[i] = &apiTiles[j]
+					break
+				}
 			}
 		}
 	}
 
-	// Authoritative enforcement: clear layouts on unmanaged tiles.
+	return matches, matchedIDs
+}
+
+// buildLayoutPatch builds the set of tile patch items for a PATCH request.
+// It correlates declared config tiles with API tiles and enforces authoritative
+// behavior: unmanaged text tiles are soft-deleted, unmanaged insight tiles have
+// their layouts cleared. Returns the patch items and a list of insight IDs that
+// were declared but not found in the API.
+func buildLayoutPatch(ctx context.Context, declaredTiles []TileTFModel, apiTiles []httpclient.DashboardTile) ([]httpclient.DashboardTilePatchItem, []int64) {
+	matches, matchedIDs := matchDeclaredTilesToAPI(declaredTiles, apiTiles)
+
+	var patchItems []httpclient.DashboardTilePatchItem
+	var missingInsightIDs []int64
+
+	for i, declared := range declaredTiles {
+		if matches[i] != nil {
+			patchItems = append(patchItems, buildTilePatchItem(ctx, matches[i].ID, declared))
+		} else if declared.IsInsightTile() {
+			missingInsightIDs = append(missingInsightIDs, declared.InsightID.ValueInt64())
+		} else if declared.IsTextTile() {
+			patchItems = append(patchItems, buildNewTextTilePatchItem(ctx, declared))
+		}
+	}
+
+	// Authoritative enforcement: unmanaged text tiles are soft-deleted (they
+	// are owned by this resource), unmanaged insight tiles just have their
+	// layouts cleared (insights exist independently).
 	for _, t := range apiTiles {
-		if !matchedTileIDs[t.ID] && len(t.Layouts) > 0 {
+		if matchedIDs[t.ID] {
+			continue
+		}
+		if t.Text != nil {
+			deleted := true
+			patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
+				ID:      t.ID,
+				Deleted: &deleted,
+			})
+		} else if len(t.Layouts) > 0 {
 			emptyLayouts := map[string]interface{}{}
 			patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
 				ID:      t.ID,
@@ -353,34 +514,26 @@ func buildLayoutPatch(ctx context.Context, declaredTiles []TileTFModel, apiTiles
 	return patchItems, missingInsightIDs
 }
 
-// buildDeletePatch builds the set of tile patch items to reset/delete tiles when the
-// resource is destroyed. Insight tiles have their layouts cleared; text tiles are soft-deleted.
-func buildDeletePatch(declaredTiles []TileTFModel, apiTiles []httpclient.DashboardTile) []httpclient.DashboardTilePatchItem {
-	insightTileMap, textTileMap := buildTileLookupMaps(apiTiles)
-
+// buildDeletePatch builds the set of tile patch items to clean up the dashboard when
+// the resource is destroyed. This is fully authoritative: ALL text tiles on the
+// dashboard are soft-deleted and ALL insight tiles have their layouts cleared.
+func buildDeletePatch(apiTiles []httpclient.DashboardTile) []httpclient.DashboardTilePatchItem {
 	var patchItems []httpclient.DashboardTilePatchItem
-	for _, declared := range declaredTiles {
-		if declared.IsInsightTile() {
-			insightID := declared.InsightID.ValueInt64()
-			if apiTile, ok := insightTileMap[insightID]; ok {
-				emptyLayouts := map[string]interface{}{}
-				patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
-					ID:      apiTile.ID,
-					Layouts: &emptyLayouts,
-				})
-			}
-		} else if declared.IsTextTile() {
-			tileID := declared.TileID.ValueInt64()
-			if apiTile, ok := textTileMap[tileID]; ok {
-				deleted := true
-				patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
-					ID:      apiTile.ID,
-					Deleted: &deleted,
-				})
-			}
+	for _, t := range apiTiles {
+		if t.Text != nil {
+			deleted := true
+			patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
+				ID:      t.ID,
+				Deleted: &deleted,
+			})
+		} else if len(t.Layouts) > 0 {
+			emptyLayouts := map[string]interface{}{}
+			patchItems = append(patchItems, httpclient.DashboardTilePatchItem{
+				ID:      t.ID,
+				Layouts: &emptyLayouts,
+			})
 		}
 	}
-
 	return patchItems
 }
 
@@ -402,8 +555,12 @@ func buildTilePatchItem(ctx context.Context, tileID int64, declared TileTFModel)
 		}
 	}
 
-	if !declared.Color.IsNull() {
-		c := declared.Color.ValueString()
+	// Always send color in the PATCH so that removing color from config
+	// actually clears it on the API side. The PostHog model uses
+	// CharField(null=True, blank=True), so empty string is accepted and
+	// resets the tile to the default (no color).
+	if !declared.Color.IsUnknown() {
+		c := declared.Color.ValueString() // "" when null
 		item.Color = &c
 	}
 
@@ -466,19 +623,18 @@ func mapTilesToState(apiTiles []httpclient.DashboardTile, configTiles []TileTFMo
 		return result, nil
 	}
 
-	insightTileMap, textTileMap := buildTileLookupMaps(apiTiles)
+	matches, _ := matchDeclaredTilesToAPI(configTiles, apiTiles)
 
-	// Iterate config tiles in config order to maintain stable ordering.
 	var result []TileTFModel
-	for _, config := range configTiles {
-		if config.IsInsightTile() {
-			if apiTile, ok := insightTileMap[config.InsightID.ValueInt64()]; ok {
-				result = append(result, apiTileToTFModel(apiTile))
+	for i := range configTiles {
+		if matches[i] != nil {
+			tile := apiTileToTFModel(*matches[i])
+			// Preserve config's null for Optional-only fields so the state
+			// doesn't include API defaults the user never asked for.
+			if configTiles[i].Color.IsNull() {
+				tile.Color = types.StringNull()
 			}
-		} else if config.IsTextTile() {
-			if apiTile, ok := textTileMap[config.TileID.ValueInt64()]; ok {
-				result = append(result, apiTileToTFModel(apiTile))
-			}
+			result = append(result, tile)
 		}
 		// Tile not found in API: omit from state (will trigger recreation on next plan).
 	}
