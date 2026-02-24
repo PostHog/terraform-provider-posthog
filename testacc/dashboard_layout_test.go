@@ -444,7 +444,9 @@ func TestDashboardLayout_ColorDriftClearedByApply(t *testing.T) {
 						if !ok {
 							return fmt.Errorf("resource not found: posthog_dashboard_layout.test")
 						}
-						fmt.Sscanf(layout.Primary.Attributes["tiles.0.tile_id"], "%d", &tileID)
+						if _, err := fmt.Sscanf(layout.Primary.Attributes["tiles.0.tile_id"], "%d", &tileID); err != nil {
+							return fmt.Errorf("parsing tile_id: %w", err)
+						}
 						return nil
 					},
 				),
