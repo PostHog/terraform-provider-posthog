@@ -688,7 +688,7 @@ func TestMapTilesToState(t *testing.T) {
 				assert.ElementsMatch(t, []int64{300, 400}, ids)
 			},
 		},
-		"api color suppressed when config color is null": {
+		"api color flows through when config color is null": {
 			apiTiles: []httpclient.DashboardTile{
 				{
 					ID:      42,
@@ -710,7 +710,7 @@ func TestMapTilesToState(t *testing.T) {
 			checkResult: func(t *testing.T, result []TileTFModel) {
 				t.Helper()
 				require.Len(t, result, 1)
-				assert.True(t, result[0].Color.IsNull(), "API color should be suppressed when config is null")
+				assert.Equal(t, "blue", result[0].Color.ValueString(), "API color should flow through to state for drift detection")
 			},
 		},
 		"api color preserved when config color is set": {

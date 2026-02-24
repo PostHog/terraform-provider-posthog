@@ -124,6 +124,9 @@ func (o *DashboardLayoutOps) Schema() schema.Schema {
 						"color": schema.StringAttribute{
 							Optional:            true,
 							MarkdownDescription: "Background color of the tile. Valid values are defined by the PostHog API; see [InsightColor in types.ts](https://github.com/PostHog/posthog/blob/master/frontend/src/types.ts#L2154) for the current list.",
+							Validators: []validator.String{
+								stringvalidator.LengthAtLeast(1),
+							},
 						},
 						"layouts_json": schema.StringAttribute{
 							Optional:            true,
@@ -628,13 +631,7 @@ func mapTilesToState(apiTiles []httpclient.DashboardTile, configTiles []TileTFMo
 	var result []TileTFModel
 	for i := range configTiles {
 		if matches[i] != nil {
-			tile := apiTileToTFModel(*matches[i])
-			// Preserve config's null for Optional-only fields so the state
-			// doesn't include API defaults the user never asked for.
-			if configTiles[i].Color.IsNull() {
-				tile.Color = types.StringNull()
-			}
-			result = append(result, tile)
+			result = append(result, apiTileToTFModel(*matches[i]))
 		}
 		// Tile not found in API: omit from state (will trigger recreation on next plan).
 	}

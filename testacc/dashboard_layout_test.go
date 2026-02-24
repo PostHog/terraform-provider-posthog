@@ -408,6 +408,94 @@ func TestDashboardLayout_Color(t *testing.T) {
 
 
 
+// TestDashboardLayout_ColorDriftClearedByApply verifies that a color set via the
+// API (outside Terraform) is detected as drift and cleared on the next apply when
+// the config does not declare a color.
+func TestDashboardLayout_ColorDriftClearedByApply(t *testing.T) {
+	skipIfNotAcceptance(t)
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	host := os.Getenv("POSTHOG_HOST")
+	apiKey := os.Getenv("POSTHOG_API_KEY")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(host, apiKey, "acceptance-test")
+
+	var dashboardID string
+	var tileID int64
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create layout with no color
+			{
+				Config: testAccDashboardLayoutSingleInsight(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_dashboard_layout.test", "tiles.0.color"),
+					// Capture IDs for the API call in step 2
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_dashboard.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_dashboard.test")
+						}
+						dashboardID = rs.Primary.ID
+
+						layout, ok := s.RootModule().Resources["posthog_dashboard_layout.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_dashboard_layout.test")
+						}
+						fmt.Sscanf(layout.Primary.Attributes["tiles.0.tile_id"], "%d", &tileID)
+						return nil
+					},
+				),
+			},
+			// Step 2: Inject color via API, then re-apply same config (no color)
+			{
+				PreConfig: func() {
+					color := "blue"
+					_, _, err := (&client).UpdateDashboardLayout(
+						context.Background(), projectID, dashboardID,
+						httpclient.DashboardLayoutPatchRequest{
+							Tiles: []httpclient.DashboardTilePatchItem{
+								{
+									ID:    tileID,
+									Color: &color,
+								},
+							},
+						},
+					)
+					if err != nil {
+						t.Fatalf("inject color via API: %v", err)
+					}
+				},
+				Config: testAccDashboardLayoutSingleInsight(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// After apply, color should be cleared back to absent
+					resource.TestCheckNoResourceAttr("posthog_dashboard_layout.test", "tiles.0.color"),
+					// Verify via API that the color was actually cleared
+					func(s *terraform.State) error {
+						resp, _, err := (&client).GetDashboardLayout(
+							context.Background(), projectID, dashboardID,
+						)
+						if err != nil {
+							return fmt.Errorf("get dashboard layout: %w", err)
+						}
+						for _, tile := range resp.Tiles {
+							if tile.ID == tileID {
+								if tile.Color != nil && *tile.Color != "" {
+									return fmt.Errorf("expected color to be cleared, got %q", *tile.Color)
+								}
+								return nil
+							}
+						}
+						return fmt.Errorf("tile %d not found in API response", tileID)
+					},
+				),
+			},
+		},
+	})
+}
+
 // testAccDashboardLayoutInsightWithColor returns HCL for a dashboard + insight + layout
 // with a single insight tile that has the given color set.
 func testAccDashboardLayoutInsightWithColor(name, color string) string {
