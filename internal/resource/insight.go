@@ -170,7 +170,10 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 func (o InsightOps) BuildUpdateRequest(ctx context.Context, plan, state InsightResourceTFModel) (httpclient.InsightRequest, diag.Diagnostics) {
 	req, diags := o.BuildCreateRequest(ctx, plan)
 
-	// Clear description if removed from config
+	// Clear optional string fields if removed from config
+	if core.ShouldClearString(plan.Name, state.Name) {
+		req.Name = util.StringPtr("")
+	}
 	if core.ShouldClearString(plan.Description, state.Description) {
 		req.Description = util.StringPtr("")
 	}

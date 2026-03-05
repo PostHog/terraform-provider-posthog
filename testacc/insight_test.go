@@ -1,11 +1,15 @@
 package tests
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 // TestInsight_Basic tests creating an insight with minimal query_json.
@@ -326,6 +330,118 @@ func TestInsight_EmptyDescription(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
 					resource.TestCheckNoResourceAttr("posthog_insight.test", "description"),
+				),
+			},
+		},
+	})
+}
+
+// TestInsight_RemoveName tests that removing the name from config clears it on the API.
+// This is a regression test for a bug where removing the name produced
+// "Provider produced inconsistent result after apply" because the provider
+// didn't explicitly clear the field.
+func TestInsight_RemoveName(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create with name
+			{
+				Config: testAccInsightBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
+				),
+			},
+			// Remove name from config — should clear it on the API
+			{
+				Config: testAccInsightNoName(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_insight.test", "name"),
+				),
+			},
+			// Re-add a different name — confirms the full set→clear→set lifecycle
+			{
+				Config: testAccInsightBasic(rName + "-restored"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName+"-restored"),
+				),
+			},
+		},
+	})
+}
+
+// TestInsight_ExternalNameChange tests that Terraform detects when the name is
+// changed externally via the API and corrects it back to the configured value.
+func TestInsight_ExternalNameChange(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	host := os.Getenv("POSTHOG_HOST")
+	apiKey := os.Getenv("POSTHOG_API_KEY")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(host, apiKey, "acceptance-test")
+
+	var insightID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Step 1: Create insight with name
+			{
+				Config: testAccInsightBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_insight.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_insight.test")
+						}
+						insightID = rs.Primary.ID
+						return nil
+					},
+				),
+			},
+			// Step 2: Change name externally via the API, then re-apply same config.
+			// Terraform should detect drift and restore the configured name.
+			{
+				PreConfig: func() {
+					externalName := "externally-changed-name"
+					_, _, err := (&client).UpdateInsight(
+						context.Background(), projectID, insightID,
+						httpclient.InsightRequest{Name: &externalName},
+					)
+					if err != nil {
+						t.Fatalf("external name update via API: %v", err)
+					}
+				},
+				Config: testAccInsightBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Terraform should have corrected the drift back to the configured name
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
+				),
+			},
+			// Step 3: Change name externally, then apply config WITHOUT a name.
+			// Terraform should detect drift and clear the name.
+			{
+				PreConfig: func() {
+					externalName := "externally-set-name"
+					_, _, err := (&client).UpdateInsight(
+						context.Background(), projectID, insightID,
+						httpclient.InsightRequest{Name: &externalName},
+					)
+					if err != nil {
+						t.Fatalf("external name update via API: %v", err)
+					}
+				},
+				Config: testAccInsightNoName(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_insight.test", "name"),
 				),
 			},
 		},
@@ -1070,6 +1186,27 @@ resource "posthog_insight" "test" {
   })
 }
 `, name)
+}
+
+func testAccInsightNoName() string {
+	return `
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        name  = "$pageview"
+        event = "$pageview"
+        math  = "total"
+      }]
+    }
+  })
+}
+`
 }
 
 func testAccInsightPathsQuery(name string) string {
