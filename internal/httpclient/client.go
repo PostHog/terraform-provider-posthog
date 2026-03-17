@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -20,6 +21,12 @@ type PosthogClient struct {
 	apiKey     string
 	version    string
 	httpClient *http.Client
+}
+
+// PaginatedResponse is the standard envelope for paginated PostHog API list endpoints.
+type PaginatedResponse[T any] struct {
+	Results []T     `json:"results"`
+	Next    *string `json:"next,omitempty"`
 }
 
 func NewDefaultClient(host, apiKey, version string, opts ...ClientOption) PosthogClient {
@@ -174,4 +181,39 @@ func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCod
 		return status, fmt.Errorf("failed to send DELETE request: %w", err)
 	}
 	return status, nil
+}
+
+// listAll fetches all pages from a paginated endpoint, following Next links until exhausted.
+func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, error) {
+	var all []T
+	path := initialPath
+
+	for path != "" {
+		page, _, err := doGet[PaginatedResponse[T]](c, ctx, path)
+		if err != nil {
+			return nil, err
+		}
+
+		all = append(all, page.Results...)
+
+		if page.Next == nil || *page.Next == "" {
+			break
+		}
+
+		// Parse the next URL - handles both absolute and relative URLs
+		parsed, err := url.Parse(*page.Next)
+		if err != nil {
+			tflog.Warn(ctx, "failed to parse pagination URL", map[string]any{
+				"next_url": *page.Next,
+				"error":    err.Error(),
+			})
+			break
+		}
+		path = parsed.Path
+		if parsed.RawQuery != "" {
+			path += "?" + parsed.RawQuery
+		}
+	}
+
+	return all, nil
 }

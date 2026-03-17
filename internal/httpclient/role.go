@@ -16,6 +16,10 @@ type RoleRequest struct {
 	Name string `json:"name"`
 }
 
+func (c *PosthogClient) ListRoles(ctx context.Context, organizationID string) ([]Role, error) {
+	return listAll[Role](c, ctx, fmt.Sprintf("/api/organizations/%s/roles/", organizationID))
+}
+
 func (c *PosthogClient) CreateRole(ctx context.Context, organizationID string, input RoleRequest) (Role, error) {
 	path := fmt.Sprintf("/api/organizations/%s/roles/", organizationID)
 	result, _, err := doPost[Role](c, ctx, path, input)

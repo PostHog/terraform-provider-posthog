@@ -159,6 +159,7 @@ func (p *PostHogProvider) EphemeralResources(_ context.Context) []func() ephemer
 
 func (p *PostHogProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
+		posthogdatasource.NewRole,
 		posthogdatasource.NewUser,
 	}
 }

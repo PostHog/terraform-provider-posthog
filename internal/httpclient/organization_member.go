@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
-
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 type OrganizationMemberUser struct {
@@ -25,47 +22,12 @@ type OrganizationMember struct {
 	Is2FAEnabled *bool                   `json:"is_2fa_enabled,omitempty"`
 }
 
-type OrganizationMembersList struct {
-	Results []OrganizationMember `json:"results"`
-	Next    *string              `json:"next,omitempty"`
-}
-
 type OrganizationMemberRequest struct {
 	Level *int `json:"level,omitempty"`
 }
 
 func (c *PosthogClient) ListOrganizationMembers(ctx context.Context, organizationID string) ([]OrganizationMember, error) {
-	var allMembers []OrganizationMember
-	path := fmt.Sprintf("/api/organizations/%s/members/", organizationID)
-
-	for path != "" {
-		result, _, err := doGet[OrganizationMembersList](c, ctx, path)
-		if err != nil {
-			return nil, err
-		}
-
-		allMembers = append(allMembers, result.Results...)
-
-		if result.Next == nil || *result.Next == "" {
-			break
-		}
-
-		// Parse the next URL - handles both absolute and relative URLs
-		parsed, err := url.Parse(*result.Next)
-		if err != nil {
-			tflog.Warn(ctx, "failed to parse pagination URL", map[string]any{
-				"next_url": *result.Next,
-				"error":    err.Error(),
-			})
-			break
-		}
-		path = parsed.Path
-		if parsed.RawQuery != "" {
-			path += "?" + parsed.RawQuery
-		}
-	}
-
-	return allMembers, nil
+	return listAll[OrganizationMember](c, ctx, fmt.Sprintf("/api/organizations/%s/members/", organizationID))
 }
 
 // GetOrganizationMember retrieves a specific member by user UUID.

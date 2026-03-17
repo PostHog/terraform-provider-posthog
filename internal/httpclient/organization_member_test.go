@@ -16,7 +16,7 @@ func TestListOrganizationMembers_SinglePage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/organizations/org-123/members/", r.URL.Path, "request path should match expected endpoint")
 
-		resp := OrganizationMembersList{
+		resp := PaginatedResponse[OrganizationMember]{
 			Results: []OrganizationMember{
 				{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
 				{ID: "member-2", User: &OrganizationMemberUser{UUID: "user-2"}},
@@ -46,7 +46,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 		switch requestURI {
 		case "/api/organizations/org-123/members/":
 			nextURL := "/api/organizations/org-123/members/?cursor=page2"
-			resp := OrganizationMembersList{
+			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
 					{ID: "member-2", User: &OrganizationMemberUser{UUID: "user-2"}},
@@ -57,7 +57,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 
 		case "/api/organizations/org-123/members/?cursor=page2":
 			nextURL := "/api/organizations/org-123/members/?cursor=page3"
-			resp := OrganizationMembersList{
+			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-3", User: &OrganizationMemberUser{UUID: "user-3"}},
 				},
@@ -66,7 +66,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(resp)
 
 		case "/api/organizations/org-123/members/?cursor=page3":
-			resp := OrganizationMembersList{
+			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-4", User: &OrganizationMemberUser{UUID: "user-4"}},
 				},
@@ -111,7 +111,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 		if requestCount == 1 {
 			// First page with absolute URL - tests that url.Parse extracts the path correctly
 			nextURL := "https://us.posthog.com/api/organizations/org-123/members/?cursor=page2"
-			resp := OrganizationMembersList{
+			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
 				},
@@ -119,7 +119,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		} else {
-			resp := OrganizationMembersList{
+			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-2", User: &OrganizationMemberUser{UUID: "user-2"}},
 				},
@@ -141,7 +141,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 func TestGetOrganizationMember_Found(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		email := "alice@example.com"
-		resp := OrganizationMembersList{
+		resp := PaginatedResponse[OrganizationMember]{
 			Results: []OrganizationMember{
 				{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1", Email: &email}},
 				{ID: "member-2", User: &OrganizationMemberUser{UUID: "user-2"}},
@@ -165,7 +165,7 @@ func TestGetOrganizationMember_Found(t *testing.T) {
 
 func TestGetOrganizationMember_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := OrganizationMembersList{
+		resp := PaginatedResponse[OrganizationMember]{
 			Results: []OrganizationMember{
 				{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
 			},
