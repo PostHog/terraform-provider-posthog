@@ -1,10 +1,175 @@
 package resource
 
 import (
+	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestHogFunctionSchema_SensitiveInputsJSONIsSensitive(t *testing.T) {
+	ops := HogFunctionOps{}
+	s := ops.Schema()
+
+	attr, ok := s.Attributes["sensitive_inputs_json"]
+	require.True(t, ok, "sensitive_inputs_json attribute must exist in schema")
+
+	strAttr, ok := attr.(schema.StringAttribute)
+	require.True(t, ok, "sensitive_inputs_json must be a StringAttribute")
+
+	assert.True(t, strAttr.Sensitive,
+		"sensitive_inputs_json must be marked Sensitive (issue #55)")
+}
+
+func TestHogFunctionSchema_InputsJSONIsNotSensitive(t *testing.T) {
+	ops := HogFunctionOps{}
+	s := ops.Schema()
+
+	attr, ok := s.Attributes["inputs_json"]
+	require.True(t, ok, "inputs_json attribute must exist in schema")
+
+	strAttr, ok := attr.(schema.StringAttribute)
+	require.True(t, ok, "inputs_json must be a StringAttribute")
+
+	assert.False(t, strAttr.Sensitive,
+		"inputs_json should NOT be sensitive - use sensitive_inputs_json for secrets")
+}
+
+func TestBuildCreateRequest_MergesSensitiveInputs(t *testing.T) {
+	ctx := context.Background()
+	tests := map[string]struct {
+		inputsJSON          string
+		sensitiveInputsJSON string
+		expectedKeys        []string
+		expectedInputValue  map[string]string // key -> expected "value" field
+	}{
+		"only inputs_json": {
+			inputsJSON:          `{"url":{"value":"https://example.com"},"method":{"value":"POST"}}`,
+			sensitiveInputsJSON: "",
+			expectedKeys:        []string{"url", "method"},
+			expectedInputValue:  map[string]string{"url": "https://example.com"},
+		},
+		"only sensitive_inputs_json": {
+			inputsJSON:          "",
+			sensitiveInputsJSON: `{"api_key":{"value":"secret123"}}`,
+			expectedKeys:        []string{"api_key"},
+		},
+		"both fields merged": {
+			inputsJSON:          `{"url":{"value":"https://example.com"}}`,
+			sensitiveInputsJSON: `{"api_key":{"value":"secret123"}}`,
+			expectedKeys:        []string{"url", "api_key"},
+		},
+		"sensitive takes precedence on key conflict": {
+			inputsJSON:          `{"api_key":{"value":"visible"}}`,
+			sensitiveInputsJSON: `{"api_key":{"value":"secret"}}`,
+			expectedKeys:        []string{"api_key"},
+			expectedInputValue:  map[string]string{"api_key": "secret"},
+		},
+	}
+
+	ops := HogFunctionOps{}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := HogFunctionResourceTFModel{}
+			if tc.inputsJSON != "" {
+				model.InputsJSON = types.StringValue(tc.inputsJSON)
+			} else {
+				model.InputsJSON = types.StringNull()
+			}
+			if tc.sensitiveInputsJSON != "" {
+				model.SensitiveInputsJSON = types.StringValue(tc.sensitiveInputsJSON)
+			} else {
+				model.SensitiveInputsJSON = types.StringNull()
+			}
+
+			req, diags := ops.BuildCreateRequest(ctx, model)
+			require.False(t, diags.HasError(), "unexpected error: %v", diags)
+
+			for _, key := range tc.expectedKeys {
+				assert.Contains(t, req.Inputs, key)
+			}
+
+			for key, wantVal := range tc.expectedInputValue {
+				input := req.Inputs[key].(map[string]interface{})
+				assert.Equal(t, wantVal, input["value"])
+			}
+		})
+	}
+}
+
+func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
+	ctx := context.Background()
+	tests := map[string]struct {
+		inputsJSON            types.String
+		sensitiveInputsJSON   types.String
+		respInputs            map[string]interface{}
+		expectedInputs        string
+		expectedSensitive     string
+		expectSensitiveIsNull bool
+	}{
+		"splits keys to original fields": {
+			inputsJSON:          types.StringValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: types.StringValue(`{"api_key":{"value":"secret123"}}`),
+			respInputs: map[string]interface{}{
+				"url":     map[string]interface{}{"value": "https://example.com"},
+				"api_key": map[string]interface{}{"value": "secret123"},
+			},
+			expectedInputs:    `{"url":{"value":"https://example.com"}}`,
+			expectedSensitive: `{"api_key":{"value":"secret123"}}`,
+		},
+		"null sensitive_inputs_json stays null": {
+			inputsJSON:          types.StringValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: types.StringNull(),
+			respInputs: map[string]interface{}{
+				"url": map[string]interface{}{"value": "https://example.com"},
+			},
+			expectedInputs:        `{"url":{"value":"https://example.com"}}`,
+			expectSensitiveIsNull: true,
+		},
+		"strips server fields from both": {
+			inputsJSON:          types.StringValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: types.StringValue(`{"api_key":{"value":"secret"}}`),
+			respInputs: map[string]interface{}{
+				"url":     map[string]interface{}{"value": "https://example.com", "bytecode": []interface{}{"_H", 1}, "order": 0},
+				"api_key": map[string]interface{}{"value": "secret", "bytecode": []interface{}{"_H", 2}, "order": 1},
+			},
+			expectedInputs:    `{"url":{"value":"https://example.com"}}`,
+			expectedSensitive: `{"api_key":{"value":"secret"}}`,
+		},
+	}
+
+	ops := HogFunctionOps{}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := &HogFunctionResourceTFModel{
+				InputsJSON:          tc.inputsJSON,
+				SensitiveInputsJSON: tc.sensitiveInputsJSON,
+			}
+
+			resp := httpclient.HogFunction{
+				ID:     "test-id",
+				Inputs: tc.respInputs,
+			}
+
+			diags := ops.MapResponseToModel(ctx, resp, model)
+			require.False(t, diags.HasError(), "unexpected error: %v", diags)
+
+			assert.Equal(t, tc.expectedInputs, model.InputsJSON.ValueString())
+
+			if tc.expectSensitiveIsNull {
+				assert.True(t, model.SensitiveInputsJSON.IsNull())
+			} else {
+				assert.Equal(t, tc.expectedSensitive, model.SensitiveInputsJSON.ValueString())
+			}
+		})
+	}
+}
 
 func TestStripServerFields(t *testing.T) {
 	tests := map[string]struct {

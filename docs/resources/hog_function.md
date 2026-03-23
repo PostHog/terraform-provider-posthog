@@ -23,11 +23,12 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 - `filters_json` (String) JSON object defining filters for when the Hog function should execute. Includes `events`, `actions`, `properties`, and `filter_test_accounts` options.
 - `hog` (String) The Hog code to execute. Not required when using a template - the template provides the code.
 - `icon_url` (String) URL of the icon for this Hog function.
-- `inputs_json` (String) JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties.
+- `inputs_json` (String) JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties. For inputs containing secrets, use `sensitive_inputs_json` instead.
 - `mappings_json` (String) JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.
 - `masking_json` (String) JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.
 - `name` (String) Name of the Hog function.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
+- `sensitive_inputs_json` (String, Sensitive) JSON object containing sensitive input values (e.g. API keys, tokens, credentials) for the Hog function. Same format as `inputs_json`. Values are merged with `inputs_json` at apply time and redacted from plan/apply output. If the same key appears in both, `sensitive_inputs_json` takes precedence.
 - `template_id` (String) ID of a template to use as the basis for this Hog function. The template provides default code, inputs schema, and configuration.
 - `type` (String) Type of Hog function: `destination`, `site_destination`, `internal_destination`, `source_webhook`, `site_app`, or `transformation`.
 
