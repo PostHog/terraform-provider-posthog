@@ -40,17 +40,18 @@ func TestHogFunctionSchema_InputsJSONIsNotSensitive(t *testing.T) {
 }
 
 func TestBuildCreateRequest_MergesSensitiveInputs(t *testing.T) {
+	ctx := context.Background()
 	tests := map[string]struct {
 		inputsJSON          string
 		sensitiveInputsJSON string
 		expectedKeys        []string
-		expectedURL         string
+		expectedInputValue  map[string]string // key -> expected "value" field
 	}{
 		"only inputs_json": {
 			inputsJSON:          `{"url":{"value":"https://example.com"},"method":{"value":"POST"}}`,
 			sensitiveInputsJSON: "",
 			expectedKeys:        []string{"url", "method"},
-			expectedURL:         "https://example.com",
+			expectedInputValue:  map[string]string{"url": "https://example.com"},
 		},
 		"only sensitive_inputs_json": {
 			inputsJSON:          "",
@@ -66,53 +67,50 @@ func TestBuildCreateRequest_MergesSensitiveInputs(t *testing.T) {
 			inputsJSON:          `{"api_key":{"value":"visible"}}`,
 			sensitiveInputsJSON: `{"api_key":{"value":"secret"}}`,
 			expectedKeys:        []string{"api_key"},
+			expectedInputValue:  map[string]string{"api_key": "secret"},
 		},
 	}
 
 	ops := HogFunctionOps{}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			model := HogFunctionResourceTFModel{}
-			if tt.inputsJSON != "" {
-				model.InputsJSON = types.StringValue(tt.inputsJSON)
+			if tc.inputsJSON != "" {
+				model.InputsJSON = types.StringValue(tc.inputsJSON)
 			} else {
 				model.InputsJSON = types.StringNull()
 			}
-			if tt.sensitiveInputsJSON != "" {
-				model.SensitiveInputsJSON = types.StringValue(tt.sensitiveInputsJSON)
+			if tc.sensitiveInputsJSON != "" {
+				model.SensitiveInputsJSON = types.StringValue(tc.sensitiveInputsJSON)
 			} else {
 				model.SensitiveInputsJSON = types.StringNull()
 			}
 
-			req, diags := ops.BuildCreateRequest(context.Background(), model)
-			assert.False(t, diags.HasError(), "should not have errors")
+			req, diags := ops.BuildCreateRequest(ctx, model)
+			require.False(t, diags.HasError(), "unexpected error: %v", diags)
 
-			for _, key := range tt.expectedKeys {
+			for _, key := range tc.expectedKeys {
 				assert.Contains(t, req.Inputs, key)
 			}
 
-			if tt.expectedURL != "" {
-				urlInput := req.Inputs["url"].(map[string]interface{})
-				assert.Equal(t, tt.expectedURL, urlInput["value"])
-			}
-
-			// Verify sensitive precedence
-			if name == "sensitive takes precedence on key conflict" {
-				apiKeyInput := req.Inputs["api_key"].(map[string]interface{})
-				assert.Equal(t, "secret", apiKeyInput["value"])
+			for key, wantVal := range tc.expectedInputValue {
+				input := req.Inputs[key].(map[string]interface{})
+				assert.Equal(t, wantVal, input["value"])
 			}
 		})
 	}
 }
 
 func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
+	ctx := context.Background()
 	tests := map[string]struct {
-		inputsJSON          types.String
-		sensitiveInputsJSON types.String
-		respInputs          map[string]interface{}
-		expectedInputs      string
-		expectedSensitive   string
+		inputsJSON            types.String
+		sensitiveInputsJSON   types.String
+		respInputs            map[string]interface{}
+		expectedInputs        string
+		expectedSensitive     string
+		expectSensitiveIsNull bool
 	}{
 		"splits keys to original fields": {
 			inputsJSON:          types.StringValue(`{"url":{"value":"https://example.com"}}`),
@@ -130,8 +128,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			respInputs: map[string]interface{}{
 				"url": map[string]interface{}{"value": "https://example.com"},
 			},
-			expectedInputs:    `{"url":{"value":"https://example.com"}}`,
-			expectedSensitive: "",
+			expectedInputs:        `{"url":{"value":"https://example.com"}}`,
+			expectSensitiveIsNull: true,
 		},
 		"strips server fields from both": {
 			inputsJSON:          types.StringValue(`{"url":{"value":"https://example.com"}}`),
@@ -147,27 +145,27 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 
 	ops := HogFunctionOps{}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			model := &HogFunctionResourceTFModel{
-				InputsJSON:          tt.inputsJSON,
-				SensitiveInputsJSON: tt.sensitiveInputsJSON,
+				InputsJSON:          tc.inputsJSON,
+				SensitiveInputsJSON: tc.sensitiveInputsJSON,
 			}
 
 			resp := httpclient.HogFunction{
 				ID:     "test-id",
-				Inputs: tt.respInputs,
+				Inputs: tc.respInputs,
 			}
 
-			diags := ops.MapResponseToModel(context.Background(), resp, model)
-			assert.False(t, diags.HasError(), "should not have errors")
+			diags := ops.MapResponseToModel(ctx, resp, model)
+			require.False(t, diags.HasError(), "unexpected error: %v", diags)
 
-			assert.Equal(t, tt.expectedInputs, model.InputsJSON.ValueString())
+			assert.Equal(t, tc.expectedInputs, model.InputsJSON.ValueString())
 
-			if tt.expectedSensitive != "" {
-				assert.Equal(t, tt.expectedSensitive, model.SensitiveInputsJSON.ValueString())
-			} else {
+			if tc.expectSensitiveIsNull {
 				assert.True(t, model.SensitiveInputsJSON.IsNull())
+			} else {
+				assert.Equal(t, tc.expectedSensitive, model.SensitiveInputsJSON.ValueString())
 			}
 		})
 	}
