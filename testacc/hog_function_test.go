@@ -255,6 +255,205 @@ func TestHogFunction_AlertWebhookIntegration(t *testing.T) {
 	})
 }
 
+// TestHogFunction_SensitiveInputs tests creating a hog function with both
+// inputs_json and sensitive_inputs_json, verifying the split/merge works
+// correctly through create and update without "inconsistent result" errors.
+func TestHogFunction_SensitiveInputs(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			// Create with both inputs_json and sensitive_inputs_json
+			{
+				Config: testAccHogFunctionWithSensitiveInputs(rName, "https://example.com/webhook", "secret-token-1"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "enabled", "true"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_json"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "sensitive_inputs_json"),
+				),
+			},
+			// Update the sensitive input value — must not cause inconsistency error
+			{
+				Config: testAccHogFunctionWithSensitiveInputs(rName, "https://example.com/webhook", "secret-token-2"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "sensitive_inputs_json"),
+				),
+			},
+			// Update the non-sensitive input as well
+			{
+				Config: testAccHogFunctionWithSensitiveInputs(rName, "https://example.com/updated-webhook", "secret-token-2"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_json"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "sensitive_inputs_json"),
+				),
+			},
+		},
+	})
+}
+
+// TestHogFunction_SensitiveInputsOnly tests using only sensitive_inputs_json
+// without inputs_json. This exercises the code path where inputs_json is null
+// and verifies sensitive values don't leak into inputs_json state.
+func TestHogFunction_SensitiveInputsOnly(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccHogFunctionSensitiveOnly(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "sensitive_inputs_json"),
+					resource.TestCheckNoResourceAttr("posthog_hog_function.test", "inputs_json"),
+				),
+			},
+		},
+	})
+}
+
+// TestHogFunction_ImportWithSensitiveInputs tests that importing a hog function
+// that was created with sensitive_inputs_json populates inputs_json with all
+// inputs (since the API doesn't distinguish sensitive from non-sensitive).
+// After import, the user must manually split secrets into sensitive_inputs_json.
+func TestHogFunction_ImportWithSensitiveInputs(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			// Create with both fields
+			{
+				Config: testAccHogFunctionWithSensitiveInputs(rName, "https://example.com/webhook", "secret-token"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_json"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "sensitive_inputs_json"),
+				),
+			},
+			// Import — sensitive_inputs_json will be lost (API doesn't distinguish)
+			{
+				ResourceName:            "posthog_hog_function.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"hog", "inputs_json", "sensitive_inputs_json", "filters_json"},
+			},
+		},
+	})
+}
+
+func testAccHogFunctionWithSensitiveInputs(name, url, secret string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Test webhook with sensitive inputs"
+  type        = "destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  inputs_json = jsonencode({
+    url = {
+      value      = %q
+      templating = "hog"
+    }
+    method = {
+      value      = "POST"
+      templating = "hog"
+    }
+    body = {
+      value = {
+        event     = "{event.event}"
+        timestamp = "{event.timestamp}"
+      }
+      templating = "hog"
+    }
+  })
+
+  sensitive_inputs_json = jsonencode({
+    headers = {
+      value = {
+        "Content-Type"  = "application/json"
+        "Authorization" = "Bearer %s"
+      }
+      templating = "hog"
+    }
+  })
+
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$pageview"
+      name = "$pageview"
+      type = "events"
+    }]
+    filter_test_accounts = false
+  })
+}
+`, name, url, secret)
+}
+
+func testAccHogFunctionSensitiveOnly(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Test webhook with only sensitive inputs"
+  type        = "destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  sensitive_inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/secret-webhook"
+      templating = "hog"
+    }
+    method = {
+      value      = "POST"
+      templating = "hog"
+    }
+    headers = {
+      value = {
+        "Content-Type"  = "application/json"
+        "Authorization" = "Bearer top-secret-token"
+      }
+      templating = "hog"
+    }
+  })
+
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$pageview"
+      name = "$pageview"
+      type = "events"
+    }]
+    filter_test_accounts = false
+  })
+}
+`, name)
+}
+
 func testAccHogFunctionWebhook(name string) string {
 	return fmt.Sprintf(`
 provider "posthog" {}

@@ -28,18 +28,19 @@ func NewHogFunction() resource.Resource {
 type HogFunctionResourceTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Type           types.String `tfsdk:"type"`
-	Name           types.String `tfsdk:"name"`
-	Description    types.String `tfsdk:"description"`
-	Enabled        types.Bool   `tfsdk:"enabled"`
-	Hog            types.String `tfsdk:"hog"`
-	InputsJSON     types.String `tfsdk:"inputs_json"`
-	FiltersJSON    types.String `tfsdk:"filters_json"`
-	MaskingJSON    types.String `tfsdk:"masking_json"`
-	MappingsJSON   types.String `tfsdk:"mappings_json"`
-	IconURL        types.String `tfsdk:"icon_url"`
-	TemplateID     types.String `tfsdk:"template_id"`
-	ExecutionOrder types.Int64  `tfsdk:"execution_order"`
+	Type                types.String `tfsdk:"type"`
+	Name                types.String `tfsdk:"name"`
+	Description         types.String `tfsdk:"description"`
+	Enabled             types.Bool   `tfsdk:"enabled"`
+	Hog                 types.String `tfsdk:"hog"`
+	InputsJSON          types.String `tfsdk:"inputs_json"`
+	SensitiveInputsJSON types.String `tfsdk:"sensitive_inputs_json"`
+	FiltersJSON         types.String `tfsdk:"filters_json"`
+	MaskingJSON         types.String `tfsdk:"masking_json"`
+	MappingsJSON        types.String `tfsdk:"mappings_json"`
+	IconURL             types.String `tfsdk:"icon_url"`
+	TemplateID          types.String `tfsdk:"template_id"`
+	ExecutionOrder      types.Int64  `tfsdk:"execution_order"`
 }
 
 type HogFunctionOps struct{}
@@ -94,7 +95,12 @@ func (o HogFunctionOps) Schema() schema.Schema {
 			},
 			"inputs_json": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties.",
+				MarkdownDescription: "JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties. For inputs containing secrets, use `sensitive_inputs_json` instead.",
+			},
+			"sensitive_inputs_json": schema.StringAttribute{
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "JSON object containing sensitive input values (e.g. API keys, tokens, credentials) for the Hog function. Same format as `inputs_json`. Values are merged with `inputs_json` at apply time and redacted from plan/apply output. If the same key appears in both, `sensitive_inputs_json` takes precedence.",
 			},
 			"filters_json": schema.StringAttribute{
 				Optional:            true,
@@ -189,6 +195,25 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 		}
 	}
 
+	// Merge sensitive_inputs_json into inputs (sensitive values take precedence)
+	if !model.SensitiveInputsJSON.IsNull() && !model.SensitiveInputsJSON.IsUnknown() {
+		raw := strings.TrimSpace(model.SensitiveInputsJSON.ValueString())
+		if raw != "" {
+			var sensitiveInputs map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &sensitiveInputs); err != nil {
+				diags.AddError("Invalid sensitive_inputs_json", "sensitive_inputs_json must be valid JSON object: "+err.Error())
+				return req, diags
+			}
+			if req.Inputs == nil {
+				req.Inputs = sensitiveInputs
+			} else {
+				for k, v := range sensitiveInputs {
+					req.Inputs[k] = v
+				}
+			}
+		}
+	}
+
 	if !model.FiltersJSON.IsNull() && !model.FiltersJSON.IsUnknown() {
 		raw := strings.TrimSpace(model.FiltersJSON.ValueString())
 		if raw != "" {
@@ -273,17 +298,43 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.ExecutionOrder = types.Int64Null()
 	}
 
-	// Always populate inputs_json from API for import support
+	// Always populate inputs_json and sensitive_inputs_json from API for import support
 	// Strip server-computed fields (bytecode, order) from each input
 	if len(resp.Inputs) > 0 {
-		normalized, err := normalizeJSONStripServerFields(resp.Inputs, model.InputsJSON.ValueString())
-		if err != nil {
-			diags.AddError("Failed to normalize inputs", err.Error())
-			return diags
+		// inputs_json: filter to only keys the user specified in inputs_json
+		if !model.InputsJSON.IsNull() {
+			normalized, err := normalizeJSONStripServerFields(resp.Inputs, model.InputsJSON.ValueString())
+			if err != nil {
+				diags.AddError("Failed to normalize inputs", err.Error())
+				return diags
+			}
+			model.InputsJSON = types.StringValue(normalized)
+		} else if model.SensitiveInputsJSON.IsNull() {
+			// Import case: both fields are null, populate inputs_json with all API inputs
+			normalized, err := normalizeJSONStripServerFields(resp.Inputs, "")
+			if err != nil {
+				diags.AddError("Failed to normalize inputs", err.Error())
+				return diags
+			}
+			model.InputsJSON = types.StringValue(normalized)
 		}
-		model.InputsJSON = types.StringValue(normalized)
-	} else if !model.InputsJSON.IsNull() {
-		model.InputsJSON = types.StringValue("{}")
+
+		// sensitive_inputs_json: filter to only keys the user specified in sensitive_inputs_json
+		if !model.SensitiveInputsJSON.IsNull() {
+			sensitiveNormalized, err := normalizeJSONStripServerFields(resp.Inputs, model.SensitiveInputsJSON.ValueString())
+			if err != nil {
+				diags.AddError("Failed to normalize sensitive inputs", err.Error())
+				return diags
+			}
+			model.SensitiveInputsJSON = types.StringValue(sensitiveNormalized)
+		}
+	} else {
+		if !model.InputsJSON.IsNull() {
+			model.InputsJSON = types.StringValue("{}")
+		}
+		if !model.SensitiveInputsJSON.IsNull() {
+			model.SensitiveInputsJSON = types.StringValue("{}")
+		}
 	}
 
 	if len(resp.Filters) > 0 {
