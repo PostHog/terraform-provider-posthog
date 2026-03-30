@@ -360,6 +360,42 @@ func TestHogFunction_ImportWithSensitiveInputs(t *testing.T) {
 	})
 }
 
+// TestHogFunction_InputsSchemaWithInputsJSON tests inputs_schema_json with
+// inputs_json only (no sensitive_inputs_json).
+func TestHogFunction_InputsSchemaWithInputsJSON(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccHogFunctionInputsSchemaWithInputsJSON(rName, "us-east-1"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "enabled", "true"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_schema_json"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_json"),
+					resource.TestCheckNoResourceAttr("posthog_hog_function.test", "sensitive_inputs_json"),
+				),
+			},
+			// Update the custom input value
+			{
+				Config: testAccHogFunctionInputsSchemaWithInputsJSON(rName, "eu-west-1"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_schema_json"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "inputs_json"),
+				),
+			},
+		},
+	})
+}
+
 // TestHogFunction_InputsSchemaJSON tests creating a hog function with a custom
 // inputs_schema_json that extends the template's default schema.
 func TestHogFunction_InputsSchemaJSON(t *testing.T) {
@@ -443,6 +479,53 @@ resource "posthog_hog_function" "test" {
   })
 }
 `, name, secret)
+}
+
+func testAccHogFunctionInputsSchemaWithInputsJSON(name, region string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Test webhook with custom inputs schema and inputs_json only"
+  type        = "destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  inputs_schema_json = jsonencode([
+    {
+      key      = "region"
+      type     = "string"
+      label    = "Region"
+      required = true
+    }
+  ])
+
+  inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/webhook"
+      templating = "hog"
+    }
+    method = {
+      value      = "POST"
+      templating = "hog"
+    }
+    region = {
+      value = "%s"
+    }
+  })
+
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$pageview"
+      name = "$pageview"
+      type = "events"
+    }]
+    filter_test_accounts = false
+  })
+}
+`, name, region)
 }
 
 func testAccHogFunctionWithSensitiveInputs(name, url, secret string) string {
