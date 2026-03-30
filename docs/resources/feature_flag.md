@@ -32,17 +32,3 @@ PostHog Feature Flag resource
 ### Read-Only
 
 - `id` (Number) Feature Flag ID
-
-## Import
-
-Import is supported using the following syntax:
-
-The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
-
-```shell
-# Import using: project_id/feature_flag_id
-terraform import posthog_feature_flag.example 12345/678
-
-# If project_id is configured at the provider level, you can omit it:
-terraform import posthog_feature_flag.example 678
-```

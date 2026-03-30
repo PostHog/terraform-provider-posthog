@@ -30,17 +30,3 @@ PostHog Dashboard resource
 ### Read-Only
 
 - `id` (Number) Dashboard ID
-
-## Import
-
-Import is supported using the following syntax:
-
-The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
-
-```shell
-# Import using: project_id/dashboard_id
-terraform import posthog_dashboard.example 12345/678
-
-# If project_id is configured at the provider level, you can omit it:
-terraform import posthog_dashboard.example 678
-```

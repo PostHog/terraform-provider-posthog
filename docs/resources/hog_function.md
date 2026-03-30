@@ -24,6 +24,7 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 - `hog` (String) The Hog code to execute. Not required when using a template - the template provides the code.
 - `icon_url` (String) URL of the icon for this Hog function.
 - `inputs_json` (String) JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties. For inputs containing secrets, use `sensitive_inputs_json` instead.
+- `inputs_schema_json` (String) JSON array defining custom input schema entries for the Hog function. Each entry is an object with `key`, `type`, `secret`, `required`, and other properties. Sent directly as `inputs_schema` in the API request. When using a template, this replaces the template's default schema.
 - `mappings_json` (String) JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.
 - `masking_json` (String) JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.
 - `name` (String) Name of the Hog function.
@@ -35,17 +36,3 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 ### Read-Only
 
 - `id` (String) UUID of the Hog function.
-
-## Import
-
-Import is supported using the following syntax:
-
-The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
-
-```shell
-# Import using: project_id/hog_function_uuid
-terraform import posthog_hog_function.example 12345/your-hog-function-uuid
-
-# If project_id is configured at the provider level, you can omit it:
-terraform import posthog_hog_function.example your-hog-function-uuid
-```

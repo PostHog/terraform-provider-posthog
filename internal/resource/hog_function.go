@@ -35,6 +35,7 @@ type HogFunctionResourceTFModel struct {
 	Hog                 types.String `tfsdk:"hog"`
 	InputsJSON          types.String `tfsdk:"inputs_json"`
 	SensitiveInputsJSON types.String `tfsdk:"sensitive_inputs_json"`
+	InputsSchemaJSON    types.String `tfsdk:"inputs_schema_json"`
 	FiltersJSON         types.String `tfsdk:"filters_json"`
 	MaskingJSON         types.String `tfsdk:"masking_json"`
 	MappingsJSON        types.String `tfsdk:"mappings_json"`
@@ -101,6 +102,10 @@ func (o HogFunctionOps) Schema() schema.Schema {
 				Optional:            true,
 				Sensitive:           true,
 				MarkdownDescription: "JSON object containing sensitive input values (e.g. API keys, tokens, credentials) for the Hog function. Same format as `inputs_json`. Values are merged with `inputs_json` at apply time and redacted from plan/apply output. If the same key appears in both, `sensitive_inputs_json` takes precedence.",
+			},
+			"inputs_schema_json": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "JSON array defining custom input schema entries for the Hog function. Each entry is an object with `key`, `type`, `secret`, `required`, and other properties. Sent directly as `inputs_schema` in the API request. When using a template, this replaces the template's default schema.",
 			},
 			"filters_json": schema.StringAttribute{
 				Optional:            true,
@@ -211,6 +216,18 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 					req.Inputs[k] = v
 				}
 			}
+		}
+	}
+
+	if !model.InputsSchemaJSON.IsNull() && !model.InputsSchemaJSON.IsUnknown() {
+		raw := strings.TrimSpace(model.InputsSchemaJSON.ValueString())
+		if raw != "" {
+			var inputsSchema []map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &inputsSchema); err != nil {
+				diags.AddError("Invalid inputs_schema_json", "inputs_schema_json must be a valid JSON array: "+err.Error())
+				return req, diags
+			}
+			req.InputsSchema = inputsSchema
 		}
 	}
 
@@ -333,6 +350,61 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		if !model.SensitiveInputsJSON.IsNull() {
 			model.SensitiveInputsJSON = types.StringValue("{}")
 		}
+	}
+
+	// Filter inputs_schema to only entries the user specified (by "key" field),
+	// then normalize through the same pipeline as other JSON fields.
+	if len(resp.InputsSchema) > 0 {
+		if !model.InputsSchemaJSON.IsNull() {
+			var userSchema []map[string]interface{}
+			if err := json.Unmarshal([]byte(model.InputsSchemaJSON.ValueString()), &userSchema); err != nil {
+				diags.AddError("Failed to parse inputs_schema_json from state", err.Error())
+				return diags
+			}
+
+			// Build lookup of API entries by key
+			apiByKey := make(map[string]map[string]interface{})
+			for _, entry := range resp.InputsSchema {
+				if key, ok := entry["key"].(string); ok {
+					apiByKey[key] = entry
+				}
+			}
+
+			// Filter to user-specified keys, preserving user's ordering.
+			// Build both the API slice and a matching user slice so that
+			// normalizeJSONStripServerFields (which matches array elements
+			// by index) pairs each API entry with its correct user template.
+			var filtered []interface{}
+			var matchedUser []interface{}
+			for _, userEntry := range userSchema {
+				if key, ok := userEntry["key"].(string); ok {
+					if apiEntry, exists := apiByKey[key]; exists {
+						filtered = append(filtered, apiEntry)
+						matchedUser = append(matchedUser, userEntry)
+					}
+				}
+			}
+			if filtered == nil {
+				filtered = []interface{}{}
+				matchedUser = []interface{}{}
+			}
+
+			userJSON, err := json.Marshal(matchedUser)
+			if err != nil {
+				diags.AddError("Failed to marshal matched user schema", err.Error())
+				return diags
+			}
+			normalized, err := normalizeJSONStripServerFields(filtered, string(userJSON))
+			if err != nil {
+				diags.AddError("Failed to normalize inputs_schema", err.Error())
+				return diags
+			}
+			model.InputsSchemaJSON = types.StringValue(normalized)
+		}
+	} else if !model.InputsSchemaJSON.IsNull() {
+		model.InputsSchemaJSON = types.StringValue("[]")
+	} else {
+		model.InputsSchemaJSON = types.StringNull()
 	}
 
 	if len(resp.Filters) > 0 {

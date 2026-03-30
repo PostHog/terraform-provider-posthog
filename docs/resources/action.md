@@ -99,17 +99,3 @@ resource "posthog_action" "cta_click" {
 
 - `created_at` (String) Timestamp when the action was created.
 - `id` (Number) Action ID
-
-## Import
-
-Import is supported using the following syntax:
-
-The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
-
-```shell
-# Import using: project_id/action_id
-terraform import posthog_action.example 12345/678
-
-# If project_id is configured at the provider level, you can omit it:
-terraform import posthog_action.example 678
-```
