@@ -319,19 +319,17 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 			model.InputsJSON = types.StringValue(normalized)
 		}
 
-		// sensitive_inputs_json: filter to only keys the user specified in sensitive_inputs_json
-		if !model.SensitiveInputsJSON.IsNull() {
-			sensitiveNormalized, err := normalizeJSONStripServerFields(resp.Inputs, model.SensitiveInputsJSON.ValueString())
-			if err != nil {
-				diags.AddError("Failed to normalize sensitive inputs", err.Error())
-				return diags
-			}
-			model.SensitiveInputsJSON = types.StringValue(sensitiveNormalized)
-		}
+		// sensitive_inputs_json: do NOT update from API response. The PostHog API never
+		// returns actual secret values (it replaces them with placeholders), so overwriting
+		// state with the API response would produce a diff against the planned value,
+		// causing "inconsistent values for sensitive attribute" errors. The prior/planned
+		// value is always the correct value to keep in state.
 	} else {
 		if !model.InputsJSON.IsNull() {
 			model.InputsJSON = types.StringValue("{}")
 		}
+		// When the API returns no inputs at all, reflect that in state so drift is
+		// surfaced correctly (the resource genuinely has no inputs configured).
 		if !model.SensitiveInputsJSON.IsNull() {
 			model.SensitiveInputsJSON = types.StringValue("{}")
 		}

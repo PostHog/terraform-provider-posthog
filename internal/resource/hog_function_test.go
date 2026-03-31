@@ -168,14 +168,17 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectedInputs:        `{"api_key":{"value":"secret123"},"url":{"value":"https://example.com"}}`,
 			expectSensitiveIsNull: true,
 		},
-		"duplicate key in both fields appears in both after read": {
+		"duplicate key in both fields: inputs_json gets API value, sensitive_inputs_json keeps prior state": {
 			inputsJSON:          types.StringValue(`{"shared_key":{"value":"from_inputs"}}`),
 			sensitiveInputsJSON: types.StringValue(`{"shared_key":{"value":"from_sensitive"}}`),
 			respInputs: map[string]interface{}{
 				"shared_key": map[string]interface{}{"value": "api_value"},
 			},
+			// inputs_json uses the API value for drift detection.
+			// sensitive_inputs_json preserves prior state because the API never returns
+			// real secret values (it returns placeholders), so we must not overwrite state.
 			expectedInputs:    `{"shared_key":{"value":"api_value"}}`,
-			expectedSensitive: `{"shared_key":{"value":"api_value"}}`,
+			expectedSensitive: `{"shared_key":{"value":"from_sensitive"}}`,
 		},
 	}
 
