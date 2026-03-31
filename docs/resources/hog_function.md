@@ -35,3 +35,17 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 ### Read-Only
 
 - `id` (String) UUID of the Hog function.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Import using: project_id/hog_function_uuid
+terraform import posthog_hog_function.example 12345/your-hog-function-uuid
+
+# If project_id is configured at the provider level, you can omit it:
+terraform import posthog_hog_function.example your-hog-function-uuid
+```
