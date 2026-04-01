@@ -28,3 +28,15 @@ Manages a PostHog project within an organization.
 
 - `api_token` (String, Sensitive) The API token for this project. This is used to send events to PostHog.
 - `id` (Number) The numeric identifier of the project.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Import using: organization_id/project_id
+# Note: organization_id is always required (no provider-level default fallback).
+terraform import posthog_project.example your-organization-uuid/123
+```
