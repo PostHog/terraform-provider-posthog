@@ -44,7 +44,7 @@ func (o FeatureFlagOps) ResourceName() string {
 
 func (o FeatureFlagOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "PostHog Feature Flag resource",
+		MarkdownDescription: "PostHog Feature Flag resource. The current PostHog feature flag API exposes a display `name`, but not a separate dedicated `description` field.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.Int64Attribute{
 				Computed:            true,
@@ -61,7 +61,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"name": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag name/description",
+				MarkdownDescription: "Feature flag display name. The current PostHog API does not expose a separate dedicated description field for feature flags.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
