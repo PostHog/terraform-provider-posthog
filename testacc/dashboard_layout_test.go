@@ -12,13 +12,24 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
+const (
+	dashboardLayoutRandomPrefix        = "tf-acc-test"
+	dashboardLayoutResourceName        = "posthog_dashboard_layout.test"
+	dashboardResourceName              = "posthog_dashboard.test"
+	dashboardLayoutTilesCountAttr      = "tiles.#"
+	dashboardLayoutFirstTileIDAttr     = "tiles.0.tile_id"
+	dashboardLayoutFirstTileColorAttr  = "tiles.0.color"
+	dashboardLayoutShowDescriptionAttr = "tiles.0.show_description"
+	dashboardLayoutResourceNotFoundFmt = "resource not found: %s"
+)
+
 // TestDashboardLayout_CRUD tests the full create/update/destroy lifecycle of a
 // posthog_dashboard_layout resource: create with a single insight tile, add a
 // text tile, update the insight tile position, change the text tile body
 // (in-place update via positional fallback), then implicitly destroy.
 func TestDashboardLayout_CRUD(t *testing.T) {
 	skipIfNotAcceptance(t)
-	rName := acctest.RandomWithPrefix("tf-acc-test")
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -27,39 +38,39 @@ func TestDashboardLayout_CRUD(t *testing.T) {
 			{
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("posthog_dashboard_layout.test", "id"),
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "1"),
-					resource.TestCheckResourceAttrSet("posthog_dashboard_layout.test", "tiles.0.tile_id"),
-					resource.TestCheckResourceAttrPair("posthog_dashboard_layout.test", "dashboard_id", "posthog_dashboard.test", "id"),
+					resource.TestCheckResourceAttrSet(dashboardLayoutResourceName, "id"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "1"),
+					resource.TestCheckResourceAttrSet(dashboardLayoutResourceName, dashboardLayoutFirstTileIDAttr),
+					resource.TestCheckResourceAttrPair(dashboardLayoutResourceName, "dashboard_id", dashboardResourceName, "id"),
 				),
 			},
 			// Step 2: Update — add a text tile (now 2 tiles total)
 			{
 				Config: testAccDashboardLayoutInsightAndText(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "2"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "2"),
 				),
 			},
 			// Step 3: Update — change layout position of the insight tile
 			{
 				Config: testAccDashboardLayoutUpdatedPosition(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "2"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "2"),
 				),
 			},
 			// Step 4: Update — change text tile body (should update in place, not orphan)
 			{
 				Config: testAccDashboardLayoutChangedTextBody(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "2"),
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.0.text_body", "## Updated Header"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "2"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, "tiles.0.text_body", "## Updated Header"),
 				),
 			},
 			// Step 5: Update — remove text tile, back to insight-only
 			{
 				Config: testAccDashboardLayoutSingleInsightShifted(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "1"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "1"),
 				),
 			},
 			// Implicit destroy at end of resource.Test
@@ -71,7 +82,7 @@ func TestDashboardLayout_CRUD(t *testing.T) {
 // and that the resulting state matches the configuration.
 func TestDashboardLayout_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
-	rName := acctest.RandomWithPrefix("tf-acc-test")
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -80,12 +91,12 @@ func TestDashboardLayout_Import(t *testing.T) {
 			{
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("posthog_dashboard_layout.test", "id"),
+					resource.TestCheckResourceAttrSet(dashboardLayoutResourceName, "id"),
 				),
 			},
 			// Step 2: Import
 			{
-				ResourceName:      "posthog_dashboard_layout.test",
+				ResourceName:      dashboardLayoutResourceName,
 				ImportState:       true,
 				ImportStateVerify: true,
 				// tiles is ignored because import returns API-order tiles, which may differ
@@ -96,12 +107,47 @@ func TestDashboardLayout_Import(t *testing.T) {
 	})
 }
 
+func TestDashboardLayout_ShowDescription(t *testing.T) {
+	skipIfNotAcceptance(t)
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccDashboardLayoutInsightWithShowDescription(rName, "false"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutShowDescriptionAttr, "false"),
+				),
+			},
+			{
+				ResourceName:            dashboardLayoutResourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{dashboardLayoutFirstTileIDAttr},
+			},
+			{
+				Config: testAccDashboardLayoutInsightWithShowDescription(rName, "true"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutShowDescriptionAttr, "true"),
+				),
+			},
+			{
+				Config: testAccDashboardLayoutSingleInsight(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(dashboardLayoutResourceName, dashboardLayoutShowDescriptionAttr),
+				),
+			},
+		},
+	})
+}
+
 // TestDashboardLayout_AuthoritativeTextTileDelete verifies that text tiles added
 // outside of Terraform are soft-deleted by apply. The resource is fully authoritative:
 // unmanaged text tiles are deleted, unmanaged insight tiles have layouts cleared.
 func TestDashboardLayout_AuthoritativeTextTileDelete(t *testing.T) {
 	skipIfNotAcceptance(t)
-	rName := acctest.RandomWithPrefix("tf-acc-test")
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
 
 	host := os.Getenv("POSTHOG_HOST")
 	apiKey := os.Getenv("POSTHOG_API_KEY")
@@ -118,12 +164,12 @@ func TestDashboardLayout_AuthoritativeTextTileDelete(t *testing.T) {
 			{
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "1"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "1"),
 					// Capture dashboard ID for API calls
 					func(s *terraform.State) error {
-						rs, ok := s.RootModule().Resources["posthog_dashboard.test"]
+						rs, ok := s.RootModule().Resources[dashboardResourceName]
 						if !ok {
-							return fmt.Errorf("resource not found: posthog_dashboard.test")
+							return fmt.Errorf(dashboardLayoutResourceNotFoundFmt, dashboardResourceName)
 						}
 						dashboardID = rs.Primary.ID
 						return nil
@@ -155,7 +201,7 @@ func TestDashboardLayout_AuthoritativeTextTileDelete(t *testing.T) {
 				Config: testAccDashboardLayoutSingleInsightShifted(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// Terraform state should still show only 1 managed tile
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.#", "1"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutTilesCountAttr, "1"),
 					// Verify the external text tile was soft-deleted by authoritative enforcement
 					func(s *terraform.State) error {
 						resp, _, err := (&client).GetDashboardLayout(
@@ -369,7 +415,7 @@ resource "posthog_dashboard_layout" "test" {
 // dashboard layout tile: set, change, remove, re-add.
 func TestDashboardLayout_Color(t *testing.T) {
 	skipIfNotAcceptance(t)
-	rName := acctest.RandomWithPrefix("tf-acc-test")
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -378,42 +424,40 @@ func TestDashboardLayout_Color(t *testing.T) {
 			{
 				Config: testAccDashboardLayoutInsightWithColor(rName, "blue"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.0.color", "blue"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr, "blue"),
 				),
 			},
 			// Step 2: Change color to "green"
 			{
 				Config: testAccDashboardLayoutInsightWithColor(rName, "green"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.0.color", "green"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr, "green"),
 				),
 			},
 			// Step 3: Remove color (omit from config)
 			{
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckNoResourceAttr("posthog_dashboard_layout.test", "tiles.0.color"),
+					resource.TestCheckNoResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr),
 				),
 			},
 			// Step 4: Re-add color "purple"
 			{
 				Config: testAccDashboardLayoutInsightWithColor(rName, "purple"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_dashboard_layout.test", "tiles.0.color", "purple"),
+					resource.TestCheckResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr, "purple"),
 				),
 			},
 		},
 	})
 }
 
-
-
 // TestDashboardLayout_ColorDriftClearedByApply verifies that a color set via the
 // API (outside Terraform) is detected as drift and cleared on the next apply when
 // the config does not declare a color.
 func TestDashboardLayout_ColorDriftClearedByApply(t *testing.T) {
 	skipIfNotAcceptance(t)
-	rName := acctest.RandomWithPrefix("tf-acc-test")
+	rName := acctest.RandomWithPrefix(dashboardLayoutRandomPrefix)
 
 	host := os.Getenv("POSTHOG_HOST")
 	apiKey := os.Getenv("POSTHOG_API_KEY")
@@ -431,20 +475,20 @@ func TestDashboardLayout_ColorDriftClearedByApply(t *testing.T) {
 			{
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckNoResourceAttr("posthog_dashboard_layout.test", "tiles.0.color"),
+					resource.TestCheckNoResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr),
 					// Capture IDs for the API call in step 2
 					func(s *terraform.State) error {
-						rs, ok := s.RootModule().Resources["posthog_dashboard.test"]
+						rs, ok := s.RootModule().Resources[dashboardResourceName]
 						if !ok {
-							return fmt.Errorf("resource not found: posthog_dashboard.test")
+							return fmt.Errorf(dashboardLayoutResourceNotFoundFmt, dashboardResourceName)
 						}
 						dashboardID = rs.Primary.ID
 
-						layout, ok := s.RootModule().Resources["posthog_dashboard_layout.test"]
+						layout, ok := s.RootModule().Resources[dashboardLayoutResourceName]
 						if !ok {
-							return fmt.Errorf("resource not found: posthog_dashboard_layout.test")
+							return fmt.Errorf(dashboardLayoutResourceNotFoundFmt, dashboardLayoutResourceName)
 						}
-						if _, err := fmt.Sscanf(layout.Primary.Attributes["tiles.0.tile_id"], "%d", &tileID); err != nil {
+						if _, err := fmt.Sscanf(layout.Primary.Attributes[dashboardLayoutFirstTileIDAttr], "%d", &tileID); err != nil {
 							return fmt.Errorf("parsing tile_id: %w", err)
 						}
 						return nil
@@ -473,7 +517,7 @@ func TestDashboardLayout_ColorDriftClearedByApply(t *testing.T) {
 				Config: testAccDashboardLayoutSingleInsight(rName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// After apply, color should be cleared back to absent
-					resource.TestCheckNoResourceAttr("posthog_dashboard_layout.test", "tiles.0.color"),
+					resource.TestCheckNoResourceAttr(dashboardLayoutResourceName, dashboardLayoutFirstTileColorAttr),
 					// Verify via API that the color was actually cleared
 					func(s *terraform.State) error {
 						resp, _, err := (&client).GetDashboardLayout(
@@ -541,6 +585,49 @@ resource "posthog_dashboard_layout" "test" {
   depends_on = [posthog_insight.test]
 }
 `, name, color)
+}
+
+func testAccDashboardLayoutInsightWithShowDescription(name, showDescription string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_dashboard" "test" {
+  name = %[1]q
+}
+
+resource "posthog_insight" "test" {
+  name = "%[1]s-insight"
+
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        event = "$pageview"
+        math  = "total"
+      }]
+    }
+  })
+
+  dashboard_ids = [posthog_dashboard.test.id]
+  depends_on    = [posthog_dashboard.test]
+}
+
+resource "posthog_dashboard_layout" "test" {
+  dashboard_id = posthog_dashboard.test.id
+
+  tiles = [
+    {
+      insight_id       = posthog_insight.test.id
+      show_description = %[2]s
+      layouts_json     = jsonencode({ sm = { x = 0, y = 0, w = 6, h = 4 } })
+    },
+  ]
+
+  depends_on = [posthog_insight.test]
+}
+`, name, showDescription)
 }
 
 // testAccDashboardLayoutUpdatedPosition returns HCL for the same layout as
