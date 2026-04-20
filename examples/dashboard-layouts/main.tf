@@ -5,9 +5,10 @@
 # 2. Create insights to display on the dashboard
 # 3. Arrange tiles (insights + text) with precise grid positions
 # 4. Optionally: add color to highlight specific tiles
-# 5. Optionally: update a text tile body in place
-# 6. Optionally: add a new tile
-# 7. Optionally: remove a tile and reposition
+# 5. Optionally: hide an insight description at tile level
+# 6. Optionally: update a text tile body in place
+# 7. Optionally: add a new tile
+# 8. Optionally: remove a tile and reposition
 
 # =============================================================================
 # Step 1: Create the dashboard
@@ -75,12 +76,14 @@ resource "posthog_dashboard_layout" "demo" {
       layouts_json = jsonencode({ sm = { x = 0, y = 0, w = 12, h = 1 } })
     },
     {
-      insight_id   = posthog_insight.pageviews.id
-      layouts_json = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 5 } })
+      insight_id       = posthog_insight.pageviews.id
+      layouts_json     = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 5 } })
+      show_description = false
     },
     {
-      insight_id   = posthog_insight.sessions.id
-      layouts_json = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 5 } })
+      insight_id       = posthog_insight.sessions.id
+      layouts_json     = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 5 } })
+      show_description = false
     },
   ]
 
@@ -116,7 +119,38 @@ resource "posthog_dashboard_layout" "demo" {
 # }
 
 # =============================================================================
-# Step 5 (Optional): Update text tile body in place
+# Step 5 (Optional): Hide an insight description
+#
+# Omit the field to clear it back to the PostHog default (`null`).
+# =============================================================================
+
+# Uncomment to use (comment out Steps 3-4 first):
+
+# resource "posthog_dashboard_layout" "demo" {
+#   dashboard_id = posthog_dashboard.demo.id
+#
+#   tiles = [
+#     {
+#       text_body    = "## Production Metrics"
+#       layouts_json = jsonencode({ sm = { x = 0, y = 0, w = 12, h = 1 } })
+#     },
+#     {
+#       insight_id       = posthog_insight.pageviews.id
+#       show_description = false
+#       layouts_json     = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 5 } })
+#     },
+#     {
+#       insight_id       = posthog_insight.sessions.id
+#       show_description = false
+#       layouts_json     = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 5 } })
+#     },
+#   ]
+#
+#   depends_on = [posthog_insight.pageviews, posthog_insight.sessions]
+# }
+
+# =============================================================================
+# Step 6 (Optional): Update text tile body in place
 #
 # Changing a text tile's body updates the existing tile (matched by position).
 # The tile_id stays stable — no destroy/recreate.
@@ -146,7 +180,7 @@ resource "posthog_dashboard_layout" "demo" {
 # }
 
 # =============================================================================
-# Step 6 (Optional): Add a footer text tile
+# Step 7 (Optional): Add a footer text tile
 #
 # Adding a tile increases the count. Existing tiles keep their tile_ids.
 # =============================================================================
@@ -179,7 +213,7 @@ resource "posthog_dashboard_layout" "demo" {
 # }
 
 # =============================================================================
-# Step 7 (Optional): Remove an insight and reposition
+# Step 8 (Optional): Remove an insight and reposition
 #
 # Removing a tile from the list clears its layout (insight tiles) or
 # soft-deletes it (text tiles). Remaining tiles can be repositioned freely.

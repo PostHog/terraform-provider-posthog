@@ -26,11 +26,12 @@ import (
 )
 
 type TileTFModel struct {
-	TileID      types.Int64          `tfsdk:"tile_id"`
-	InsightID   types.Int64          `tfsdk:"insight_id"`
-	TextBody    types.String         `tfsdk:"text_body"`
-	Color       types.String         `tfsdk:"color"`
-	LayoutsJSON jsontypes.Normalized `tfsdk:"layouts_json"`
+	TileID          types.Int64          `tfsdk:"tile_id"`
+	InsightID       types.Int64          `tfsdk:"insight_id"`
+	TextBody        types.String         `tfsdk:"text_body"`
+	Color           types.String         `tfsdk:"color"`
+	ShowDescription types.Bool           `tfsdk:"show_description"`
+	LayoutsJSON     jsontypes.Normalized `tfsdk:"layouts_json"`
 }
 
 func (t TileTFModel) IsInsightTile() bool {
@@ -50,11 +51,12 @@ type DashboardLayoutTFModel struct {
 
 var tilesObjectType = types.ObjectType{
 	AttrTypes: map[string]attr.Type{
-		"tile_id":      types.Int64Type,
-		"insight_id":   types.Int64Type,
-		"text_body":    types.StringType,
-		"color":        types.StringType,
-		"layouts_json": jsontypes.NormalizedType{},
+		"tile_id":          types.Int64Type,
+		"insight_id":       types.Int64Type,
+		"text_body":        types.StringType,
+		"color":            types.StringType,
+		"show_description": types.BoolType,
+		"layouts_json":     jsontypes.NormalizedType{},
 	},
 }
 
@@ -64,6 +66,12 @@ type DashboardLayoutOps struct {
 	// multiple resources of the same type concurrently; each dashboard ID is
 	// written by one goroutine and consumed (LoadAndDelete) by the same one.
 	planTilesByDashboard sync.Map // map[int64][]TileTFModel
+}
+
+type stateTileLookups struct {
+	insightToTileID  map[int64]int64
+	bodyToTileIDs    map[string][]int64
+	tileIDToStateIdx map[int64]int
 }
 
 func NewDashboardLayout() resource.Resource {
@@ -127,6 +135,10 @@ func (o *DashboardLayoutOps) Schema() schema.Schema {
 							Validators: []validator.String{
 								stringvalidator.LengthAtLeast(1),
 							},
+						},
+						"show_description": schema.BoolAttribute{
+							Optional:            true,
+							MarkdownDescription: "Whether to show the insight description on the tile. Omit the field to clear it back to the PostHog API default (`null`).",
 						},
 						"layouts_json": schema.StringAttribute{
 							Optional:            true,
@@ -193,20 +205,7 @@ func (o *DashboardLayoutOps) ModifyResourcePlan(ctx context.Context, req resourc
 // the tile_id from state into the plan. It returns a new slice with resolved tile_ids,
 // or nil if no tile_id was resolved.
 func resolveTileIDs(planTiles, stateTiles []TileTFModel) []TileTFModel {
-	// Build state lookups.
-	insightToTileID := make(map[int64]int64, len(stateTiles))
-	bodyToTileIDs := make(map[string][]int64, len(stateTiles))
-	tileIDToStateIdx := make(map[int64]int, len(stateTiles))
-	for si, st := range stateTiles {
-		tid := st.TileID.ValueInt64()
-		tileIDToStateIdx[tid] = si
-		if st.IsInsightTile() {
-			insightToTileID[st.InsightID.ValueInt64()] = tid
-		} else if st.IsTextTile() {
-			body := st.TextBody.ValueString()
-			bodyToTileIDs[body] = append(bodyToTileIDs[body], tid)
-		}
-	}
+	lookups := buildStateTileLookups(stateTiles)
 
 	result := make([]TileTFModel, len(planTiles))
 	copy(result, planTiles)
@@ -218,32 +217,16 @@ func resolveTileIDs(planTiles, stateTiles []TileTFModel) []TileTFModel {
 		if !pt.TileID.IsUnknown() {
 			continue
 		}
-		var tileID int64
-		found := false
-		if pt.IsInsightTile() {
-			tileID, found = insightToTileID[pt.InsightID.ValueInt64()]
-		} else if pt.IsTextTile() {
-			body := pt.TextBody.ValueString()
-			if ids := bodyToTileIDs[body]; len(ids) > 0 {
-				tileID = ids[0]
-				bodyToTileIDs[body] = ids[1:]
-				found = true
-			}
-		}
+		tileID, found := resolveTileIDFromState(pt, &lookups)
 		if found && tileID != 0 {
 			result[i].TileID = types.Int64Value(tileID)
 			modified = true
-			matchedStateIdx[tileIDToStateIdx[tileID]] = true
+			matchedStateIdx[lookups.tileIDToStateIdx[tileID]] = true
 		}
 	}
 
 	// Pass 2: Positional fallback for remaining unmatched text tiles.
-	var unmatchedStateTileIDs []int64
-	for si, st := range stateTiles {
-		if !matchedStateIdx[si] && st.IsTextTile() {
-			unmatchedStateTileIDs = append(unmatchedStateTileIDs, st.TileID.ValueInt64())
-		}
-	}
+	unmatchedStateTileIDs := collectUnmatchedStateTextTileIDs(stateTiles, matchedStateIdx)
 	positionalIdx := 0
 	for i := range result {
 		if !result[i].TileID.IsUnknown() || !result[i].IsTextTile() {
@@ -264,6 +247,61 @@ func resolveTileIDs(planTiles, stateTiles []TileTFModel) []TileTFModel {
 		return nil
 	}
 	return result
+}
+
+func buildStateTileLookups(stateTiles []TileTFModel) stateTileLookups {
+	lookups := stateTileLookups{
+		insightToTileID:  make(map[int64]int64, len(stateTiles)),
+		bodyToTileIDs:    make(map[string][]int64, len(stateTiles)),
+		tileIDToStateIdx: make(map[int64]int, len(stateTiles)),
+	}
+
+	for si, st := range stateTiles {
+		tid := st.TileID.ValueInt64()
+		lookups.tileIDToStateIdx[tid] = si
+		if st.IsInsightTile() {
+			lookups.insightToTileID[st.InsightID.ValueInt64()] = tid
+			continue
+		}
+		if st.IsTextTile() {
+			body := st.TextBody.ValueString()
+			lookups.bodyToTileIDs[body] = append(lookups.bodyToTileIDs[body], tid)
+		}
+	}
+
+	return lookups
+}
+
+func resolveTileIDFromState(tile TileTFModel, lookups *stateTileLookups) (int64, bool) {
+	if tile.IsInsightTile() {
+		tileID, found := lookups.insightToTileID[tile.InsightID.ValueInt64()]
+		return tileID, found
+	}
+	if tile.IsTextTile() {
+		return lookups.takeNextTextTileID(tile.TextBody.ValueString())
+	}
+	return 0, false
+}
+
+func (l *stateTileLookups) takeNextTextTileID(body string) (int64, bool) {
+	ids := l.bodyToTileIDs[body]
+	if len(ids) == 0 {
+		return 0, false
+	}
+	tileID := ids[0]
+	l.bodyToTileIDs[body] = ids[1:]
+	return tileID, true
+}
+
+func collectUnmatchedStateTextTileIDs(stateTiles []TileTFModel, matchedStateIdx map[int]bool) []int64 {
+	var unmatchedStateTileIDs []int64
+	for si, st := range stateTiles {
+		if matchedStateIdx[si] || !st.IsTextTile() {
+			continue
+		}
+		unmatchedStateTileIDs = append(unmatchedStateTileIDs, st.TileID.ValueInt64())
+	}
+	return unmatchedStateTileIDs
 }
 
 func (o *DashboardLayoutOps) BuildCreateRequest(_ context.Context, _ DashboardLayoutTFModel) (httpclient.DashboardLayoutPatchRequest, diag.Diagnostics) {
@@ -442,33 +480,54 @@ func matchDeclaredTilesToAPI(declaredTiles []TileTFModel, apiTiles []httpclient.
 	matches := make([]*httpclient.DashboardTile, len(declaredTiles))
 
 	for i, declared := range declaredTiles {
-		if declared.IsInsightTile() {
-			if idx, ok := insightIdxMap[declared.InsightID.ValueInt64()]; ok {
-				matchedIDs[apiTiles[idx].ID] = true
-				matches[i] = &apiTiles[idx]
-			}
-		} else if declared.IsTextTile() {
-			tileID := declared.TileID.ValueInt64()
-			if tileID != 0 {
-				if idx, ok := textIdxMap[tileID]; ok {
-					matchedIDs[apiTiles[idx].ID] = true
-					matches[i] = &apiTiles[idx]
-					continue
-				}
-			}
-			// Fall back to body matching. tile_id is Computed and will be
-			// unknown/zero during create, so body is the only stable identity.
-			for j := range apiTiles {
-				if apiTiles[j].Text != nil && !matchedIDs[apiTiles[j].ID] && apiTiles[j].Text.Body == declared.TextBody.ValueString() {
-					matchedIDs[apiTiles[j].ID] = true
-					matches[i] = &apiTiles[j]
-					break
-				}
-			}
+		match := findDeclaredTileMatch(declared, apiTiles, insightIdxMap, textIdxMap, matchedIDs)
+		if match != nil {
+			matchedIDs[match.ID] = true
+			matches[i] = match
 		}
 	}
 
 	return matches, matchedIDs
+}
+
+func findDeclaredTileMatch(declared TileTFModel, apiTiles []httpclient.DashboardTile, insightIdxMap, textIdxMap map[int64]int, matchedIDs map[int64]bool) *httpclient.DashboardTile {
+	if declared.IsInsightTile() {
+		return matchInsightTileByInsightID(declared, apiTiles, insightIdxMap)
+	}
+	if declared.IsTextTile() {
+		return matchTextTileByTileIDOrBody(declared, apiTiles, textIdxMap, matchedIDs)
+	}
+	return nil
+}
+
+func matchInsightTileByInsightID(declared TileTFModel, apiTiles []httpclient.DashboardTile, insightIdxMap map[int64]int) *httpclient.DashboardTile {
+	idx, ok := insightIdxMap[declared.InsightID.ValueInt64()]
+	if !ok {
+		return nil
+	}
+	return &apiTiles[idx]
+}
+
+func matchTextTileByTileIDOrBody(declared TileTFModel, apiTiles []httpclient.DashboardTile, textIdxMap map[int64]int, matchedIDs map[int64]bool) *httpclient.DashboardTile {
+	tileID := declared.TileID.ValueInt64()
+	if tileID != 0 {
+		if idx, ok := textIdxMap[tileID]; ok {
+			return &apiTiles[idx]
+		}
+	}
+	return matchTextTileByBody(declared.TextBody.ValueString(), apiTiles, matchedIDs)
+}
+
+func matchTextTileByBody(body string, apiTiles []httpclient.DashboardTile, matchedIDs map[int64]bool) *httpclient.DashboardTile {
+	for i := range apiTiles {
+		if apiTiles[i].Text == nil || matchedIDs[apiTiles[i].ID] {
+			continue
+		}
+		if apiTiles[i].Text.Body == body {
+			return &apiTiles[i]
+		}
+	}
+	return nil
 }
 
 // buildLayoutPatch builds the set of tile patch items for a PATCH request.
@@ -567,6 +626,16 @@ func buildTilePatchItem(ctx context.Context, tileID int64, declared TileTFModel)
 		item.Color = &c
 	}
 
+	// Omitted config is authoritative: reset to the API default by sending null.
+	if !declared.ShowDescription.IsUnknown() {
+		if declared.ShowDescription.IsNull() {
+			item.ClearShowDescription = true
+		} else {
+			showDescription := declared.ShowDescription.ValueBool()
+			item.ShowDescription = &showDescription
+		}
+	}
+
 	if declared.IsTextTile() {
 		item.Text = &httpclient.DashboardTileTextPatch{Body: declared.TextBody.ValueString()}
 	}
@@ -599,6 +668,8 @@ func apiTileToTFModel(t httpclient.DashboardTile) TileTFModel {
 	} else {
 		tile.Color = types.StringNull()
 	}
+
+	tile.ShowDescription = core.PtrToBool(t.ShowDescription)
 
 	if len(t.Layouts) > 0 {
 		bytes, err := json.Marshal(t.Layouts)

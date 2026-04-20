@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -15,12 +16,13 @@ type DashboardTileText struct {
 }
 
 type DashboardTile struct {
-	ID      int64                  `json:"id"`
-	Insight *DashboardTileInsight  `json:"insight,omitempty"`
-	Text    *DashboardTileText     `json:"text,omitempty"`
-	Layouts map[string]interface{} `json:"layouts"`
-	Color   *string                `json:"color,omitempty"`
-	Deleted *bool                  `json:"deleted,omitempty"`
+	ID              int64                  `json:"id"`
+	Insight         *DashboardTileInsight  `json:"insight,omitempty"`
+	Text            *DashboardTileText     `json:"text,omitempty"`
+	Layouts         map[string]interface{} `json:"layouts"`
+	Color           *string                `json:"color,omitempty"`
+	ShowDescription *bool                  `json:"show_description,omitempty"`
+	Deleted         *bool                  `json:"deleted,omitempty"`
 }
 
 type DashboardLayoutResponse struct {
@@ -33,15 +35,52 @@ type DashboardTileTextPatch struct {
 }
 
 type DashboardTilePatchItem struct {
-	ID      int64                   `json:"id,omitempty"`
-	Deleted *bool                   `json:"deleted,omitempty"`
-	Color   *string                 `json:"color,omitempty"`
-	Layouts *map[string]interface{} `json:"layouts,omitempty"`
-	Text    *DashboardTileTextPatch `json:"text,omitempty"`
+	ID                   int64                   `json:"id,omitempty"`
+	Deleted              *bool                   `json:"deleted,omitempty"`
+	Color                *string                 `json:"color,omitempty"`
+	Layouts              *map[string]interface{} `json:"layouts,omitempty"`
+	Text                 *DashboardTileTextPatch `json:"text,omitempty"`
+	ShowDescription      *bool                   `json:"-"`
+	ClearShowDescription bool                    `json:"-"`
 }
 
 type DashboardLayoutPatchRequest struct {
 	Tiles []DashboardTilePatchItem `json:"tiles"`
+}
+
+func (i DashboardTilePatchItem) MarshalJSON() ([]byte, error) {
+	type dashboardTilePatchItemAlias struct {
+		ID              int64                   `json:"id,omitempty"`
+		Deleted         *bool                   `json:"deleted,omitempty"`
+		Color           *string                 `json:"color,omitempty"`
+		Layouts         *map[string]interface{} `json:"layouts,omitempty"`
+		Text            *DashboardTileTextPatch `json:"text,omitempty"`
+		ShowDescription *bool                   `json:"show_description,omitempty"`
+	}
+
+	payload := dashboardTilePatchItemAlias{
+		ID:              i.ID,
+		Deleted:         i.Deleted,
+		Color:           i.Color,
+		Layouts:         i.Layouts,
+		Text:            i.Text,
+		ShowDescription: i.ShowDescription,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if !i.ClearShowDescription {
+		return data, nil
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	object["show_description"] = nil
+	return json.Marshal(object)
 }
 
 // GetDashboardLayout fetches the tile layout for a specific dashboard.

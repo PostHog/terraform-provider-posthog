@@ -196,6 +196,64 @@ func TestBuildLayoutPatch(t *testing.T) {
 				assert.Equal(t, "", *items[0].Color, "null config color should send empty string to clear")
 			},
 		},
+		"show_description false is sent in patch": {
+			declaredTiles: []TileTFModel{
+				{
+					TileID:          types.Int64Null(),
+					InsightID:       types.Int64Value(42),
+					TextBody:        types.StringNull(),
+					Color:           types.StringNull(),
+					ShowDescription: types.BoolValue(false),
+					LayoutsJSON:     jsontypes.NewNormalizedNull(),
+				},
+			},
+			apiTiles: []httpclient.DashboardTile{
+				{
+					ID:      10,
+					Insight: &httpclient.DashboardTileInsight{ID: 42},
+					Layouts: map[string]interface{}{},
+				},
+			},
+			wantPatchIDs:   []int64{10},
+			wantMissingIDs: nil,
+			wantPatchCount: 1,
+			checkPatchItem: func(t *testing.T, items []httpclient.DashboardTilePatchItem) {
+				t.Helper()
+				require.Len(t, items, 1)
+				require.NotNil(t, items[0].ShowDescription)
+				assert.False(t, *items[0].ShowDescription)
+				assert.False(t, items[0].ClearShowDescription)
+			},
+		},
+		"null show_description clears to api default": {
+			declaredTiles: []TileTFModel{
+				{
+					TileID:          types.Int64Null(),
+					InsightID:       types.Int64Value(42),
+					TextBody:        types.StringNull(),
+					Color:           types.StringNull(),
+					ShowDescription: types.BoolNull(),
+					LayoutsJSON:     jsontypes.NewNormalizedNull(),
+				},
+			},
+			apiTiles: []httpclient.DashboardTile{
+				{
+					ID:              10,
+					Insight:         &httpclient.DashboardTileInsight{ID: 42},
+					Layouts:         map[string]interface{}{},
+					ShowDescription: boolPtr(true),
+				},
+			},
+			wantPatchIDs:   []int64{10},
+			wantMissingIDs: nil,
+			wantPatchCount: 1,
+			checkPatchItem: func(t *testing.T, items []httpclient.DashboardTilePatchItem) {
+				t.Helper()
+				require.Len(t, items, 1)
+				assert.Nil(t, items[0].ShowDescription)
+				assert.True(t, items[0].ClearShowDescription)
+			},
+		},
 		"unmanaged text tile soft-deleted": {
 			declaredTiles: []TileTFModel{},
 			apiTiles: []httpclient.DashboardTile{
@@ -471,6 +529,31 @@ func TestBuildDeletePatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDashboardTilePatchItemMarshalJSON_ShowDescription(t *testing.T) {
+	t.Run("encodes boolean show_description when configured", func(t *testing.T) {
+		value := false
+		item := httpclient.DashboardTilePatchItem{
+			ID:              10,
+			ShowDescription: &value,
+		}
+
+		data, err := json.Marshal(item)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"id":10,"show_description":false}`, string(data))
+	})
+
+	t.Run("encodes null show_description when clearing", func(t *testing.T) {
+		item := httpclient.DashboardTilePatchItem{
+			ID:                   10,
+			ClearShowDescription: true,
+		}
+
+		data, err := json.Marshal(item)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"id":10,"show_description":null}`, string(data))
+	})
 }
 
 func TestMapTilesToState(t *testing.T) {
@@ -828,6 +911,31 @@ func TestApiTileToTFModel(t *testing.T) {
 			checkResult: func(t *testing.T, result TileTFModel) {
 				t.Helper()
 				assert.True(t, result.Color.IsNull(), "Color should be null when API color is nil")
+			},
+		},
+		"show description false": {
+			apiTile: httpclient.DashboardTile{
+				ID:              8,
+				Insight:         &httpclient.DashboardTileInsight{ID: 8},
+				Layouts:         map[string]interface{}{},
+				ShowDescription: boolPtr(false),
+			},
+			checkResult: func(t *testing.T, result TileTFModel) {
+				t.Helper()
+				assert.False(t, result.ShowDescription.IsNull(), "ShowDescription should be set when API returns false")
+				assert.False(t, result.ShowDescription.ValueBool())
+			},
+		},
+		"nil show description": {
+			apiTile: httpclient.DashboardTile{
+				ID:              9,
+				Insight:         &httpclient.DashboardTileInsight{ID: 9},
+				Layouts:         map[string]interface{}{},
+				ShowDescription: nil,
+			},
+			checkResult: func(t *testing.T, result TileTFModel) {
+				t.Helper()
+				assert.True(t, result.ShowDescription.IsNull(), "ShowDescription should be null when API omits it")
 			},
 		},
 		"empty color string": {
@@ -1376,6 +1484,10 @@ func TestResolveTileIDs(t *testing.T) {
 // strPtr is a helper to create a pointer to a string literal.
 func strPtr(s string) *string {
 	return &s
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // buildModifyPlanReqResp constructs a ModifyPlanRequest and ModifyPlanResponse
