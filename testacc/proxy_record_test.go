@@ -16,6 +16,7 @@ const (
 	proxyRecordValidWaitTimeout = 10 * time.Minute
 	testProxyRecordResourceName = "posthog_proxy_record.test"
 	proxyRecordStatusValid      = "valid"
+	resourceNotFoundTemplate    = "resource not found: %s"
 )
 
 func testAccProxyRecordPreCheck(t *testing.T) {
@@ -102,7 +103,7 @@ func TestProxyRecord_ValidWithDNS(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testProxyRecordResourceName, "status", proxyRecordStatusValid),
 					resource.TestCheckResourceAttr(testProxyRecordResourceName, "domain", domain),
-					resource.TestCheckResourceAttr(testProxyRecordResourceName, "target_cname", targetCNAME),
+					testAccCheckProxyRecordTargetCNAME(&targetCNAME),
 				),
 			},
 		},
@@ -142,7 +143,7 @@ func testAccProxyRecordImportStateID(resourceName string) resource.ImportStateId
 	return func(s *terraform.State) (string, error) {
 		rs, ok := s.RootModule().Resources[resourceName]
 		if !ok {
-			return "", fmt.Errorf("resource not found: %s", resourceName)
+			return "", fmt.Errorf(resourceNotFoundTemplate, resourceName)
 		}
 
 		orgID := rs.Primary.Attributes["organization_id"]
@@ -164,7 +165,7 @@ func testAccCaptureProxyRecordState(proxyRecordID, targetCNAME *string) resource
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[testProxyRecordResourceName]
 		if !ok {
-			return fmt.Errorf("resource not found: %s", testProxyRecordResourceName)
+			return fmt.Errorf(resourceNotFoundTemplate, testProxyRecordResourceName)
 		}
 
 		*proxyRecordID = rs.Primary.ID
@@ -202,6 +203,21 @@ func testAccConfigureProxyRecordDNS(t *testing.T, harness *cloudflareDNSHarness,
 func testAccWaitForProxyRecordStatusCheck(client *httpclient.PosthogClient, organizationID string, proxyRecordID *string, expectedStatus string) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		return waitForProxyRecordStatus(context.Background(), client, organizationID, *proxyRecordID, expectedStatus, proxyRecordValidWaitTimeout)
+	}
+}
+
+func testAccCheckProxyRecordTargetCNAME(targetCNAME *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[testProxyRecordResourceName]
+		if !ok {
+			return fmt.Errorf(resourceNotFoundTemplate, testProxyRecordResourceName)
+		}
+
+		actual := rs.Primary.Attributes["target_cname"]
+		if actual != *targetCNAME {
+			return fmt.Errorf("attribute target_cname expected %q, got %q", *targetCNAME, actual)
+		}
+		return nil
 	}
 }
 
