@@ -81,6 +81,27 @@ export POSTHOG_TEST_USER_EMAIL="user@example.com" # Email of existing org member
 make testacc
 ```
 
+### Proxy Record DNS Harness
+
+Future `posthog_proxy_record` acceptance tests need programmable DNS so they can create a custom domain, point it at the PostHog-returned `target_cname`, and wait for the record to converge to `valid`.
+
+The repo now includes a dedicated smoke test for that DNS leg, currently with Cloudflare support:
+
+```shell
+export CLOUDFLARE_API_TOKEN="your-cloudflare-token"
+export POSTHOG_TEST_DNS_PROVIDER="cloudflare"
+export POSTHOG_TEST_DNS_ZONE_NAME="example.com"
+export POSTHOG_TEST_DNS_BASE_DOMAIN="tfacc.example.com"
+
+# Optional overrides
+export POSTHOG_TEST_DNS_RESOLVER="1.1.1.1:53"
+export POSTHOG_TEST_DNS_PROPAGATION_TIMEOUT="3m"
+
+make testacc-proxy-dns
+```
+
+The smoke test creates a unique CNAME under `POSTHOG_TEST_DNS_BASE_DOMAIN`, waits for public resolution through the configured resolver, and deletes the record during cleanup. The later `posthog_proxy_record` resource tests should reuse the same harness and replace the static CNAME target with the provider-computed PostHog `target_cname`.
+
 ## Generating Documentation
 
 ```shell
