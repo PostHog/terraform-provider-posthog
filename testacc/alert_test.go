@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -370,6 +371,46 @@ resource "posthog_insight" "test" {
 	})
 }
 
+// TestAlert_RejectsInvalidConditionType verifies that the OneOf validator on
+// `condition_type` rejects unknown values at plan time, before any API call.
+func TestAlert_RejectsInvalidConditionType(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccAlertWithCondition(rName, "definitely_not_a_condition"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)condition_type.*value must be one of`),
+			},
+		},
+	})
+}
+
+// TestAlert_RejectsNegativeSeriesIndex verifies that the AtLeast(0) validator
+// on `series_index` rejects negative values at plan time, before any API call.
+func TestAlert_RejectsNegativeSeriesIndex(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccAlertWithSeriesIndex(rName, -1),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)series_index.*value must be at least 0`),
+			},
+		},
+	})
+}
+
 // Helper function to create the base insight that alerts monitor
 func testAccAlertInsightBase(name string) string {
 	return fmt.Sprintf(`
@@ -539,4 +580,24 @@ resource "posthog_alert" "test" {
   depends_on = [posthog_insight.test]
 }
 `, testAccAlertInsightBase(name), name, checkOngoing)
+}
+
+func testAccAlertWithSeriesIndex(name string, seriesIndex int) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.test.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = 100
+  condition_type   = "absolute_value"
+  series_index     = %d
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(name), name, seriesIndex)
 }

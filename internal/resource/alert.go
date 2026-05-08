@@ -3,13 +3,15 @@ package resource
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -91,19 +93,21 @@ func (o AlertOps) Schema() schema.Schema {
 				MarkdownDescription: "Upper bound of the threshold. Alert fires when value goes above this.",
 			},
 			"condition_type": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
+				Required:            true,
 				MarkdownDescription: "Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+				Validators: []validator.String{
+					stringvalidator.OneOf(
+						"absolute_value",
+						"relative_increase",
+						"relative_decrease",
+					),
 				},
 			},
 			"series_index": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
+				Required:            true,
 				MarkdownDescription: "Index of the trend series to monitor (0-based). Used for trends alerts.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
+				Validators: []validator.Int64{
+					int64validator.AtLeast(0),
 				},
 			},
 			"check_ongoing_interval": schema.BoolAttribute{
@@ -168,24 +172,18 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 		}
 	}
 
-	if !model.ConditionType.IsNull() && !model.ConditionType.IsUnknown() {
-		req.Condition = &httpclient.AlertCondition{
-			Type: model.ConditionType.ValueString(),
-		}
+	req.Condition = &httpclient.AlertCondition{
+		Type: model.ConditionType.ValueString(),
 	}
 
-	if !model.SeriesIndex.IsNull() && !model.SeriesIndex.IsUnknown() || !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
-		req.Config = &httpclient.TrendsAlertConfig{
-			Type: "TrendsAlertConfig",
-		}
-		if !model.SeriesIndex.IsNull() && !model.SeriesIndex.IsUnknown() {
-			seriesIndex := int(model.SeriesIndex.ValueInt64())
-			req.Config.SeriesIndex = &seriesIndex
-		}
-		if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
-			checkOngoing := model.CheckOngoingInterval.ValueBool()
-			req.Config.CheckOngoingInterval = &checkOngoing
-		}
+	seriesIndex := int(model.SeriesIndex.ValueInt64())
+	req.Config = &httpclient.TrendsAlertConfig{
+		Type:        "TrendsAlertConfig",
+		SeriesIndex: &seriesIndex,
+	}
+	if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
+		checkOngoing := model.CheckOngoingInterval.ValueBool()
+		req.Config.CheckOngoingInterval = &checkOngoing
 	}
 
 	if !model.CalculationInterval.IsNull() && !model.CalculationInterval.IsUnknown() {

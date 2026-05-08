@@ -17,7 +17,9 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 
 ### Required
 
+- `condition_type` (String) Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.
 - `insight` (Number) ID of the insight this alert monitors.
+- `series_index` (Number) Index of the trend series to monitor (0-based). Used for trends alerts.
 - `subscribed_users` (Set of Number) List of user IDs to notify when the alert fires.
 - `threshold_type` (String) Type of threshold: `absolute` for fixed values, `percentage` for relative changes.
 
@@ -25,11 +27,9 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 
 - `calculation_interval` (String) How often to check the alert: `hourly`, `daily`, `weekly`, or `monthly`.
 - `check_ongoing_interval` (Boolean) Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked.
-- `condition_type` (String) Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.
 - `enabled` (Boolean) Whether the alert is enabled. Defaults to true.
 - `name` (String) Name of the alert.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
-- `series_index` (Number) Index of the trend series to monitor (0-based). Used for trends alerts.
 - `skip_weekend` (Boolean) Whether to skip checking the alert on weekends.
 - `threshold_lower` (Number) Lower bound of the threshold. Alert fires when value goes below this.
 - `threshold_upper` (Number) Upper bound of the threshold. Alert fires when value goes above this.
