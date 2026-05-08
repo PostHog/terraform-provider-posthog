@@ -3,12 +3,12 @@
 page_title: "posthog_feature_flag Resource - posthog"
 subcategory: ""
 description: |-
-  PostHog Feature Flag resource. The current PostHog feature flag API exposes a display name, but not a separate dedicated description field.
+  PostHog Feature Flag resource
 ---
 
 # posthog_feature_flag (Resource)
 
-PostHog Feature Flag resource. The current PostHog feature flag API exposes a display `name`, but not a separate dedicated `description` field.
+PostHog Feature Flag resource
 
 
 
@@ -24,7 +24,7 @@ PostHog Feature Flag resource. The current PostHog feature flag API exposes a di
 - `active` (Boolean) Whether the feature flag is active
 - `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
 - `filters` (String) Feature flag filters as JSON
-- `name` (String) Feature flag display name. The current PostHog API does not expose a separate dedicated description field for feature flags.
+- `name` (String) Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `rollout_percentage` (Number) Rollout percentage (0-100)
 - `tags` (Set of String) Set of tags for the feature flag
