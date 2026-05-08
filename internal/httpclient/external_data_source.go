@@ -11,7 +11,7 @@ type ExternalDataSource struct {
 	ID         string                       `json:"id"`
 	SourceType string                       `json:"source_type"`
 	Prefix     *string                      `json:"prefix,omitempty"`
-	JobInputs  map[string]interface{}       `json:"job_inputs,omitempty"`
+	JobInputs  map[string]any       `json:"job_inputs,omitempty"`
 	Schemas    []ExternalDataSourceSchema   `json:"schemas,omitempty"`
 	Status     *string                      `json:"status,omitempty"`
 	LastRunAt  *string                      `json:"last_run_at,omitempty"`
@@ -25,7 +25,7 @@ type ExternalDataSourceSchema struct {
 	Status        *string `json:"status,omitempty"`
 }
 
-func (c *PosthogClient) CreateExternalDataSource(ctx context.Context, projectID string, input interface{}) (ExternalDataSource, error) {
+func (c *PosthogClient) CreateExternalDataSource(ctx context.Context, projectID string, input any) (ExternalDataSource, error) {
 	path := fmt.Sprintf("/api/projects/%s/external_data_sources/", projectID)
 	result, _, err := doPost[ExternalDataSource](c, ctx, path, input)
 	return result, err
@@ -36,7 +36,7 @@ func (c *PosthogClient) GetExternalDataSource(ctx context.Context, projectID, id
 	return doGet[ExternalDataSource](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateExternalDataSource(ctx context.Context, projectID, id string, input interface{}) (ExternalDataSource, HTTPStatusCode, error) {
+func (c *PosthogClient) UpdateExternalDataSource(ctx context.Context, projectID, id string, input any) (ExternalDataSource, HTTPStatusCode, error) {
 	path := fmt.Sprintf("/api/projects/%s/external_data_sources/%s/", projectID, id)
 	return doPatch[ExternalDataSource](c, ctx, path, input)
 }

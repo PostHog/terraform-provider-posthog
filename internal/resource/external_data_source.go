@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -16,8 +17,19 @@ import (
 	"github.com/posthog/terraform-provider/internal/resource/core"
 )
 
+// NewExternalDataSource builds the posthog_external_data_source resource.
+//
+// The PostHog create endpoint (POST /api/projects/{id}/external_data_sources/)
+// expects {source_type, prefix?, payload: {connection-fields..., schemas: [...]}}
+// and hardcodes the per-schema sync cadence at 6 hours (5 minutes for CDC). The
+// update endpoint reads `job_inputs` at the top level of the body and treats
+// `prefix` and `schemas` as immutable for non-direct-postgres sources, so we
+// model `source_type`, `prefix`, and `schemas` as RequiresReplace and limit
+// updates to job_inputs only. `sync_frequency` is exposed read-only because the
+// create endpoint cannot accept it; per-schema cadence must be edited via the
+// PostHog UI or the schemas API.
 func NewExternalDataSource() resource.Resource {
-	return core.NewGenericResource[ExternalDataSourceTFModel, map[string]interface{}, httpclient.ExternalDataSource](
+	return core.NewGenericResource[ExternalDataSourceTFModel, map[string]any, httpclient.ExternalDataSource](
 		ExternalDataSourceOps{},
 		core.ProjectScopedImportParser[ExternalDataSourceTFModel](),
 	)
@@ -44,7 +56,9 @@ func (o ExternalDataSourceOps) ResourceName() string {
 
 func (o ExternalDataSourceOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "PostHog external data warehouse source (e.g. Stripe, Hubspot, Postgres, MySQL, MSSQL, Snowflake, BigQuery, Salesforce, Zendesk, Vitally, Chargebee).",
+		MarkdownDescription: "PostHog external data warehouse source (e.g. Stripe, Hubspot, Postgres, MySQL, MSSQL, Snowflake, BigQuery, Salesforce, Zendesk, Vitally, Chargebee). " +
+			"`source_type`, `prefix`, and `schemas` are immutable: changes trigger replacement. " +
+			"Sync cadence is managed by PostHog (per-schema) and is not configurable on this resource.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -64,11 +78,11 @@ func (o ExternalDataSourceOps) Schema() schema.Schema {
 				},
 			},
 			"prefix": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Optional prefix for synced table names (e.g. `stripe_prod_`). Useful when connecting multiple sources of the same type.",
+				Optional: true,
+				MarkdownDescription: "Optional prefix for synced table names (e.g. `stripe_prod_`). Useful when connecting multiple sources of the same type. " +
+					"The PostHog update endpoint silently ignores prefix changes for non-direct-postgres sources, so this resource treats it as RequiresReplace.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"job_inputs_json": schema.StringAttribute{
@@ -76,16 +90,22 @@ func (o ExternalDataSourceOps) Schema() schema.Schema {
 				Sensitive: true,
 				MarkdownDescription: "JSON-encoded connection configuration for the source. Shape depends on `source_type`. " +
 					"For example Postgres expects `{host, port, database, user, password, schema}`; Stripe expects `{stripe_account_id, stripe_secret_key}`. " +
-					"PostHog redacts secret values when reading, so the plan value is always preserved in state.",
+					"PostHog redacts secret values when reading, so the plan value is preserved in state. " +
+					"On import, redacted secrets will appear in state until the next apply with real values.",
 			},
 			"schemas": schema.ListAttribute{
-				Required:            true,
-				ElementType:         types.StringType,
-				MarkdownDescription: "List of table names to sync from the source (e.g. `[\"users\", \"orders\"]`). PostHog discovers available tables from the source; these must match discovered table names.",
+				Required:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "List of table names to sync from the source (e.g. `[\"users\", \"orders\"]`). PostHog discovers available tables from the source; these must match discovered table names. " +
+					"The source-level update endpoint cannot edit the schema list, so changes force destroy+recreate.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.RequiresReplace(),
+				},
 			},
 			"sync_frequency": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "How often to sync. Managed per-schema by PostHog (e.g. `5min`, `30min`, `1hour`, `6hour`, `12hour`, `day`, `week`, `never`). Reports the sync frequency of the first schema.",
+				Computed: true,
+				MarkdownDescription: "Sync cadence reported by PostHog. Defaults to 6 hours (5 minutes for CDC schemas) and is not configurable on this resource — the create endpoint does not accept a sync frequency. " +
+					"Reports the value of the first schema; sources with mixed schedules will see this flap. Modify per-schema cadence via the PostHog UI or schemas API.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -115,74 +135,66 @@ func (o ExternalDataSourceOps) Schema() schema.Schema {
 	}
 }
 
-func (o ExternalDataSourceOps) BuildCreateRequest(ctx context.Context, model ExternalDataSourceTFModel) (map[string]interface{}, diag.Diagnostics) {
+// BuildCreateRequest builds the body for POST /api/projects/{id}/external_data_sources/.
+// The PostHog create serializer expects `source_type` and `prefix` at the top
+// level of the request, with connection credentials and a `schemas` array
+// nested inside `payload`.
+func (o ExternalDataSourceOps) BuildCreateRequest(ctx context.Context, model ExternalDataSourceTFModel) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	// Parse job_inputs_json into a flat map — these become top-level keys in the payload.
 	inputs, d := parseJobInputsJSON(model.JobInputsJSON)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
 	}
 
-	payload := make(map[string]interface{})
-	for k, v := range inputs {
-		payload[k] = v
-	}
-
-	if !model.Prefix.IsNull() && !model.Prefix.IsUnknown() {
-		payload["prefix"] = model.Prefix.ValueString()
-	}
-
-	// Build schemas array from the list of table names.
 	schemaNames, d := extractSchemaNames(ctx, model.Schemas)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
 	}
 
-	schemaEntries := make([]map[string]interface{}, 0, len(schemaNames))
+	schemaEntries := make([]map[string]any, 0, len(schemaNames))
 	for _, name := range schemaNames {
-		schemaEntries = append(schemaEntries, map[string]interface{}{
+		schemaEntries = append(schemaEntries, map[string]any{
 			"name":        name,
 			"should_sync": true,
 		})
 	}
+
+	payload := make(map[string]any, len(inputs)+1)
+	for k, v := range inputs {
+		payload[k] = v
+	}
 	payload["schemas"] = schemaEntries
 
-	req := map[string]interface{}{
+	req := map[string]any{
 		"source_type": model.SourceType.ValueString(),
 		"payload":     payload,
+	}
+	if !model.Prefix.IsNull() && !model.Prefix.IsUnknown() {
+		req["prefix"] = model.Prefix.ValueString()
 	}
 
 	return req, diags
 }
 
-func (o ExternalDataSourceOps) BuildUpdateRequest(ctx context.Context, plan, state ExternalDataSourceTFModel) (map[string]interface{}, diag.Diagnostics) {
+// BuildUpdateRequest builds the body for PATCH /api/projects/{id}/external_data_sources/{id}/.
+// Only `job_inputs` is mutable: source_type/prefix/schemas are RequiresReplace,
+// and the PostHog update serializer reads job_inputs (not payload) at the top
+// level of the body.
+func (o ExternalDataSourceOps) BuildUpdateRequest(_ context.Context, plan, _ ExternalDataSourceTFModel) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	req := make(map[string]interface{})
-
-	if !plan.Prefix.IsNull() && !plan.Prefix.IsUnknown() {
-		req["prefix"] = plan.Prefix.ValueString()
-	} else if core.ShouldClearString(plan.Prefix, state.Prefix) {
-		req["prefix"] = ""
-	}
-
-	// Rebuild the payload with updated job_inputs if changed.
 	inputs, d := parseJobInputsJSON(plan.JobInputsJSON)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
 	}
 
-	payload := make(map[string]interface{})
-	for k, v := range inputs {
-		payload[k] = v
-	}
-
-	if len(payload) > 0 {
-		req["payload"] = payload
+	req := make(map[string]any)
+	if len(inputs) > 0 {
+		req["job_inputs"] = inputs
 	}
 
 	return req, diags
@@ -195,8 +207,6 @@ func (o ExternalDataSourceOps) MapResponseToModel(ctx context.Context, resp http
 	if resp.SourceType != "" {
 		model.SourceType = types.StringValue(resp.SourceType)
 	}
-	// PostHog may not echo prefix back in the response even though it was
-	// accepted on create. Preserve the plan/state value when the API returns null.
 	if resp.Prefix != nil && strings.TrimSpace(*resp.Prefix) != "" {
 		model.Prefix = types.StringValue(strings.TrimSpace(*resp.Prefix))
 	}
@@ -204,14 +214,12 @@ func (o ExternalDataSourceOps) MapResponseToModel(ctx context.Context, resp http
 	model.LastRunAt = core.PtrToStringNullIfEmptyTrimmed(resp.LastRunAt)
 	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
 
-	// Derive sync_frequency from the first schema (PostHog stores it per-schema).
 	if len(resp.Schemas) > 0 && resp.Schemas[0].SyncFrequency != nil {
 		model.SyncFrequency = types.StringValue(*resp.Schemas[0].SyncFrequency)
 	} else if model.SyncFrequency.IsNull() || model.SyncFrequency.IsUnknown() {
 		model.SyncFrequency = types.StringNull()
 	}
 
-	// Map schema names from the response.
 	if len(resp.Schemas) > 0 {
 		names := make([]string, 0, len(resp.Schemas))
 		for _, s := range resp.Schemas {
@@ -226,11 +234,10 @@ func (o ExternalDataSourceOps) MapResponseToModel(ctx context.Context, resp http
 		model.Schemas = types.ListNull(types.StringType)
 	}
 
-	// job_inputs_json contains credentials. PostHog redacts secret values on GET,
-	// so echoing the response would produce spurious diffs and "inconsistent values
-	// for sensitive attribute" errors. Keep the prior/planned value.
-	// On import (state is null), fall back to whatever PostHog returns so the user
-	// at least sees non-secret keys.
+	// PostHog redacts sensitive credentials on GET, so echoing the response
+	// would produce spurious diffs. Keep the prior plan value when it exists.
+	// On import (state is null) fall back to the response so non-secret keys
+	// are at least visible — the user must follow up with real secrets.
 	if model.JobInputsJSON.IsNull() || model.JobInputsJSON.IsUnknown() {
 		if len(resp.JobInputs) > 0 {
 			bytes, err := json.Marshal(resp.JobInputs)
@@ -247,7 +254,7 @@ func (o ExternalDataSourceOps) MapResponseToModel(ctx context.Context, resp http
 	return diags
 }
 
-func (o ExternalDataSourceOps) Create(ctx context.Context, client httpclient.PosthogClient, model ExternalDataSourceTFModel, req map[string]interface{}) (httpclient.ExternalDataSource, error) {
+func (o ExternalDataSourceOps) Create(ctx context.Context, client httpclient.PosthogClient, model ExternalDataSourceTFModel, req map[string]any) (httpclient.ExternalDataSource, error) {
 	return client.CreateExternalDataSource(ctx, model.GetEffectiveProjectID(), req)
 }
 
@@ -255,7 +262,7 @@ func (o ExternalDataSourceOps) Read(ctx context.Context, client httpclient.Posth
 	return client.GetExternalDataSource(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func (o ExternalDataSourceOps) Update(ctx context.Context, client httpclient.PosthogClient, model ExternalDataSourceTFModel, req map[string]interface{}) (httpclient.ExternalDataSource, httpclient.HTTPStatusCode, error) {
+func (o ExternalDataSourceOps) Update(ctx context.Context, client httpclient.PosthogClient, model ExternalDataSourceTFModel, req map[string]any) (httpclient.ExternalDataSource, httpclient.HTTPStatusCode, error) {
 	return client.UpdateExternalDataSource(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 }
 
@@ -263,16 +270,16 @@ func (o ExternalDataSourceOps) Delete(ctx context.Context, client httpclient.Pos
 	return client.DeleteExternalDataSource(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func parseJobInputsJSON(v types.String) (map[string]interface{}, diag.Diagnostics) {
+func parseJobInputsJSON(v types.String) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if v.IsNull() || v.IsUnknown() {
 		return nil, diags
 	}
 	raw := strings.TrimSpace(v.ValueString())
 	if raw == "" {
-		return map[string]interface{}{}, diags
+		return map[string]any{}, diags
 	}
-	var inputs map[string]interface{}
+	var inputs map[string]any
 	if err := json.Unmarshal([]byte(raw), &inputs); err != nil {
 		diags.AddError("Invalid job_inputs_json", fmt.Sprintf("job_inputs_json must be a valid JSON object: %s", err.Error()))
 		return nil, diags

@@ -8,12 +8,13 @@ variable "pg_password" {
   sensitive = true
 }
 
-# Stripe warehouse source
+# Stripe warehouse source.
+# `source_type`, `prefix`, and `schemas` are immutable — changing any of them
+# replaces the resource. Sync cadence is managed by PostHog (per-schema).
 resource "posthog_external_data_source" "stripe" {
-  source_type    = "Stripe"
-  prefix         = "stripe_"
-  sync_frequency = "6hour"
-  schemas        = ["charges", "customers", "invoices"]
+  source_type = "Stripe"
+  prefix      = "stripe_"
+  schemas     = ["charges", "customers", "invoices"]
 
   job_inputs_json = jsonencode({
     stripe_account_id = "acct_123"
@@ -23,9 +24,8 @@ resource "posthog_external_data_source" "stripe" {
 
 # Postgres warehouse source
 resource "posthog_external_data_source" "prod_pg" {
-  source_type    = "Postgres"
-  sync_frequency = "day"
-  schemas        = ["users", "orders"]
+  source_type = "Postgres"
+  schemas     = ["users", "orders"]
 
   job_inputs_json = jsonencode({
     host     = "db.internal"
