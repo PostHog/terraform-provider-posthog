@@ -44,13 +44,23 @@ type Survey struct {
 	FormContent                  interface{}            `json:"form_content,omitempty"`
 }
 
+// SurveyRequest is the wire format for POST/PUT to the surveys endpoint.
+//
+// Fields marked nullable in the upstream OpenAPI schema (linked_flag_id,
+// linked_insight_id, responses_limit, iteration_count, iteration_frequency_days,
+// response_sampling_interval, response_sampling_limit) deliberately omit `,omitempty`
+// so that a nil pointer serialises as JSON `null`. PostHog interprets `null` as
+// "clear this column", which is the semantic users expect when they remove the
+// attribute from their Terraform config. Fields that are not nullable upstream
+// (targeting_flag_id, archived) keep `,omitempty` so an absent value is omitted
+// rather than rejected.
 type SurveyRequest struct {
 	Name                         string        `json:"name"`
 	Description                  *string       `json:"description,omitempty"`
 	Type                         string        `json:"type"`
 	Schedule                     *string       `json:"schedule,omitempty"`
-	LinkedFlagID                 *int64        `json:"linked_flag_id,omitempty"`
-	LinkedInsightID              *int64        `json:"linked_insight_id,omitempty"`
+	LinkedFlagID                 *int64        `json:"linked_flag_id"`
+	LinkedInsightID              *int64        `json:"linked_insight_id"`
 	TargetingFlagID              *int64        `json:"targeting_flag_id,omitempty"`
 	TargetingFlagFilters         interface{}   `json:"targeting_flag_filters,omitempty"`
 	RemoveTargetingFlag          *bool         `json:"remove_targeting_flag,omitempty"`
@@ -60,13 +70,13 @@ type SurveyRequest struct {
 	StartDate                    *string       `json:"start_date,omitempty"`
 	EndDate                      *string       `json:"end_date,omitempty"`
 	Archived                     *bool         `json:"archived,omitempty"`
-	ResponsesLimit               *int64        `json:"responses_limit,omitempty"`
-	IterationCount               *int64        `json:"iteration_count,omitempty"`
-	IterationFrequencyDays       *int64        `json:"iteration_frequency_days,omitempty"`
+	ResponsesLimit               *int64        `json:"responses_limit"`
+	IterationCount               *int64        `json:"iteration_count"`
+	IterationFrequencyDays       *int64        `json:"iteration_frequency_days"`
 	ResponseSamplingStartDate    *string       `json:"response_sampling_start_date,omitempty"`
 	ResponseSamplingIntervalType *string       `json:"response_sampling_interval_type,omitempty"`
-	ResponseSamplingInterval     *int64        `json:"response_sampling_interval,omitempty"`
-	ResponseSamplingLimit        *int64        `json:"response_sampling_limit,omitempty"`
+	ResponseSamplingInterval     *int64        `json:"response_sampling_interval"`
+	ResponseSamplingLimit        *int64        `json:"response_sampling_limit"`
 	ResponseSamplingDailyLimits  interface{}   `json:"response_sampling_daily_limits,omitempty"`
 	EnablePartialResponses       *bool         `json:"enable_partial_responses,omitempty"`
 	EnableIframeEmbedding        *bool         `json:"enable_iframe_embedding,omitempty"`

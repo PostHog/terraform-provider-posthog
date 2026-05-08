@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,12 +32,12 @@ func TestSurveyCRUDRequests(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/"+testSurveyProjectID+"/surveys/":
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&createBody))
-			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: stringPtr(testSurveyNameCreated)})
+			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameCreated)})
 		case r.Method == http.MethodGet && r.URL.Path == testSurveyPath:
-			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: stringPtr(testSurveyNameFetched)})
+			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameFetched)})
 		case r.Method == http.MethodPut && r.URL.Path == testSurveyPath:
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&updateBody))
-			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: stringPtr(testSurveyNameUpdated)})
+			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameUpdated)})
 		case r.Method == http.MethodDelete && r.URL.Path == testSurveyPath:
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
@@ -67,7 +68,7 @@ func TestSurveyCRUDRequests(t *testing.T) {
 	updated, status, err := client.UpdateSurvey(ctx, testSurveyProjectID, testSurveyID, SurveyRequest{
 		Name:        testSurveyNameUpdated,
 		Type:        "popover",
-		Description: stringPtr("desc"),
+		Description: util.StringPtr("desc"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, HTTPStatusCode(http.StatusOK), status)
@@ -79,13 +80,25 @@ func TestSurveyCRUDRequests(t *testing.T) {
 
 	assert.Equal(t, testSurveyNameCreated, createBody["name"])
 	assert.Equal(t, "popover", createBody["type"])
+	// targeting_flag_id is not nullable upstream; absent values must stay omitted.
 	_, hasTargetingFlagID := createBody["targeting_flag_id"]
 	assert.False(t, hasTargetingFlagID)
+	// Nullable integer fields must be present (as JSON null) so PostHog actually
+	// clears them on update; see SurveyRequest tag comments for rationale.
+	for _, key := range []string{
+		"linked_flag_id",
+		"linked_insight_id",
+		"responses_limit",
+		"iteration_count",
+		"iteration_frequency_days",
+		"response_sampling_interval",
+		"response_sampling_limit",
+	} {
+		raw, present := createBody[key]
+		assert.True(t, present, "%s should be present in the create body", key)
+		assert.Nil(t, raw, "%s should serialize as JSON null when unset", key)
+	}
 
 	assert.Equal(t, testSurveyNameUpdated, updateBody["name"])
 	assert.Equal(t, "desc", updateBody["description"])
-}
-
-func stringPtr(value string) *string {
-	return &value
 }

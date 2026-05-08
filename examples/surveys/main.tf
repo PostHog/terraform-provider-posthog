@@ -17,7 +17,7 @@ resource "posthog_survey" "customer_feedback" {
   questions_json = jsonencode([
     {
       type          = "rating"
-      question      = "How satisfied are you with Ansyo?"
+      question      = "How would you rate your PostHog experience?"
       scale         = 10
       buttonText    = "Submit"
       isNpsQuestion = true
@@ -25,7 +25,7 @@ resource "posthog_survey" "customer_feedback" {
   ])
 
   conditions_json = jsonencode({
-    url = "https://app.ansyo.co/*"
+    url = "https://us.posthog.com/*"
   })
 }
 

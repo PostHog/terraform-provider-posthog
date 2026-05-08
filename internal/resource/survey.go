@@ -61,6 +61,9 @@ type SurveyTFModel struct {
 	LinkedFlagJSON               types.String `tfsdk:"linked_flag_json"`
 	TargetingFlagJSON            types.String `tfsdk:"targeting_flag_json"`
 	InternalTargetingFlagJSON    types.String `tfsdk:"internal_targeting_flag_json"`
+	CurrentIteration             types.Int64  `tfsdk:"current_iteration"`
+	CurrentIterationStartDate    types.String `tfsdk:"current_iteration_start_date"`
+	IterationStartDatesJSON      types.String `tfsdk:"iteration_start_dates_json"`
 }
 
 type SurveyOps struct{}
@@ -237,6 +240,27 @@ func (o SurveyOps) Schema() schema.Schema {
 				Computed:            true,
 				MarkdownDescription: "JSON object describing the internal targeting feature flag returned by the API.",
 			},
+			"current_iteration": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "Current iteration index for `recurring` surveys. Read-only.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"current_iteration_start_date": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "RFC3339 start date of the current iteration. Read-only.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"iteration_start_dates_json": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "JSON array of RFC3339 start dates for past and current iterations. Read-only.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -291,10 +315,10 @@ func applySurveyDescription(plan, state SurveyTFModel, req *httpclient.SurveyReq
 }
 
 func applySurveyRelationships(plan SurveyTFModel, req *httpclient.SurveyRequest) {
-	req.LinkedFlagID = int64PtrFromValue(plan.LinkedFlagID)
-	req.LinkedInsightID = int64PtrFromValue(plan.LinkedInsightID)
-	req.TargetingFlagID = int64PtrFromValue(plan.TargetingFlagID)
-	req.Schedule = stringPtrFromValue(plan.Schedule)
+	req.LinkedFlagID = util.Int64PtrFromValue(plan.LinkedFlagID)
+	req.LinkedInsightID = util.Int64PtrFromValue(plan.LinkedInsightID)
+	req.TargetingFlagID = util.Int64PtrFromValue(plan.TargetingFlagID)
+	req.Schedule = util.StringPtrFromValue(plan.Schedule)
 }
 
 func parseSurveyQuestions(attr types.String) ([]interface{}, diag.Diagnostics) {
@@ -352,25 +376,25 @@ func assignSurveyTargetingFilters(plan, state SurveyTFModel, req *httpclient.Sur
 }
 
 func applySurveyTimingFields(plan SurveyTFModel, req *httpclient.SurveyRequest) {
-	req.StartDate = stringPtrFromValue(plan.StartDate)
-	req.EndDate = stringPtrFromValue(plan.EndDate)
-	req.Archived = boolPtrFromValue(plan.Archived)
-	req.ResponsesLimit = int64PtrFromValue(plan.ResponsesLimit)
-	req.IterationCount = int64PtrFromValue(plan.IterationCount)
-	req.IterationFrequencyDays = int64PtrFromValue(plan.IterationFrequencyDays)
+	req.StartDate = util.StringPtrFromValue(plan.StartDate)
+	req.EndDate = util.StringPtrFromValue(plan.EndDate)
+	req.Archived = util.BoolPtrFromValue(plan.Archived)
+	req.ResponsesLimit = util.Int64PtrFromValue(plan.ResponsesLimit)
+	req.IterationCount = util.Int64PtrFromValue(plan.IterationCount)
+	req.IterationFrequencyDays = util.Int64PtrFromValue(plan.IterationFrequencyDays)
 }
 
 func applySurveySamplingFields(plan SurveyTFModel, req *httpclient.SurveyRequest) {
-	req.ResponseSamplingStartDate = stringPtrFromValue(plan.ResponseSamplingStartDate)
-	req.ResponseSamplingIntervalType = stringPtrFromValue(plan.ResponseSamplingIntervalType)
-	req.ResponseSamplingInterval = int64PtrFromValue(plan.ResponseSamplingInterval)
-	req.ResponseSamplingLimit = int64PtrFromValue(plan.ResponseSamplingLimit)
+	req.ResponseSamplingStartDate = util.StringPtrFromValue(plan.ResponseSamplingStartDate)
+	req.ResponseSamplingIntervalType = util.StringPtrFromValue(plan.ResponseSamplingIntervalType)
+	req.ResponseSamplingInterval = util.Int64PtrFromValue(plan.ResponseSamplingInterval)
+	req.ResponseSamplingLimit = util.Int64PtrFromValue(plan.ResponseSamplingLimit)
 }
 
 func applySurveyBooleanFields(plan SurveyTFModel, req *httpclient.SurveyRequest) {
-	req.EnablePartialResponses = boolPtrFromValue(plan.EnablePartialResponses)
-	req.EnableIframeEmbedding = boolPtrFromValue(plan.EnableIframeEmbedding)
-	req.CreateInFolder = stringPtrFromValue(plan.CreateInFolder)
+	req.EnablePartialResponses = util.BoolPtrFromValue(plan.EnablePartialResponses)
+	req.EnableIframeEmbedding = util.BoolPtrFromValue(plan.EnableIframeEmbedding)
+	req.CreateInFolder = util.StringPtrFromValue(plan.CreateInFolder)
 }
 
 func applySurveyTargetingClear(plan, state SurveyTFModel, req *httpclient.SurveyRequest) {
@@ -419,18 +443,18 @@ func mapSurveyQuestionsField(resp httpclient.Survey, model *SurveyTFModel) {
 		return
 	}
 
-	normalized, err := normalizeSurveyQuestionsForState(resp.Questions, valueStringOrEmpty(model.QuestionsJSON))
+	normalized, err := normalizeSurveyQuestionsForState(resp.Questions, util.ValueStringOrEmpty(model.QuestionsJSON))
 	if err == nil {
 		model.QuestionsJSON = types.StringValue(normalized)
 	}
 }
 
 func mapSurveyStructuredJSONFields(resp httpclient.Survey, model *SurveyTFModel) {
-	applyNormalizedJSONString(resp.Conditions, valueStringOrEmpty(model.ConditionsJSON), &model.ConditionsJSON)
-	applyNormalizedJSONString(resp.Appearance, valueStringOrEmpty(model.AppearanceJSON), &model.AppearanceJSON)
-	applyNormalizedJSONString(resp.ResponseSamplingDailyLimits, valueStringOrEmpty(model.ResponseSamplingDailyLimits), &model.ResponseSamplingDailyLimits)
-	applyNormalizedJSONString(resp.Translations, valueStringOrEmpty(model.TranslationsJSON), &model.TranslationsJSON)
-	applyNormalizedJSONString(resp.FormContent, valueStringOrEmpty(model.FormContentJSON), &model.FormContentJSON)
+	applyNormalizedJSONString(resp.Conditions, util.ValueStringOrEmpty(model.ConditionsJSON), &model.ConditionsJSON)
+	applyNormalizedJSONString(resp.Appearance, util.ValueStringOrEmpty(model.AppearanceJSON), &model.AppearanceJSON)
+	applyNormalizedJSONString(resp.ResponseSamplingDailyLimits, util.ValueStringOrEmpty(model.ResponseSamplingDailyLimits), &model.ResponseSamplingDailyLimits)
+	applyNormalizedJSONString(resp.Translations, util.ValueStringOrEmpty(model.TranslationsJSON), &model.TranslationsJSON)
+	applyNormalizedJSONString(resp.FormContent, util.ValueStringOrEmpty(model.FormContentJSON), &model.FormContentJSON)
 }
 
 func preserveWriteOnlySurveyFields(model *SurveyTFModel) {
@@ -446,13 +470,13 @@ func mapSurveyScheduleFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.StartDate = core.PtrToStringNullIfEmptyTrimmed(resp.StartDate)
 	model.EndDate = core.PtrToStringNullIfEmptyTrimmed(resp.EndDate)
 	model.Archived = core.PtrToBool(resp.Archived)
-	model.ResponsesLimit = int64ValueOrNull(resp.ResponsesLimit)
-	model.IterationCount = int64ValueOrNull(resp.IterationCount)
-	model.IterationFrequencyDays = int64ValueOrNull(resp.IterationFrequencyDays)
+	model.ResponsesLimit = core.PtrToInt64(resp.ResponsesLimit)
+	model.IterationCount = core.PtrToInt64(resp.IterationCount)
+	model.IterationFrequencyDays = core.PtrToInt64(resp.IterationFrequencyDays)
 	model.ResponseSamplingStartDate = core.PtrToStringNullIfEmptyTrimmed(resp.ResponseSamplingStartDate)
 	model.ResponseSamplingIntervalType = core.PtrToStringNullIfEmptyTrimmed(resp.ResponseSamplingIntervalType)
-	model.ResponseSamplingInterval = int64ValueOrNull(resp.ResponseSamplingInterval)
-	model.ResponseSamplingLimit = int64ValueOrNull(resp.ResponseSamplingLimit)
+	model.ResponseSamplingInterval = core.PtrToInt64(resp.ResponseSamplingInterval)
+	model.ResponseSamplingLimit = core.PtrToInt64(resp.ResponseSamplingLimit)
 	model.EnablePartialResponses = core.PtrToBool(resp.EnablePartialResponses)
 	model.EnableIframeEmbedding = core.PtrToBool(resp.EnableIframeEmbedding)
 }
@@ -463,6 +487,9 @@ func mapSurveyComputedFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.LinkedFlagJSON = jsonStringValue(resp.LinkedFlag)
 	model.TargetingFlagJSON = jsonStringValue(resp.TargetingFlag)
 	model.InternalTargetingFlagJSON = jsonStringValue(resp.InternalTargetingFlag)
+	model.CurrentIteration = core.PtrToInt64(resp.CurrentIteration)
+	model.CurrentIterationStartDate = core.PtrToStringNullIfEmptyTrimmed(resp.CurrentIterationStartDate)
+	model.IterationStartDatesJSON = jsonStringValue(resp.IterationStartDates)
 }
 
 func applyNormalizedJSONString(apiData interface{}, current string, target *types.String) {
@@ -514,30 +541,14 @@ func parseJSONArrayAttribute(attr types.String, name string) ([]interface{}, dia
 	return parsed, diags
 }
 
-func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (string, error) {
-	return normalizeJSONForState(stripSurveyQuestionServerFields(apiData), userJSON)
+// surveyQuestionServerFields are fields the API generates per-question (server-assigned IDs)
+// that should be stripped before comparison with user-provided JSON to avoid spurious diffs.
+var surveyQuestionServerFields = map[string]struct{}{
+	"id": {},
 }
 
-func stripSurveyQuestionServerFields(v interface{}) interface{} {
-	switch value := v.(type) {
-	case map[string]interface{}:
-		cleaned := make(map[string]interface{}, len(value))
-		for k, inner := range value {
-			if k == "id" {
-				continue
-			}
-			cleaned[k] = stripSurveyQuestionServerFields(inner)
-		}
-		return cleaned
-	case []interface{}:
-		cleaned := make([]interface{}, len(value))
-		for i, item := range value {
-			cleaned[i] = stripSurveyQuestionServerFields(item)
-		}
-		return cleaned
-	default:
-		return v
-	}
+func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (string, error) {
+	return normalizeJSONForState(util.StripFields(apiData, surveyQuestionServerFields), userJSON)
 }
 
 func normalizedJSONString(apiData interface{}, current string) (types.String, bool) {
@@ -564,38 +575,12 @@ func jsonStringValue(value interface{}) types.String {
 	if err != nil {
 		return types.StringNull()
 	}
+	// A typed-nil map/slice marshals to the JSON literal "null"; surface that as
+	// a Terraform null instead of the four-character string "null".
+	if string(data) == "null" {
+		return types.StringNull()
+	}
 	return types.StringValue(string(data))
-}
-
-func int64PtrFromValue(value types.Int64) *int64 {
-	if value.IsNull() || value.IsUnknown() {
-		return nil
-	}
-	v := value.ValueInt64()
-	return &v
-}
-
-func stringPtrFromValue(value types.String) *string {
-	if value.IsNull() || value.IsUnknown() {
-		return nil
-	}
-	v := value.ValueString()
-	return &v
-}
-
-func boolPtrFromValue(value types.Bool) *bool {
-	if value.IsNull() || value.IsUnknown() {
-		return nil
-	}
-	v := value.ValueBool()
-	return &v
-}
-
-func int64ValueOrNull(value *int64) types.Int64 {
-	if value == nil {
-		return types.Int64Null()
-	}
-	return types.Int64Value(*value)
 }
 
 func int64ValueFromMapOrNull(value map[string]interface{}) types.Int64 {
@@ -624,11 +609,4 @@ func int64FromMap(value map[string]interface{}) (int64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func valueStringOrEmpty(value types.String) string {
-	if value.IsNull() || value.IsUnknown() {
-		return ""
-	}
-	return value.ValueString()
 }

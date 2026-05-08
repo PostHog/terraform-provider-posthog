@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -225,31 +226,34 @@ func TestSurveyMapResponseToModel(t *testing.T) {
 	}
 	resp := httpclient.Survey{
 		ID:                           testSurveyID,
-		Name:                         stringPtr("Survey"),
-		Description:                  stringPtr("Description"),
-		Type:                         stringPtr(testSurveyType),
-		Schedule:                     stringPtr("once"),
+		Name:                         util.StringPtr("Survey"),
+		Description:                  util.StringPtr("Description"),
+		Type:                         util.StringPtr(testSurveyType),
+		Schedule:                     util.StringPtr("once"),
 		LinkedFlag:                   map[string]interface{}{"id": float64(11)},
 		TargetingFlag:                map[string]interface{}{"id": float64(12)},
 		InternalTargetingFlag:        map[string]interface{}{"id": float64(13)},
 		Questions:                    []interface{}{map[string]interface{}{"id": "generated", "type": "open", "question": "How are you?"}},
 		Conditions:                   map[string]interface{}{"url": "https://example.com"},
 		Appearance:                   map[string]interface{}{"border_color": "#000000"},
-		CreatedAt:                    stringPtr(testSurveyStartDate),
+		CreatedAt:                    util.StringPtr(testSurveyStartDate),
 		CreatedBy:                    map[string]interface{}{"uuid": "user-123"},
-		StartDate:                    stringPtr(testSurveyStartDate),
-		EndDate:                      stringPtr(testSurveyEndDate),
-		Archived:                     boolPtr(true),
-		ResponsesLimit:               int64Ptr(10),
-		IterationCount:               int64Ptr(2),
-		IterationFrequencyDays:       int64Ptr(7),
-		ResponseSamplingStartDate:    stringPtr(testSurveySamplingStartDate),
-		ResponseSamplingIntervalType: stringPtr("week"),
-		ResponseSamplingInterval:     int64Ptr(2),
-		ResponseSamplingLimit:        int64Ptr(20),
+		StartDate:                    util.StringPtr(testSurveyStartDate),
+		EndDate:                      util.StringPtr(testSurveyEndDate),
+		Archived:                     util.BoolPtr(true),
+		ResponsesLimit:               util.Int64Ptr(10),
+		IterationCount:               util.Int64Ptr(2),
+		IterationFrequencyDays:       util.Int64Ptr(7),
+		IterationStartDates:          []interface{}{testSurveyStartDate, testSurveySamplingStartDate},
+		CurrentIteration:             util.Int64Ptr(1),
+		CurrentIterationStartDate:    util.StringPtr(testSurveyStartDate),
+		ResponseSamplingStartDate:    util.StringPtr(testSurveySamplingStartDate),
+		ResponseSamplingIntervalType: util.StringPtr("week"),
+		ResponseSamplingInterval:     util.Int64Ptr(2),
+		ResponseSamplingLimit:        util.Int64Ptr(20),
 		ResponseSamplingDailyLimits:  map[string]interface{}{"monday": float64(5)},
-		EnablePartialResponses:       boolPtr(true),
-		EnableIframeEmbedding:        boolPtr(true),
+		EnablePartialResponses:       util.BoolPtr(true),
+		EnableIframeEmbedding:        util.BoolPtr(true),
 		Translations:                 map[string]interface{}{"fr": map[string]interface{}{"name": "Bonjour"}},
 		FormContent:                  map[string]interface{}{"submitButtonText": "Send"},
 	}
@@ -288,6 +292,9 @@ func TestSurveyMapResponseToModel(t *testing.T) {
 	assert.JSONEq(t, `{"id":11}`, model.LinkedFlagJSON.ValueString())
 	assert.JSONEq(t, `{"id":12}`, model.TargetingFlagJSON.ValueString())
 	assert.JSONEq(t, `{"id":13}`, model.InternalTargetingFlagJSON.ValueString())
+	assert.Equal(t, int64(1), model.CurrentIteration.ValueInt64())
+	assert.Equal(t, testSurveyStartDate, model.CurrentIterationStartDate.ValueString())
+	assert.JSONEq(t, `["2026-04-20T00:00:00Z","2026-04-22T00:00:00Z"]`, model.IterationStartDatesJSON.ValueString())
 }
 
 func TestSurveyCRUDWrapperMethods(t *testing.T) {
@@ -346,22 +353,55 @@ func TestSurveyHelperFallbacks(t *testing.T) {
 	assert.True(t, normalized.IsNull())
 
 	assert.True(t, jsonStringValue(nil).IsNull())
-	assert.True(t, int64ValueOrNull(nil).IsNull())
+	assert.True(t, jsonStringValue(map[string]interface{}(nil)).IsNull(), "typed-nil maps should surface as Terraform null, not the literal string \"null\"")
+	assert.True(t, jsonStringValue([]interface{}(nil)).IsNull(), "typed-nil slices should surface as Terraform null, not the literal string \"null\"")
 	assert.True(t, int64ValueFromMapOrNull(map[string]interface{}{}).IsNull())
 	assert.Equal(t, int64(7), int64ValueFromMapOrNull(map[string]interface{}{"id": 7}).ValueInt64())
-	assert.True(t, valueStringOrEmpty(types.StringNull()) == "")
-	assert.False(t, boolPtrFromValue(types.BoolNull()) != nil)
-	assert.False(t, stringPtrFromValue(types.StringNull()) != nil)
 }
 
-func stringPtr(value string) *string {
-	return &value
-}
+// TestSurveyClearNullableIntegerFields verifies that removing a nullable integer
+// attribute from config sends an explicit JSON null to the API, which PostHog
+// interprets as "clear this column." See SurveyRequest tag comments for details.
+func TestSurveyClearNullableIntegerFields(t *testing.T) {
+	ops := SurveyOps{}
+	plan := SurveyTFModel{
+		Name:          types.StringValue(testSurveyName),
+		Type:          types.StringValue(testSurveyType),
+		QuestionsJSON: types.StringValue(testSurveyQuestionJSON),
+	}
+	state := SurveyTFModel{
+		LinkedFlagID:             types.Int64Value(11),
+		LinkedInsightID:          types.Int64Value(12),
+		ResponsesLimit:           types.Int64Value(100),
+		IterationCount:           types.Int64Value(3),
+		IterationFrequencyDays:   types.Int64Value(7),
+		ResponseSamplingInterval: types.Int64Value(2),
+		ResponseSamplingLimit:    types.Int64Value(50),
+	}
 
-func boolPtr(value bool) *bool {
-	return &value
-}
+	req, diags := ops.BuildUpdateRequest(context.Background(), plan, state)
+	require.False(t, diags.HasError())
 
-func int64Ptr(value int64) *int64 {
-	return &value
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	var decoded map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &decoded))
+
+	// All seven nullable integer fields must be present with a JSON null value
+	// so the server actually clears them; an omitted field would leave the
+	// existing value untouched.
+	for _, key := range []string{
+		"linked_flag_id",
+		"linked_insight_id",
+		"responses_limit",
+		"iteration_count",
+		"iteration_frequency_days",
+		"response_sampling_interval",
+		"response_sampling_limit",
+	} {
+		raw, present := decoded[key]
+		assert.True(t, present, "%s must be present in the request body", key)
+		assert.Nil(t, raw, "%s must serialize as JSON null to clear", key)
+	}
 }
