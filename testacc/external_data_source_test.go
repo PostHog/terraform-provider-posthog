@@ -88,11 +88,18 @@ resource "posthog_external_data_source" "test" {
 	})
 }
 
+// randomTestPrefix builds a PostHog-prefix-validator-compatible random string.
+// PostHog requires letters, digits, or underscores, starting with a letter or
+// underscore — `acctest.RandomWithPrefix` would inject a hyphen separator.
+func randomTestPrefix() string {
+	return "tf_acc_" + acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum)
+}
+
 func TestExternalDataSource_Postgres_Basic(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoPostgresCreds(t)
 
-	rPrefix := acctest.RandomWithPrefix("tf_acc_")
+	rPrefix := randomTestPrefix()
 	primaryHost := os.Getenv("POSTHOG_TEST_PG_HOST")
 	altHost := os.Getenv("POSTHOG_TEST_PG_HOST_ALT")
 
@@ -157,6 +164,57 @@ func testAccCheckJobInputsField(field, expected string) resource.TestCheckFunc {
 		}
 		return nil
 	}
+}
+
+// TestExternalDataSource_Postgres_PrefixReplaces verifies that changing the
+// prefix triggers a destroy+create cycle. Without RequiresReplace the API
+// would silently keep the original prefix (the update serializer overwrites
+// `validated_data["prefix"] = instance.prefix` for non-direct-postgres
+// sources), producing forever-drift.
+func TestExternalDataSource_Postgres_PrefixReplaces(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoPostgresCreds(t)
+
+	prefixA := randomTestPrefix()
+	prefixB := randomTestPrefix()
+	host := os.Getenv("POSTHOG_TEST_PG_HOST")
+
+	var initialID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExternalDataSourceDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccExternalDataSourcePostgresWithHost(prefixA, host),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_external_data_source.test", "id"),
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_external_data_source.test"]
+						if !ok {
+							return fmt.Errorf("resource not in state")
+						}
+						initialID = rs.Primary.ID
+						return nil
+					},
+				),
+			},
+			{
+				Config: testAccExternalDataSourcePostgresWithHost(prefixB, host),
+				Check: func(s *terraform.State) error {
+					rs, ok := s.RootModule().Resources["posthog_external_data_source.test"]
+					if !ok {
+						return fmt.Errorf("resource not in state")
+					}
+					if rs.Primary.ID == initialID {
+						return fmt.Errorf("expected ID to change after prefix update (RequiresReplace), but stayed %s", initialID)
+					}
+					return nil
+				},
+			},
+		},
+	})
 }
 
 func testAccExternalDataSourcePostgresWithHost(prefix, host string) string {
