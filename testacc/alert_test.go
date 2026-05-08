@@ -404,6 +404,8 @@ resource "posthog_alert" "test" {
   subscribed_users = []
   threshold_type   = "absolute"
   threshold_upper  = 100
+  condition_type   = "absolute_value"
+  series_index     = 0
 
   depends_on = [posthog_insight.test]
 }
@@ -448,6 +450,8 @@ resource "posthog_alert" "test" {
   threshold_type   = "absolute"
   threshold_lower  = %d
   threshold_upper  = %d
+  condition_type   = "absolute_value"
+  series_index     = 0
 
   depends_on = [posthog_insight.test]
 }
@@ -467,6 +471,8 @@ resource "posthog_alert" "test" {
   enabled          = %t
   threshold_type   = "absolute"
   threshold_upper  = 100
+  condition_type   = "absolute_value"
+  series_index     = 0
 
   depends_on = [posthog_insight.test]
 }
@@ -486,6 +492,7 @@ resource "posthog_alert" "test" {
   threshold_type   = "absolute"
   threshold_upper  = 100
   condition_type   = %q
+  series_index     = 0
 
   depends_on = [posthog_insight.test]
 }
@@ -505,6 +512,8 @@ resource "posthog_alert" "test" {
   threshold_type       = "absolute"
   threshold_upper      = 100
   calculation_interval = %q
+  condition_type       = "absolute_value"
+  series_index         = 0
 
   depends_on = [posthog_insight.test]
 }
@@ -524,6 +533,8 @@ resource "posthog_alert" "test" {
   threshold_type         = "absolute"
   threshold_upper        = 100
   check_ongoing_interval = %t
+  condition_type         = "absolute_value"
+  series_index           = 0
 
   depends_on = [posthog_insight.test]
 }
