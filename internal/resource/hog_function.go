@@ -18,6 +18,13 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
+// hogFunctionServerFields are fields the server generates on hog-function
+// responses and should be stripped to avoid spurious diffs.
+var hogFunctionServerFields = map[string]struct{}{
+	"bytecode": {},
+	"order":    {},
+}
+
 func NewHogFunction() resource.Resource {
 	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](
 		HogFunctionOps{},
@@ -498,35 +505,6 @@ func normalizeJSONStripServerFields(apiData interface{}, userJSON string) (strin
 		return "", nil
 	}
 
-	cleaned := stripServerFields(apiData)
+	cleaned := util.StripFields(apiData, hogFunctionServerFields)
 	return normalizeJSONForState(cleaned, userJSON)
-}
-
-// stripServerFields recursively removes server-computed fields from a value.
-func stripServerFields(v interface{}) interface{} {
-	// serverComputedFields are fields that the server generates and should be stripped
-	// from API responses to avoid spurious diffs.
-	var serverComputedFields = map[string]struct{}{
-		"bytecode": {},
-		"order":    {},
-	}
-
-	switch val := v.(type) {
-	case map[string]interface{}:
-		cleaned := make(map[string]interface{})
-		for k, v := range val {
-			if _, isServerField := serverComputedFields[k]; !isServerField {
-				cleaned[k] = stripServerFields(v)
-			}
-		}
-		return cleaned
-	case []interface{}:
-		cleaned := make([]interface{}, len(val))
-		for i, item := range val {
-			cleaned[i] = stripServerFields(item)
-		}
-		return cleaned
-	default:
-		return v
-	}
 }

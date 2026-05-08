@@ -19,6 +19,15 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
+// insightQueryServerFields are query-internal fields that PostHog injects on
+// response and would otherwise produce drift after import.
+var insightQueryServerFields = map[string]struct{}{
+	"version":   {},
+	"result":    {},
+	"hogql":     {},
+	"is_cached": {},
+}
+
 func NewInsight() resource.Resource {
 	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](
 		InsightOps{},
@@ -251,7 +260,7 @@ func normalizeQueryForState(apiQuery map[string]interface{}, userQueryJSON strin
 		return "", nil
 	}
 
-	cleanedQuery := stripInsightQueryServerFields(apiQuery)
+	cleanedQuery := util.StripFields(apiQuery, insightQueryServerFields)
 
 	userQueryJSON = strings.TrimSpace(userQueryJSON)
 	if userQueryJSON == "" {
@@ -267,35 +276,6 @@ func normalizeQueryForState(apiQuery map[string]interface{}, userQueryJSON strin
 
 	filtered := filterToOnlyIncludeUserFields(userQuery, cleanedQuery)
 	return marshalJSON(filtered)
-}
-
-func stripInsightQueryServerFields(v interface{}) interface{} {
-	var serverComputedFields = map[string]struct{}{
-		"version":   {},
-		"result":    {},
-		"hogql":     {},
-		"is_cached": {},
-	}
-
-	switch val := v.(type) {
-	case map[string]interface{}:
-		cleaned := make(map[string]interface{}, len(val))
-		for key, value := range val {
-			if _, isServerField := serverComputedFields[key]; isServerField {
-				continue
-			}
-			cleaned[key] = stripInsightQueryServerFields(value)
-		}
-		return cleaned
-	case []interface{}:
-		cleaned := make([]interface{}, len(val))
-		for i, item := range val {
-			cleaned[i] = stripInsightQueryServerFields(item)
-		}
-		return cleaned
-	default:
-		return val
-	}
 }
 
 func marshalJSON(v interface{}) (string, error) {
