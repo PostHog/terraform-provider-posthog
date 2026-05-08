@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -311,15 +312,15 @@ func checkCloudflareSuccess(dest any) error {
 	switch envelope := dest.(type) {
 	case *cloudflareEnvelope[[]cloudflareZone]:
 		if !envelope.Success {
-			return fmt.Errorf(cloudflareRequestUnsuccessful)
+			return errors.New(cloudflareRequestUnsuccessful)
 		}
 	case *cloudflareEnvelope[cloudflareDNSRecord]:
 		if !envelope.Success {
-			return fmt.Errorf(cloudflareRequestUnsuccessful)
+			return errors.New(cloudflareRequestUnsuccessful)
 		}
 	case *cloudflareEnvelope[[]cloudflareDNSRecord]:
 		if !envelope.Success {
-			return fmt.Errorf(cloudflareRequestUnsuccessful)
+			return errors.New(cloudflareRequestUnsuccessful)
 		}
 	}
 
