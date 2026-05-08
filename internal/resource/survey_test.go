@@ -391,15 +391,7 @@ func TestSurveyClearNullableIntegerFields(t *testing.T) {
 	// All seven nullable integer fields must be present with a JSON null value
 	// so the server actually clears them; an omitted field would leave the
 	// existing value untouched.
-	for _, key := range []string{
-		"linked_flag_id",
-		"linked_insight_id",
-		"responses_limit",
-		"iteration_count",
-		"iteration_frequency_days",
-		"response_sampling_interval",
-		"response_sampling_limit",
-	} {
+	for _, key := range httpclient.SurveyNullableIntegerJSONFields {
 		raw, present := decoded[key]
 		assert.True(t, present, "%s must be present in the request body", key)
 		assert.Nil(t, raw, "%s must serialize as JSON null to clear", key)

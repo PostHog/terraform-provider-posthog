@@ -19,6 +19,13 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
+// surveyQuestionServerFields are fields the API generates per-question
+// (server-assigned IDs) that should be stripped before comparison with
+// user-provided JSON to avoid spurious diffs.
+var surveyQuestionServerFields = map[string]struct{}{
+	"id": {},
+}
+
 func NewSurvey() resource.Resource {
 	return core.NewGenericResource[SurveyTFModel, httpclient.SurveyRequest, httpclient.Survey](
 		SurveyOps{},
@@ -470,13 +477,13 @@ func mapSurveyScheduleFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.StartDate = core.PtrToStringNullIfEmptyTrimmed(resp.StartDate)
 	model.EndDate = core.PtrToStringNullIfEmptyTrimmed(resp.EndDate)
 	model.Archived = core.PtrToBool(resp.Archived)
-	model.ResponsesLimit = core.PtrToInt64(resp.ResponsesLimit)
-	model.IterationCount = core.PtrToInt64(resp.IterationCount)
-	model.IterationFrequencyDays = core.PtrToInt64(resp.IterationFrequencyDays)
+	model.ResponsesLimit = util.PtrToInt64(resp.ResponsesLimit)
+	model.IterationCount = util.PtrToInt64(resp.IterationCount)
+	model.IterationFrequencyDays = util.PtrToInt64(resp.IterationFrequencyDays)
 	model.ResponseSamplingStartDate = core.PtrToStringNullIfEmptyTrimmed(resp.ResponseSamplingStartDate)
 	model.ResponseSamplingIntervalType = core.PtrToStringNullIfEmptyTrimmed(resp.ResponseSamplingIntervalType)
-	model.ResponseSamplingInterval = core.PtrToInt64(resp.ResponseSamplingInterval)
-	model.ResponseSamplingLimit = core.PtrToInt64(resp.ResponseSamplingLimit)
+	model.ResponseSamplingInterval = util.PtrToInt64(resp.ResponseSamplingInterval)
+	model.ResponseSamplingLimit = util.PtrToInt64(resp.ResponseSamplingLimit)
 	model.EnablePartialResponses = core.PtrToBool(resp.EnablePartialResponses)
 	model.EnableIframeEmbedding = core.PtrToBool(resp.EnableIframeEmbedding)
 }
@@ -487,7 +494,7 @@ func mapSurveyComputedFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.LinkedFlagJSON = jsonStringValue(resp.LinkedFlag)
 	model.TargetingFlagJSON = jsonStringValue(resp.TargetingFlag)
 	model.InternalTargetingFlagJSON = jsonStringValue(resp.InternalTargetingFlag)
-	model.CurrentIteration = core.PtrToInt64(resp.CurrentIteration)
+	model.CurrentIteration = util.PtrToInt64(resp.CurrentIteration)
 	model.CurrentIterationStartDate = core.PtrToStringNullIfEmptyTrimmed(resp.CurrentIterationStartDate)
 	model.IterationStartDatesJSON = jsonStringValue(resp.IterationStartDates)
 }
@@ -539,12 +546,6 @@ func parseJSONArrayAttribute(attr types.String, name string) ([]interface{}, dia
 		diags.AddError("Invalid "+name, fmt.Sprintf("%s must contain a valid JSON array: %s", name, err.Error()))
 	}
 	return parsed, diags
-}
-
-// surveyQuestionServerFields are fields the API generates per-question (server-assigned IDs)
-// that should be stripped before comparison with user-provided JSON to avoid spurious diffs.
-var surveyQuestionServerFields = map[string]struct{}{
-	"id": {},
 }
 
 func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (string, error) {

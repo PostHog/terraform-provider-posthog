@@ -44,13 +44,25 @@ type Survey struct {
 	FormContent                  interface{}            `json:"form_content,omitempty"`
 }
 
+// SurveyNullableIntegerJSONFields lists the JSON keys whose Go fields drop
+// `omitempty` per the SurveyRequest comment below. Both the resource and
+// httpclient test packages reference this slice so the list lives in one place.
+var SurveyNullableIntegerJSONFields = []string{
+	"linked_flag_id",
+	"linked_insight_id",
+	"responses_limit",
+	"iteration_count",
+	"iteration_frequency_days",
+	"response_sampling_interval",
+	"response_sampling_limit",
+}
+
 // SurveyRequest is the wire format for POST/PUT to the surveys endpoint.
 //
-// Fields marked nullable in the upstream OpenAPI schema (linked_flag_id,
-// linked_insight_id, responses_limit, iteration_count, iteration_frequency_days,
-// response_sampling_interval, response_sampling_limit) deliberately omit `,omitempty`
-// so that a nil pointer serialises as JSON `null`. PostHog interprets `null` as
-// "clear this column", which is the semantic users expect when they remove the
+// Fields marked nullable in the upstream OpenAPI schema (the keys in
+// SurveyNullableIntegerJSONFields above) deliberately omit `,omitempty` so that
+// a nil pointer serialises as JSON `null`. PostHog interprets `null` as "clear
+// this column", which is the semantic users expect when they remove the
 // attribute from their Terraform config. Fields that are not nullable upstream
 // (targeting_flag_id, archived) keep `,omitempty` so an absent value is omitted
 // rather than rejected.

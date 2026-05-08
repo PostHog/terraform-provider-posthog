@@ -64,3 +64,11 @@ func ValueStringOrEmpty(value types.String) string {
 	}
 	return value.ValueString()
 }
+
+// PtrToInt64 converts a *int64 to types.Int64, returning Null for nil pointers.
+func PtrToInt64(v *int64) types.Int64 {
+	if v == nil {
+		return types.Int64Null()
+	}
+	return types.Int64Value(*v)
+}

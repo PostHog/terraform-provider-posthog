@@ -85,15 +85,7 @@ func TestSurveyCRUDRequests(t *testing.T) {
 	assert.False(t, hasTargetingFlagID)
 	// Nullable integer fields must be present (as JSON null) so PostHog actually
 	// clears them on update; see SurveyRequest tag comments for rationale.
-	for _, key := range []string{
-		"linked_flag_id",
-		"linked_insight_id",
-		"responses_limit",
-		"iteration_count",
-		"iteration_frequency_days",
-		"response_sampling_interval",
-		"response_sampling_limit",
-	} {
+	for _, key := range SurveyNullableIntegerJSONFields {
 		raw, present := createBody[key]
 		assert.True(t, present, "%s should be present in the create body", key)
 		assert.Nil(t, raw, "%s should serialize as JSON null when unset", key)
