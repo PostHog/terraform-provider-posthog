@@ -244,9 +244,6 @@ func TestSurveyMapResponseToModel(t *testing.T) {
 		ResponsesLimit:               util.Int64Ptr(10),
 		IterationCount:               util.Int64Ptr(2),
 		IterationFrequencyDays:       util.Int64Ptr(7),
-		IterationStartDates:          []interface{}{testSurveyStartDate, testSurveySamplingStartDate},
-		CurrentIteration:             util.Int64Ptr(1),
-		CurrentIterationStartDate:    util.StringPtr(testSurveyStartDate),
 		ResponseSamplingStartDate:    util.StringPtr(testSurveySamplingStartDate),
 		ResponseSamplingIntervalType: util.StringPtr("week"),
 		ResponseSamplingInterval:     util.Int64Ptr(2),
@@ -292,9 +289,6 @@ func TestSurveyMapResponseToModel(t *testing.T) {
 	assert.JSONEq(t, `{"id":11}`, model.LinkedFlagJSON.ValueString())
 	assert.JSONEq(t, `{"id":12}`, model.TargetingFlagJSON.ValueString())
 	assert.JSONEq(t, `{"id":13}`, model.InternalTargetingFlagJSON.ValueString())
-	assert.Equal(t, int64(1), model.CurrentIteration.ValueInt64())
-	assert.Equal(t, testSurveyStartDate, model.CurrentIterationStartDate.ValueString())
-	assert.JSONEq(t, `["2026-04-20T00:00:00Z","2026-04-22T00:00:00Z"]`, model.IterationStartDatesJSON.ValueString())
 }
 
 func TestSurveyCRUDWrapperMethods(t *testing.T) {

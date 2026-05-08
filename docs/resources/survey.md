@@ -99,11 +99,8 @@ resource "posthog_survey" "feature_feedback" {
 
 - `created_at` (String) RFC3339 creation timestamp of the survey.
 - `created_by_json` (String) JSON object describing the survey creator.
-- `current_iteration` (Number) Current iteration index for `recurring` surveys. Read-only.
-- `current_iteration_start_date` (String) RFC3339 start date of the current iteration. Read-only.
 - `id` (String) UUID of the survey.
 - `internal_targeting_flag_json` (String) JSON object describing the internal targeting feature flag returned by the API.
-- `iteration_start_dates_json` (String) JSON array of RFC3339 start dates for past and current iterations. Read-only.
 - `linked_flag_json` (String) JSON object describing the linked feature flag returned by the API.
 - `targeting_flag_json` (String) JSON object describing the targeting feature flag returned by the API.
 

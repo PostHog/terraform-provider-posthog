@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -68,9 +67,6 @@ type SurveyTFModel struct {
 	LinkedFlagJSON               types.String `tfsdk:"linked_flag_json"`
 	TargetingFlagJSON            types.String `tfsdk:"targeting_flag_json"`
 	InternalTargetingFlagJSON    types.String `tfsdk:"internal_targeting_flag_json"`
-	CurrentIteration             types.Int64  `tfsdk:"current_iteration"`
-	CurrentIterationStartDate    types.String `tfsdk:"current_iteration_start_date"`
-	IterationStartDatesJSON      types.String `tfsdk:"iteration_start_dates_json"`
 }
 
 type SurveyOps struct{}
@@ -243,27 +239,6 @@ func (o SurveyOps) Schema() schema.Schema {
 			"internal_targeting_flag_json": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "JSON object describing the internal targeting feature flag returned by the API.",
-			},
-			"current_iteration": schema.Int64Attribute{
-				Computed:            true,
-				MarkdownDescription: "Current iteration index for `recurring` surveys. Read-only.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
-			},
-			"current_iteration_start_date": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "RFC3339 start date of the current iteration. Read-only.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
-			"iteration_start_dates_json": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "JSON array of RFC3339 start dates for past and current iterations. Read-only.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
@@ -491,9 +466,6 @@ func mapSurveyComputedFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.LinkedFlagJSON = jsonStringValue(resp.LinkedFlag)
 	model.TargetingFlagJSON = jsonStringValue(resp.TargetingFlag)
 	model.InternalTargetingFlagJSON = jsonStringValue(resp.InternalTargetingFlag)
-	model.CurrentIteration = util.PtrToInt64(resp.CurrentIteration)
-	model.CurrentIterationStartDate = core.PtrToStringNullIfEmptyTrimmed(resp.CurrentIterationStartDate)
-	model.IterationStartDatesJSON = jsonStringValue(resp.IterationStartDates)
 }
 
 func applyNormalizedJSONString(apiData interface{}, current string, target *types.String) {
