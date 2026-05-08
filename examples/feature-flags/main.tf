@@ -15,6 +15,10 @@ provider "posthog" {
   # host       = "https://us.posthog.com"  # Optional, defaults to US cloud
 }
 
+# Note: PostHog feature flags currently expose a display name but no separate
+# dedicated description field in the public API, so the provider only manages
+# `name` for feature flag metadata.
+
 # Example 1: Simple Boolean Feature Flag
 # A basic on/off toggle that's enabled for all users
 resource "posthog_feature_flag" "simple_boolean" {
