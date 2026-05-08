@@ -57,13 +57,15 @@ resource "posthog_dashboard_layout" "engineering" {
     },
     # Insight tiles positioned below the header
     {
-      insight_id   = posthog_insight.pageviews.id
-      layouts_json = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 4 } })
-      color        = "blue"
+      insight_id       = posthog_insight.pageviews.id
+      layouts_json     = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 4 } })
+      color            = "blue"
+      show_description = false
     },
     {
-      insight_id   = posthog_insight.signups.id
-      layouts_json = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 4 } })
+      insight_id       = posthog_insight.signups.id
+      layouts_json     = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 4 } })
+      show_description = false
     },
   ]
 
@@ -123,6 +125,7 @@ Optional:
 - `color` (String) Background color of the tile. Valid values are defined by the PostHog API; see [InsightColor in types.ts](https://github.com/PostHog/posthog/blob/master/frontend/src/types.ts#L2154) for the current list.
 - `insight_id` (Number) ID of the insight to display. Exactly one of insight_id or text_body must be set.
 - `layouts_json` (String) JSON object with breakpoint keys `sm` and/or `xs`, each containing position properties: `x`, `y`, `w`, `h` (required), and optionally `minW`, `minH` (e.g. `{"sm":{"x":0,"y":0,"w":6,"h":5},"xs":{"x":0,"y":0,"w":1,"h":5}}`). Semantic JSON equality is used to suppress phantom diffs.
+- `show_description` (Boolean) Whether to show the insight description on the tile. Omit the field to clear it back to the PostHog API default (`null`).
 - `text_body` (String) Markdown body for a text tile (max 4000 characters). Exactly one of insight_id or text_body must be set.
 
 Read-Only:

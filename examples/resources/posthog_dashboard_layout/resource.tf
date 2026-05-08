@@ -42,13 +42,15 @@ resource "posthog_dashboard_layout" "engineering" {
     },
     # Insight tiles positioned below the header
     {
-      insight_id   = posthog_insight.pageviews.id
-      layouts_json = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 4 } })
-      color        = "blue"
+      insight_id       = posthog_insight.pageviews.id
+      layouts_json     = jsonencode({ sm = { x = 0, y = 1, w = 6, h = 4 } })
+      color            = "blue"
+      show_description = false
     },
     {
-      insight_id   = posthog_insight.signups.id
-      layouts_json = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 4 } })
+      insight_id       = posthog_insight.signups.id
+      layouts_json     = jsonencode({ sm = { x = 6, y = 1, w = 6, h = 4 } })
+      show_description = false
     },
   ]
 
