@@ -1,8 +1,11 @@
 package resource
 
 import (
+	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -192,10 +195,25 @@ func TestNormalizeQueryForState(t *testing.T) {
 		},
 		"falls back on invalid user JSON": {
 			apiQuery: map[string]interface{}{
-				"kind": "test",
+				"kind":    "test",
+				"version": float64(2),
 			},
 			userQueryJSON: `invalid json`,
 			expected:      `{"kind":"test"}`,
+		},
+		"strips server fields when user query is unavailable": {
+			apiQuery: map[string]interface{}{
+				"kind":      "DataVisualizationNode",
+				"result":    []interface{}{1, 2, 3},
+				"hogql":     "SELECT 1",
+				"is_cached": true,
+				"source": map[string]interface{}{
+					"kind":    "TrendsQuery",
+					"version": float64(2),
+				},
+			},
+			userQueryJSON: "",
+			expected:      `{"kind":"DataVisualizationNode","source":{"kind":"TrendsQuery"}}`,
 		},
 	}
 
@@ -206,4 +224,29 @@ func TestNormalizeQueryForState(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestInsightMapResponseToModel_StripsServerQueryFieldsWithoutUserConfig(t *testing.T) {
+	ops := InsightOps{}
+	model := InsightResourceTFModel{
+		QueryJSON: types.StringNull(),
+	}
+
+	resp := httpclient.Insight{
+		ID: 123,
+		Query: map[string]interface{}{
+			"kind":      "DataVisualizationNode",
+			"result":    []interface{}{1, 2, 3},
+			"hogql":     "SELECT 1",
+			"is_cached": true,
+			"source": map[string]interface{}{
+				"kind":    "TrendsQuery",
+				"version": float64(2),
+			},
+		},
+	}
+
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, `{"kind":"DataVisualizationNode","source":{"kind":"TrendsQuery"}}`, model.QueryJSON.ValueString())
 }

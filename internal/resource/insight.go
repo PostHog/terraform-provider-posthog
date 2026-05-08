@@ -19,6 +19,15 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
+// insightQueryServerFields are query-internal fields that PostHog injects on
+// response and would otherwise produce drift after import.
+var insightQueryServerFields = map[string]struct{}{
+	"version":   {},
+	"result":    {},
+	"hogql":     {},
+	"is_cached": {},
+}
+
 func NewInsight() resource.Resource {
 	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](
 		InsightOps{},
@@ -251,14 +260,21 @@ func normalizeQueryForState(apiQuery map[string]interface{}, userQueryJSON strin
 		return "", nil
 	}
 
+	cleanedQuery := util.StripFields(apiQuery, insightQueryServerFields)
+
+	userQueryJSON = strings.TrimSpace(userQueryJSON)
+	if userQueryJSON == "" {
+		return marshalJSON(cleanedQuery)
+	}
+
 	// Parse user's query to know which fields to keep
 	var userQuery map[string]interface{}
 	if err := json.Unmarshal([]byte(userQueryJSON), &userQuery); err != nil {
-		// If we can't parse user's query, fall back to returning API query as canonical JSON
-		return marshalJSON(apiQuery)
+		// If we can't parse user's query, fall back to returning a cleaned API query.
+		return marshalJSON(cleanedQuery)
 	}
 
-	filtered := filterToOnlyIncludeUserFields(userQuery, apiQuery)
+	filtered := filterToOnlyIncludeUserFields(userQuery, cleanedQuery)
 	return marshalJSON(filtered)
 }
 

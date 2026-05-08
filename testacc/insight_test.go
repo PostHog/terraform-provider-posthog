@@ -300,7 +300,7 @@ func TestInsight_Import(t *testing.T) {
 				ResourceName:            "posthog_insight.test",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"query_json", "create_in_folder"},
+				ImportStateVerifyIgnore: []string{"create_in_folder"},
 			},
 		},
 	})
