@@ -1,3 +1,16 @@
+// DNS test harness for posthog_proxy_record acceptance tests.
+//
+// posthog_proxy_record cannot be validated end-to-end without controlling DNS:
+// the resource only learns target_cname after POST, and PostHog won't converge
+// the record to "valid" until a CNAME actually points at that target. This
+// harness owns the DNS leg — generate a unique disposable FQDN, create a
+// matching CNAME in a programmable zone, wait for public resolution, delete
+// during cleanup — so the proxy_record acceptance flow can layer on top.
+//
+// Currently Cloudflare-only; the env-var indirection (POSTHOG_TEST_DNS_PROVIDER,
+// CLOUDFLARE_API_TOKEN, ...) keeps the door open for Route53 etc. without
+// rewriting the test layer. See README.md "Proxy Record DNS Harness" for the
+// runnable entry point and full env var list.
 package tests
 
 import (

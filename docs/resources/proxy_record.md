@@ -3,12 +3,12 @@
 page_title: "posthog_proxy_record Resource - posthog"
 subcategory: ""
 description: |-
-  Manages an organization-scoped PostHog custom domain proxy record.
+  Manages an organization-scoped PostHog custom domain proxy record. The resource is immutable — changing the domain triggers replacement, and there is no in-place update path. Create returns immediately with a target_cname; converging to status = "valid" requires DNS to point at that target and is driven outside Terraform.
 ---
 
 # posthog_proxy_record (Resource)
 
-Manages an organization-scoped PostHog custom domain proxy record.
+Manages an organization-scoped PostHog custom domain proxy record. The resource is immutable — changing the `domain` triggers replacement, and there is no in-place update path. `Create` returns immediately with a `target_cname`; converging to `status = "valid"` requires DNS to point at that target and is driven outside Terraform.
 
 ## Example Usage
 

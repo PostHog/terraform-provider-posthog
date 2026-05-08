@@ -17,6 +17,25 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
+// NewProxyRecord builds the posthog_proxy_record resource, which backs PostHog
+// custom domains.
+//
+// The upstream API only exposes GET / POST / DELETE on
+// /api/organizations/{org}/proxy_records/ — there's no PUT or PATCH. We model
+// this as an immutable resource: domain is Required + RequiresReplace, and
+// Update returns an error at both the request-build and operation levels.
+//
+// PostHog also exposes a POST /retry/ endpoint, but it's intentionally not part
+// of the CRUD contract — it's an operational remediation step the user runs
+// after fixing DNS, not a stable desired-state transition. (At the time of
+// writing it also returns 403 for Personal API Keys, which would rule it out
+// of provider CRUD anyway.)
+//
+// Create deliberately does not wait for status=valid. PostHog only converges
+// the record once a real CNAME points at the provider-emitted target_cname,
+// which is typically managed by another Terraform resource depending on this
+// one — waiting in Create would deadlock that graph. The acceptance test
+// suite drives status=valid externally via the testacc DNS harness.
 func NewProxyRecord() resource.Resource {
 	return core.NewGenericResource[ProxyRecordTFModel, httpclient.ProxyRecordRequest, httpclient.ProxyRecord](
 		ProxyRecordOps{},
@@ -44,7 +63,9 @@ func (o ProxyRecordOps) ResourceName() string {
 
 func (o ProxyRecordOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "Manages an organization-scoped PostHog custom domain proxy record.",
+		MarkdownDescription: "Manages an organization-scoped PostHog custom domain proxy record. " +
+			"The resource is immutable — changing the `domain` triggers replacement, and there is no in-place update path. " +
+			"`Create` returns immediately with a `target_cname`; converging to `status = \"valid\"` requires DNS to point at that target and is driven outside Terraform.",
 		Attributes: map[string]schema.Attribute{
 			"id":              proxyRecordComputedStringAttribute("The UUID of the proxy record."),
 			"organization_id": core.OrganizationIDSchemaAttribute(),
