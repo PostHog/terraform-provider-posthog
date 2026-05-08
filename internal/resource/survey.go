@@ -111,13 +111,14 @@ func (o SurveyOps) Schema() schema.Schema {
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			// linked_flag_id, linked_insight_id, and targeting_flag_id are intentionally
+			// Optional-only (no Computed + UseStateForUnknown). The server never populates
+			// a default for these, and Computed + UseStateForUnknown would carry the prior
+			// value into plan when config drops the attribute — making the unlink path
+			// (linked_flag_id: null) and the remove_targeting_flag clear path unreachable.
 			"linked_flag_id": schema.Int64Attribute{
 				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Feature flag ID linked to the survey. Preserved across refreshes when explicitly configured.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
+				MarkdownDescription: "Feature flag ID linked to the survey. Remove this attribute to unlink the flag from the survey.",
 			},
 			"linked_insight_id": schema.Int64Attribute{
 				Optional:            true,
@@ -125,11 +126,7 @@ func (o SurveyOps) Schema() schema.Schema {
 			},
 			"targeting_flag_id": schema.Int64Attribute{
 				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Existing targeting feature flag ID to use for this survey.",
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
+				MarkdownDescription: "Existing targeting feature flag ID to use for this survey. Remove this attribute to detach the targeting flag.",
 			},
 			"targeting_flag_filters_json": schema.StringAttribute{
 				Optional:            true,

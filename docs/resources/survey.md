@@ -80,7 +80,7 @@ resource "posthog_survey" "feature_feedback" {
 - `form_content_json` (String) JSON object describing custom form content.
 - `iteration_count` (Number) Number of survey recurrences when `schedule` is `recurring`.
 - `iteration_frequency_days` (Number) Number of days between recurrences when `schedule` is `recurring`.
-- `linked_flag_id` (Number) Feature flag ID linked to the survey. Preserved across refreshes when explicitly configured.
+- `linked_flag_id` (Number) Feature flag ID linked to the survey. Remove this attribute to unlink the flag from the survey.
 - `linked_insight_id` (Number) Insight ID linked to the survey. This field is write-only in the PostHog API and is preserved from Terraform state when configured.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `response_sampling_daily_limits_json` (String) JSON object describing daily response sampling limits.
@@ -92,7 +92,7 @@ resource "posthog_survey" "feature_feedback" {
 - `schedule` (String) Survey schedule. Supported values are `once`, `recurring`, and `always`.
 - `start_date` (String) RFC3339 start date for the survey.
 - `targeting_flag_filters_json` (String) JSON object describing targeting flag filters. This input is write-only in the PostHog API and is preserved from Terraform state when configured.
-- `targeting_flag_id` (Number) Existing targeting feature flag ID to use for this survey.
+- `targeting_flag_id` (Number) Existing targeting feature flag ID to use for this survey. Remove this attribute to detach the targeting flag.
 - `translations_json` (String) JSON object describing translated survey content.
 
 ### Read-Only
