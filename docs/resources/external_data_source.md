@@ -60,7 +60,7 @@ resource "posthog_external_data_source" "prod_pg" {
 
 - `job_inputs_json` (String, Sensitive) JSON-encoded connection configuration for the source. Shape depends on `source_type`. For example Postgres expects `{host, port, database, user, password, schema}`; Stripe expects `{stripe_account_id, stripe_secret_key}`. PostHog redacts secret values when reading, so the plan value is preserved in state. On import, redacted secrets will appear in state until the next apply with real values.
 - `schemas` (List of String) List of table names to sync from the source (e.g. `["users", "orders"]`). PostHog discovers available tables from the source; these must match discovered table names. The source-level update endpoint cannot edit the schema list, so changes force destroy+recreate.
-- `source_type` (String) Source type. Values accepted by PostHog include `Stripe`, `Hubspot`, `Postgres`, `MySQL`, `MSSQL`, `Snowflake`, `BigQuery`, `Salesforce`, `Zendesk`, `Vitally`, `Chargebee`, `TemporalIO`. Cannot be changed after creation.
+- `source_type` (String) Source type recognised by the PostHog data warehouse (e.g. `Stripe`, `Postgres`, `Snowflake`, `BigQuery`, `Hubspot`). PostHog defines the set of accepted values and may add new types over time; see the PostHog data warehouse docs for the current list. Cannot be changed after creation.
 
 ### Optional
 
