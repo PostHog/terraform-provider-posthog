@@ -21,6 +21,8 @@ import (
 //	POSTHOG_TEST_PG_DATABASE
 //	POSTHOG_TEST_PG_USER
 //	POSTHOG_TEST_PG_PASSWORD
+//	POSTHOG_TEST_PG_HOST_ALT   (optional; enables the Update step that verifies
+//	                            PATCH actually mutates job_inputs on the server)
 func skipIfNoPostgresCreds(t *testing.T) {
 	t.Helper()
 	for _, v := range []string{
@@ -91,24 +93,73 @@ func TestExternalDataSource_Postgres_Basic(t *testing.T) {
 	skipIfNoPostgresCreds(t)
 
 	rPrefix := acctest.RandomWithPrefix("tf_acc_")
+	primaryHost := os.Getenv("POSTHOG_TEST_PG_HOST")
+	altHost := os.Getenv("POSTHOG_TEST_PG_HOST_ALT")
+
+	steps := []resource.TestStep{
+		{
+			Config: testAccExternalDataSourcePostgresWithHost(rPrefix, primaryHost),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("posthog_external_data_source.test", "source_type", "Postgres"),
+				resource.TestCheckResourceAttrSet("posthog_external_data_source.test", "id"),
+				testAccCheckJobInputsField("host", primaryHost),
+			),
+		},
+	}
+
+	// If an alternate host alias is configured, exercise the PATCH path. State
+	// alone preserves the planned value (we keep the user's job_inputs_json on
+	// read because PostHog redacts secrets), so the only way to confirm the
+	// PATCH actually reached the server is to read back via the API.
+	if altHost != "" && altHost != primaryHost {
+		steps = append(steps, resource.TestStep{
+			Config: testAccExternalDataSourcePostgresWithHost(rPrefix, altHost),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				testAccCheckJobInputsField("host", altHost),
+			),
+		})
+	}
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccCheckExternalDataSourceDestroy,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccExternalDataSourcePostgres(rPrefix),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_external_data_source.test", "source_type", "Postgres"),
-					resource.TestCheckResourceAttrSet("posthog_external_data_source.test", "id"),
-				),
-			},
-		},
+		Steps:                    steps,
 	})
 }
 
-func testAccExternalDataSourcePostgres(prefix string) string {
+// testAccCheckJobInputsField reads the source via the API and asserts a
+// non-sensitive job_inputs field matches expected. Sensitive fields would come
+// back redacted; non-sensitive ones (host, port, database, user, schema) are
+// echoed verbatim, so they're the ones we can verify across PATCH boundaries.
+func testAccCheckJobInputsField(field, expected string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources["posthog_external_data_source.test"]
+		if !ok {
+			return fmt.Errorf("resource posthog_external_data_source.test not in state")
+		}
+		client := httpclient.NewDefaultClient(
+			os.Getenv("POSTHOG_HOST"),
+			os.Getenv("POSTHOG_API_KEY"),
+			"test",
+		)
+		resp, _, err := client.GetExternalDataSource(
+			context.Background(),
+			os.Getenv("POSTHOG_PROJECT_ID"),
+			rs.Primary.ID,
+		)
+		if err != nil {
+			return fmt.Errorf("read external_data_source %s: %w", rs.Primary.ID, err)
+		}
+		actual, _ := resp.JobInputs[field].(string)
+		if actual != expected {
+			return fmt.Errorf("expected job_inputs[%q]=%q, got %q", field, expected, actual)
+		}
+		return nil
+	}
+}
+
+func testAccExternalDataSourcePostgresWithHost(prefix, host string) string {
 	port := os.Getenv("POSTHOG_TEST_PG_PORT")
 	if port == "" {
 		port = "5432"
@@ -133,7 +184,7 @@ resource "posthog_external_data_source" "test" {
 }
 `,
 		prefix,
-		os.Getenv("POSTHOG_TEST_PG_HOST"),
+		host,
 		port,
 		os.Getenv("POSTHOG_TEST_PG_DATABASE"),
 		os.Getenv("POSTHOG_TEST_PG_USER"),
