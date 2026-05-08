@@ -306,7 +306,7 @@ func TestSurveyCRUDWrapperMethods(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(httpclient.Survey{ID: testSurveyID})
 		case r.Method == http.MethodGet && r.URL.Path == testSurveyResourcePath:
 			_ = json.NewEncoder(w).Encode(httpclient.Survey{ID: testSurveyID})
-		case r.Method == http.MethodPut && r.URL.Path == testSurveyResourcePath:
+		case r.Method == http.MethodPatch && r.URL.Path == testSurveyResourcePath:
 			_ = json.NewEncoder(w).Encode(httpclient.Survey{ID: testSurveyID})
 		case r.Method == http.MethodDelete && r.URL.Path == testSurveyResourcePath:
 			w.WriteHeader(http.StatusNoContent)

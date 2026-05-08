@@ -35,7 +35,7 @@ func TestSurveyCRUDRequests(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameCreated)})
 		case r.Method == http.MethodGet && r.URL.Path == testSurveyPath:
 			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameFetched)})
-		case r.Method == http.MethodPut && r.URL.Path == testSurveyPath:
+		case r.Method == http.MethodPatch && r.URL.Path == testSurveyPath:
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&updateBody))
 			_ = json.NewEncoder(w).Encode(Survey{ID: testSurveyID, Name: util.StringPtr(testSurveyNameUpdated)})
 		case r.Method == http.MethodDelete && r.URL.Path == testSurveyPath:

@@ -110,7 +110,13 @@ func (c *PosthogClient) GetSurvey(ctx context.Context, projectID, id string) (Su
 
 func (c *PosthogClient) UpdateSurvey(ctx context.Context, projectID, id string, input SurveyRequest) (Survey, HTTPStatusCode, error) {
 	path := fmt.Sprintf(surveyResourcePathFormat, projectID, id)
-	return doPut[Survey](c, ctx, path, input)
+	// PostHog's SurveyViewSet.get_serializer_class() routes only POST and PATCH
+	// to SurveySerializerCreateUpdateOnly; PUT falls through to SurveySerializer,
+	// whose linked_flag_id / linked_insight_id are declared with a dotted source
+	// (`source="linked_flag.id"`) and therefore trip DRF's "writable dotted-source
+	// fields" AssertionError on update. Use PATCH so the request hits the
+	// write-safe serializer path.
+	return doPatch[Survey](c, ctx, path, input)
 }
 
 func (c *PosthogClient) DeleteSurvey(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
