@@ -9,7 +9,7 @@ PLAYGROUND_TFRC ?= $(PLAYGROUND_DIR)/terraformrc
 PLUGIN_FILENAME ?= terraform-provider-$(PLUGIN_NAME)_v$(PLUGIN_VERSION)
 
 default: fmt lint install generate
-.PHONY: fmt lint test testacc build install generate playground-binary playground-init playground-plan playground-apply playground-clean release-alpha release-beta release
+.PHONY: fmt lint test testacc testacc-proxy-dns build install generate playground-binary playground-init playground-plan playground-apply playground-clean release-alpha release-beta release
 
 build:
 	go build -v ./...
@@ -48,6 +48,10 @@ testacc:
 	fi; \
 	echo "Running acceptance tests..."; \
 	TF_ACC=1 POSTHOG_API_KEY=$$POSTHOG_API_KEY POSTHOG_PROJECT_ID=$$POSTHOG_PROJECT_ID POSTHOG_HOST=$$POSTHOG_HOST POSTHOG_ORGANIZATION_ID=$$POSTHOG_ORGANIZATION_ID go test -v -timeout 30m ./testacc/...
+
+testacc-proxy-dns:
+	@echo "Running proxy_record DNS harness smoke test..."
+	TF_ACC=1 go test -v -timeout 15m ./testacc/... -run TestProxyRecordDNSHarness_CloudflareCNAME
 
 playground-binary:
 	mkdir -p $(BIN_DIR)
