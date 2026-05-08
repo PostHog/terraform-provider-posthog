@@ -3,7 +3,6 @@ package resource
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -15,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 // NewExternalDataSource builds the posthog_external_data_source resource.
@@ -70,9 +70,8 @@ func (o ExternalDataSourceOps) Schema() schema.Schema {
 			"project_id": core.ProjectIDSchemaAttribute(),
 			"source_type": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Source type. Values accepted by PostHog include " +
-					"`Stripe`, `Hubspot`, `Postgres`, `MySQL`, `MSSQL`, `Snowflake`, `BigQuery`, " +
-					"`Salesforce`, `Zendesk`, `Vitally`, `Chargebee`, `TemporalIO`. Cannot be changed after creation.",
+				MarkdownDescription: "Source type recognised by the PostHog data warehouse (e.g. `Stripe`, `Postgres`, `Snowflake`, `BigQuery`, `Hubspot`). " +
+					"PostHog defines the set of accepted values and may add new types over time; see the PostHog data warehouse docs for the current list. Cannot be changed after creation.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -135,20 +134,16 @@ func (o ExternalDataSourceOps) Schema() schema.Schema {
 	}
 }
 
-// BuildCreateRequest builds the body for POST /api/projects/{id}/external_data_sources/.
-// The PostHog create serializer expects `source_type` and `prefix` at the top
-// level of the request, with connection credentials and a `schemas` array
-// nested inside `payload`.
 func (o ExternalDataSourceOps) BuildCreateRequest(ctx context.Context, model ExternalDataSourceTFModel) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	inputs, d := parseJobInputsJSON(model.JobInputsJSON)
+	inputs, d := util.ParseJSONStringMap("job_inputs_json", model.JobInputsJSON)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
 	}
 
-	schemaNames, d := extractSchemaNames(ctx, model.Schemas)
+	schemaNames, d := util.StringListToSlice(ctx, model.Schemas)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
@@ -179,14 +174,10 @@ func (o ExternalDataSourceOps) BuildCreateRequest(ctx context.Context, model Ext
 	return req, diags
 }
 
-// BuildUpdateRequest builds the body for PATCH /api/projects/{id}/external_data_sources/{id}/.
-// Only `job_inputs` is mutable: source_type/prefix/schemas are RequiresReplace,
-// and the PostHog update serializer reads job_inputs (not payload) at the top
-// level of the body.
 func (o ExternalDataSourceOps) BuildUpdateRequest(_ context.Context, plan, _ ExternalDataSourceTFModel) (map[string]any, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	inputs, d := parseJobInputsJSON(plan.JobInputsJSON)
+	inputs, d := util.ParseJSONStringMap("job_inputs_json", plan.JobInputsJSON)
 	diags.Append(d...)
 	if diags.HasError() {
 		return nil, diags
@@ -270,29 +261,3 @@ func (o ExternalDataSourceOps) Delete(ctx context.Context, client httpclient.Pos
 	return client.DeleteExternalDataSource(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-func parseJobInputsJSON(v types.String) (map[string]any, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	if v.IsNull() || v.IsUnknown() {
-		return nil, diags
-	}
-	raw := strings.TrimSpace(v.ValueString())
-	if raw == "" {
-		return map[string]any{}, diags
-	}
-	var inputs map[string]any
-	if err := json.Unmarshal([]byte(raw), &inputs); err != nil {
-		diags.AddError("Invalid job_inputs_json", fmt.Sprintf("job_inputs_json must be a valid JSON object: %s", err.Error()))
-		return nil, diags
-	}
-	return inputs, diags
-}
-
-func extractSchemaNames(ctx context.Context, list types.List) ([]string, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	if list.IsNull() || list.IsUnknown() {
-		return nil, diags
-	}
-	var names []string
-	diags.Append(list.ElementsAs(ctx, &names, false)...)
-	return names, diags
-}

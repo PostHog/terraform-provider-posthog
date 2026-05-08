@@ -8,14 +8,14 @@ import (
 // ExternalDataSource represents a PostHog data warehouse source (Stripe, Postgres,
 // Snowflake, BigQuery, Hubspot, etc.) that syncs external data into PostHog.
 type ExternalDataSource struct {
-	ID         string                       `json:"id"`
-	SourceType string                       `json:"source_type"`
-	Prefix     *string                      `json:"prefix,omitempty"`
-	JobInputs  map[string]any       `json:"job_inputs,omitempty"`
-	Schemas    []ExternalDataSourceSchema   `json:"schemas,omitempty"`
-	Status     *string                      `json:"status,omitempty"`
-	LastRunAt  *string                      `json:"last_run_at,omitempty"`
-	CreatedAt  *string                      `json:"created_at,omitempty"`
+	ID         string                     `json:"id"`
+	SourceType string                     `json:"source_type"`
+	Prefix     *string                    `json:"prefix,omitempty"`
+	JobInputs  map[string]any             `json:"job_inputs,omitempty"`
+	Schemas    []ExternalDataSourceSchema `json:"schemas,omitempty"`
+	Status     *string                    `json:"status,omitempty"`
+	LastRunAt  *string                    `json:"last_run_at,omitempty"`
+	CreatedAt  *string                    `json:"created_at,omitempty"`
 }
 
 type ExternalDataSourceSchema struct {

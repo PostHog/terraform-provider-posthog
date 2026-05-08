@@ -205,59 +205,6 @@ func TestExternalDataSourceMapResponseToModel_SyncFrequencyFromFirstSchema(t *te
 	assert.Equal(t, "6hour", model.SyncFrequency.ValueString())
 }
 
-func TestParseJobInputsJSON(t *testing.T) {
-	tests := map[string]struct {
-		input        types.String
-		expectError  bool
-		expectKeys   []string
-		expectEmpty  bool
-		expectNilMap bool
-	}{
-		"valid json": {
-			input:      types.StringValue(`{"host":"localhost","port":5432}`),
-			expectKeys: []string{"host", "port"},
-		},
-		"empty string": {
-			input:       types.StringValue(""),
-			expectEmpty: true,
-		},
-		"null": {
-			input:        types.StringNull(),
-			expectNilMap: true,
-		},
-		"unknown": {
-			input:        types.StringUnknown(),
-			expectNilMap: true,
-		},
-		"invalid": {
-			input:       types.StringValue(`not-json`),
-			expectError: true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, diags := parseJobInputsJSON(tc.input)
-			if tc.expectError {
-				assert.True(t, diags.HasError())
-				return
-			}
-			require.False(t, diags.HasError())
-			if tc.expectNilMap {
-				assert.Nil(t, got)
-				return
-			}
-			if tc.expectEmpty {
-				assert.Empty(t, got)
-				return
-			}
-			for _, k := range tc.expectKeys {
-				assert.Contains(t, got, k)
-			}
-		})
-	}
-}
-
 func TestExternalDataSourceCRUD_VerifiesRequestShape(t *testing.T) {
 	var capturedCreateBody, capturedUpdateBody map[string]any
 
