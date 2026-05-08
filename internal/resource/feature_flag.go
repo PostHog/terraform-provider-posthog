@@ -44,7 +44,7 @@ func (o FeatureFlagOps) ResourceName() string {
 
 func (o FeatureFlagOps) Schema() schema.Schema {
 	return schema.Schema{
-		MarkdownDescription: "PostHog Feature Flag resource.",
+		MarkdownDescription: "PostHog Feature Flag resource",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.Int64Attribute{
 				Computed:            true,
