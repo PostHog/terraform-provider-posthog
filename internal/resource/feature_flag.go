@@ -250,9 +250,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	// Set filters if present
 	if len(resp.Filters) > 0 {
-		filtersJSON, err := json.Marshal(resp.Filters)
+		normalizedFilters, err := normalizeJSONForState(resp.Filters, model.Filters.ValueString())
 		if err == nil {
-			model.Filters = types.StringValue(string(filtersJSON))
+			model.Filters = types.StringValue(normalizedFilters)
 		}
 	} else {
 		model.Filters = types.StringNull()
