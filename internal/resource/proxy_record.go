@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 func NewProxyRecord() resource.Resource {
@@ -49,9 +50,10 @@ func (o ProxyRecordOps) Schema() schema.Schema {
 			"organization_id": core.OrganizationIDSchemaAttribute(),
 			"domain": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The custom domain to provision in PostHog.",
+				MarkdownDescription: "The custom domain to provision in PostHog. Configured values are normalised to lowercase with no trailing dot, so `Example.COM.` and `example.com` plan as the same value.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+					normalizeProxyRecordDomainPlanModifier{},
 				},
 			},
 			"target_cname": proxyRecordComputedStringAttribute("The PostHog-managed CNAME target that your DNS record must point to."),
@@ -90,11 +92,7 @@ func (o ProxyRecordOps) MapResponseToModel(_ context.Context, resp httpclient.Pr
 	model.Message = core.PtrToStringNullIfEmptyTrimmed(resp.Message)
 	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
 	model.UpdatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.UpdatedAt)
-	if resp.CreatedBy == nil {
-		model.CreatedBy = types.Int64Null()
-	} else {
-		model.CreatedBy = types.Int64Value(*resp.CreatedBy)
-	}
+	model.CreatedBy = util.PtrToInt64(resp.CreatedBy)
 
 	return diags
 }
@@ -117,6 +115,33 @@ func (o ProxyRecordOps) Delete(ctx context.Context, client httpclient.PosthogCli
 
 func normalizeProxyRecordDomain(raw string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+}
+
+// normalizeProxyRecordDomainPlanModifier rewrites the planned `domain` value
+// through normalizeProxyRecordDomain before plan finalises. Without it, a config
+// of `Example.COM.` would plan as `Example.COM.` while state holds the API's
+// canonical form (`example.com`), which trips Terraform's "Provider produced
+// inconsistent result after apply" check on first apply and triggers a
+// permanent RequiresReplace loop on every subsequent plan.
+type normalizeProxyRecordDomainPlanModifier struct{}
+
+func (normalizeProxyRecordDomainPlanModifier) Description(_ context.Context) string {
+	return "Normalises the domain to lowercase with no trailing dot."
+}
+
+func (m normalizeProxyRecordDomainPlanModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (normalizeProxyRecordDomainPlanModifier) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	normalized := normalizeProxyRecordDomain(req.ConfigValue.ValueString())
+	if normalized == req.PlanValue.ValueString() {
+		return
+	}
+	resp.PlanValue = types.StringValue(normalized)
 }
 
 func proxyRecordComputedStringAttribute(description string) schema.StringAttribute {

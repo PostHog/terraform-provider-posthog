@@ -56,7 +56,7 @@ Recommended lifecycle behavior:
 - `Delete`: delete the record and rely on `404` handling for any later refresh.
 
 `retry` should not be part of the declarative CRUD contract. It is an operational remediation endpoint to be used after the user fixes DNS, not a stable desired-state transition.
-The live API probe on `2026-04-21` also showed that `POST /retry/` returns `403 permission_denied` when called with a Personal API Key, so it cannot be a reliable part of provider CRUD with the current authentication model.
+At the time of writing, `POST /retry/` also returns `403 permission_denied` when called with a Personal API Key, which rules it out of provider CRUD with the current authentication model.
 
 ## Why Acceptance Is The Real Blocker
 

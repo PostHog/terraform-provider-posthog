@@ -30,7 +30,7 @@ output "analytics_proxy_target_cname" {
 
 ### Required
 
-- `domain` (String) The custom domain to provision in PostHog.
+- `domain` (String) The custom domain to provision in PostHog. Configured values are normalised to lowercase with no trailing dot, so `Example.COM.` and `example.com` plan as the same value.
 
 ### Optional
 

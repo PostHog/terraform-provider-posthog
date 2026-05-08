@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +58,55 @@ func TestNormalizeProxyRecordDomain(t *testing.T) {
 	}
 }
 
+func TestProxyRecordDomainPlanModifier(t *testing.T) {
+	tests := map[string]struct {
+		config           types.String
+		planBefore       types.String
+		expectedAfter    types.String
+		expectModified   bool
+		modifierExpected string
+	}{
+		"normalises mixed-case config": {
+			config:         types.StringValue("Proxy.Example.COM"),
+			planBefore:     types.StringValue("Proxy.Example.COM"),
+			expectedAfter:  types.StringValue(testNormalizedProxyRecordDomain),
+			expectModified: true,
+		},
+		"strips trailing dot": {
+			config:         types.StringValue(testNormalizedProxyRecordDomain + "."),
+			planBefore:     types.StringValue(testNormalizedProxyRecordDomain + "."),
+			expectedAfter:  types.StringValue(testNormalizedProxyRecordDomain),
+			expectModified: true,
+		},
+		"already canonical config is left alone": {
+			config:         types.StringValue(testNormalizedProxyRecordDomain),
+			planBefore:     types.StringValue(testNormalizedProxyRecordDomain),
+			expectedAfter:  types.StringValue(testNormalizedProxyRecordDomain),
+			expectModified: false,
+		},
+		"null config is a no-op": {
+			config:         types.StringNull(),
+			planBefore:     types.StringNull(),
+			expectedAfter:  types.StringNull(),
+			expectModified: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			req := planmodifier.StringRequest{
+				ConfigValue: tc.config,
+				PlanValue:   tc.planBefore,
+			}
+			resp := planmodifier.StringResponse{PlanValue: tc.planBefore}
+
+			normalizeProxyRecordDomainPlanModifier{}.PlanModifyString(context.Background(), req, &resp)
+
+			assert.Equal(t, tc.expectedAfter, resp.PlanValue)
+		})
+	}
+}
+
 func TestProxyRecordBuildCreateRequest(t *testing.T) {
 	ops := ProxyRecordOps{}
 	req, diags := ops.BuildCreateRequest(context.Background(), ProxyRecordTFModel{
@@ -84,7 +135,7 @@ func TestProxyRecordResourceNameAndSchema(t *testing.T) {
 	domainAttr, ok := s.Attributes["domain"].(schema.StringAttribute)
 	require.True(t, ok, "domain must be a string attribute")
 	assert.True(t, domainAttr.Required)
-	require.Len(t, domainAttr.PlanModifiers, 1)
+	require.Len(t, domainAttr.PlanModifiers, 2, "domain should carry RequiresReplace and the normalize plan modifier")
 
 	targetAttr, ok := s.Attributes["target_cname"].(schema.StringAttribute)
 	require.True(t, ok, "target_cname must be a string attribute")
@@ -102,9 +153,9 @@ func TestProxyRecordMapResponseToModel(t *testing.T) {
 		Domain:      testNormalizedProxyRecordDomain,
 		TargetCNAME: testProxyRecordTargetCNAME,
 		Status:      testProxyRecordStatus,
-		CreatedAt:   stringPtr(testProxyRecordCreatedAt),
-		UpdatedAt:   stringPtr(testProxyRecordUpdatedAt),
-		CreatedBy:   int64Ptr(testProxyRecordCreatorID),
+		CreatedAt:   util.StringPtr(testProxyRecordCreatedAt),
+		UpdatedAt:   util.StringPtr(testProxyRecordUpdatedAt),
+		CreatedBy:   util.Int64Ptr(testProxyRecordCreatorID),
 	}
 
 	var model ProxyRecordTFModel
@@ -202,14 +253,6 @@ func TestProxyRecordUpdateReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Zero(t, status)
 	assert.Contains(t, err.Error(), "do not support updates")
-}
-
-func stringPtr(v string) *string {
-	return &v
-}
-
-func int64Ptr(v int64) *int64 {
-	return &v
 }
 
 func testProxyRecordCollectionPath() string {

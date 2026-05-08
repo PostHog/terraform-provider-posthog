@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestListProxyRecords(t *testing.T) {
 		assert.Equal(t, testProxyRecordsCollectionPath(), r.URL.Path)
 
 		resp := ProxyRecordListResponse{
-			MaxProxyRecords: int64Ptr(10),
+			MaxProxyRecords: util.Int64Ptr(10),
 			Results: []ProxyRecord{
 				{ID: testProxyRecordID, Domain: "a.example.com", TargetCNAME: "cname-1.proxyhog.com.", Status: "waiting"},
 				{ID: "proxy-2", Domain: "b.example.com", TargetCNAME: "cname-2.proxyhog.com.", Status: "valid"},
@@ -122,10 +123,6 @@ func writeJSONResponse(t *testing.T, w http.ResponseWriter, body any) {
 	t.Helper()
 	w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
 	require.NoError(t, json.NewEncoder(w).Encode(body))
-}
-
-func int64Ptr(v int64) *int64 {
-	return &v
 }
 
 func testProxyRecordsCollectionPath() string {
