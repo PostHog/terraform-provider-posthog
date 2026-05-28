@@ -4,6 +4,8 @@ version: 2
 updates:
   # Maintain dependencies for Go modules
   - package-ecosystem: "gomod"
+    cooldown:
+      default-days: 7
     directory: "/"
     schedule:
       # Check for updates to Go modules every weekday
@@ -14,10 +16,14 @@ updates:
         patterns:
           - "github.com/hashicorp/terraform-plugin-*"
   - package-ecosystem: "gomod"
+    cooldown:
+      default-days: 7
     directory: "/tools"
     schedule:
       interval: "daily"
   - package-ecosystem: "github-actions"
+    cooldown:
+      default-days: 7
     directory: "/"
     groups:
       "github-actions":
