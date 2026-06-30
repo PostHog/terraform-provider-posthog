@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -956,6 +957,89 @@ resource "posthog_hog_function" "test" {
     }
   })
 
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$pageview"
+      name = "$pageview"
+      type = "events"
+    }]
+    filter_test_accounts = false
+  })
+}
+`, name)
+}
+
+// TestHogFunction_HogTrailingNewline is a regression test for issue #91. A raw
+// `<<-EOT` heredoc carries a trailing newline, which PostHog strips server-side.
+// Before the TrimTrailingWhitespace plan modifier, the known planned value (with
+// the newline) didn't match the server-trimmed value, producing "Provider
+// produced inconsistent result after apply". The modifier now trims the planned
+// value so plan == state — no chomp() workaround needed, and the post-apply plan
+// is empty (terraform-plugin-testing fails the step otherwise).
+func TestHogFunction_HogTrailingNewline(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccHogFunctionHogTrailingNewline(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					// The fix preserves the user's configured value (trailing newline
+					// and all) so it stays semantically equal to the server's trimmed
+					// value — that's what keeps apply consistent and the plan empty.
+					resource.TestCheckResourceAttrWith("posthog_hog_function.test", "hog", func(v string) error {
+						if !strings.HasSuffix(v, "\n") {
+							return fmt.Errorf("expected hog to preserve its trailing newline, got %q", v)
+						}
+						return nil
+					}),
+				),
+			},
+		},
+	})
+}
+
+// testAccHogFunctionHogTrailingNewline sets `hog` from a raw heredoc (no chomp),
+// so the configured value ends in a newline. This is the exact shape that
+// triggered issue #91 before the fix.
+func testAccHogFunctionHogTrailingNewline(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Regression test for trailing-newline hog code"
+  type        = "destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  hog = <<-EOT
+    let res := fetch(inputs.url, { 'method': 'POST', 'body': inputs.body });
+    if (res.status >= 400) {
+      throw Error(f'Webhook failed with status {res.status}');
+    }
+  EOT
+
+  inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/webhook"
+      templating = "hog"
+    }
+    body = {
+      value      = { event = "{event.event}" }
+      templating = "hog"
+    }
+  })
+
+  # Set explicitly so the template's default filters don't surface as a
+  # null-vs-value inconsistency unrelated to the hog field under test.
   filters_json = jsonencode({
     source = "events"
     events = [{
