@@ -52,6 +52,7 @@ func TestProject_ProviderLevelOrganizationID(t *testing.T) {
 // portable across instances.
 func TestProject_OrganizationSlug(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoOrganizationID(t)
 
 	orgID := getOrganizationID()
 
