@@ -27,6 +27,10 @@ type OrganizationMemberRequest struct {
 }
 
 func (c *PosthogClient) ListOrganizationMembers(ctx context.Context, organizationID string) ([]OrganizationMember, error) {
+	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
 	return listAll[OrganizationMember](c, ctx, fmt.Sprintf("/api/organizations/%s/members/", organizationID))
 }
 
@@ -49,12 +53,20 @@ func (c *PosthogClient) GetOrganizationMember(ctx context.Context, organizationI
 
 // UpdateOrganizationMember updates a member's level.
 func (c *PosthogClient) UpdateOrganizationMember(ctx context.Context, organizationID, userUUID string, input OrganizationMemberRequest) (OrganizationMember, HTTPStatusCode, error) {
+	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+	if err != nil {
+		return OrganizationMember{}, 0, err
+	}
 	path := fmt.Sprintf("/api/organizations/%s/members/%s/", organizationID, userUUID)
 	return doPatch[OrganizationMember](c, ctx, path, input)
 }
 
 // DeleteOrganizationMember removes a member from the organization.
 func (c *PosthogClient) DeleteOrganizationMember(ctx context.Context, organizationID, userUUID string) (HTTPStatusCode, error) {
+	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
 	path := fmt.Sprintf("/api/organizations/%s/members/%s/", organizationID, userUUID)
 	return doDelete(c, ctx, path)
 }

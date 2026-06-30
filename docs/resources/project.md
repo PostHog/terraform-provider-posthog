@@ -21,7 +21,7 @@ Manages a PostHog project within an organization.
 
 ### Optional
 
-- `organization_id` (String) Organization ID for this resource. Overrides the provider-level organization_id.
+- `organization_id` (String) Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization); slugs and `@current` are resolved to a UUID for API calls while your original value is preserved in state.
 - `timezone` (String) The timezone for this project (e.g., 'UTC', 'America/New_York', 'Europe/London'). Defaults to 'UTC'.
 
 ### Read-Only

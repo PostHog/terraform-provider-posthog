@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -21,6 +22,21 @@ type PosthogClient struct {
 	apiKey     string
 	version    string
 	httpClient *http.Client
+	// orgCache memoizes organization slug/"@current" -> UUID resolutions. It is a
+	// pointer so that all value copies of PosthogClient (the client is passed by
+	// value through ProviderData and resource operations) share one cache.
+	orgCache *organizationCache
+}
+
+// organizationCache memoizes organization identifier resolutions across the
+// (value-copied) clients derived from a single constructed client.
+type organizationCache struct {
+	mu    sync.Mutex
+	byKey map[string]string
+}
+
+func newOrganizationCache() *organizationCache {
+	return &organizationCache{byKey: make(map[string]string)}
 }
 
 // PaginatedResponse is the standard envelope for paginated PostHog API list endpoints.
@@ -51,6 +67,7 @@ func NewDefaultClient(host, apiKey, version string, opts ...ClientOption) Postho
 		apiKey:     apiKey,
 		version:    version,
 		httpClient: httpClient,
+		orgCache:   newOrganizationCache(),
 	}
 }
 
@@ -64,6 +81,7 @@ func NewClient(client *http.Client, host, apiKey, version string, opts ...Client
 		apiKey:     apiKey,
 		version:    version,
 		httpClient: client,
+		orgCache:   newOrganizationCache(),
 	}
 }
 

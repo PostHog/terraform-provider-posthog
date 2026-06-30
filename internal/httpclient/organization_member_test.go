@@ -14,7 +14,7 @@ import (
 
 func TestListOrganizationMembers_SinglePage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/organizations/org-123/members/", r.URL.Path, "request path should match expected endpoint")
+		assert.Equal(t, "/api/organizations/00000000-0000-0000-0000-000000000123/members/", r.URL.Path, "request path should match expected endpoint")
 
 		resp := PaginatedResponse[OrganizationMember]{
 			Results: []OrganizationMember{
@@ -29,7 +29,7 @@ func TestListOrganizationMembers_SinglePage(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test")
-	members, err := client.ListOrganizationMembers(context.Background(), "org-123")
+	members, err := client.ListOrganizationMembers(context.Background(), "00000000-0000-0000-0000-000000000123")
 
 	require.NoError(t, err, "listing organization members should not return an error")
 	assert.Len(t, members, 2, "should return all members from single page")
@@ -44,8 +44,8 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 		requestURI := r.URL.RequestURI()
 
 		switch requestURI {
-		case "/api/organizations/org-123/members/":
-			nextURL := "/api/organizations/org-123/members/?cursor=page2"
+		case "/api/organizations/00000000-0000-0000-0000-000000000123/members/":
+			nextURL := "/api/organizations/00000000-0000-0000-0000-000000000123/members/?cursor=page2"
 			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
@@ -55,8 +55,8 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 
-		case "/api/organizations/org-123/members/?cursor=page2":
-			nextURL := "/api/organizations/org-123/members/?cursor=page3"
+		case "/api/organizations/00000000-0000-0000-0000-000000000123/members/?cursor=page2":
+			nextURL := "/api/organizations/00000000-0000-0000-0000-000000000123/members/?cursor=page3"
 			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-3", User: &OrganizationMemberUser{UUID: "user-3"}},
@@ -65,7 +65,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 
-		case "/api/organizations/org-123/members/?cursor=page3":
+		case "/api/organizations/00000000-0000-0000-0000-000000000123/members/?cursor=page3":
 			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-4", User: &OrganizationMemberUser{UUID: "user-4"}},
@@ -82,7 +82,7 @@ func TestListOrganizationMembers_MultiplePages(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test")
-	members, err := client.ListOrganizationMembers(context.Background(), "org-123")
+	members, err := client.ListOrganizationMembers(context.Background(), "00000000-0000-0000-0000-000000000123")
 
 	require.NoError(t, err, "listing organization members should not return an error")
 	assert.Len(t, members, 4, "should return all members from all pages")
@@ -110,7 +110,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 
 		if requestCount == 1 {
 			// First page with absolute URL - tests that url.Parse extracts the path correctly
-			nextURL := "https://us.posthog.com/api/organizations/org-123/members/?cursor=page2"
+			nextURL := "https://us.posthog.com/api/organizations/00000000-0000-0000-0000-000000000123/members/?cursor=page2"
 			resp := PaginatedResponse[OrganizationMember]{
 				Results: []OrganizationMember{
 					{ID: "member-1", User: &OrganizationMemberUser{UUID: "user-1"}},
@@ -131,7 +131,7 @@ func TestListOrganizationMembers_AbsoluteNextURL(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test")
-	members, err := client.ListOrganizationMembers(context.Background(), "org-123")
+	members, err := client.ListOrganizationMembers(context.Background(), "00000000-0000-0000-0000-000000000123")
 
 	require.NoError(t, err, "listing organization members should not return an error")
 	assert.Len(t, members, 2, "should return members from both pages")
@@ -154,7 +154,7 @@ func TestGetOrganizationMember_Found(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test")
-	member, status, err := client.GetOrganizationMember(context.Background(), "org-123", "user-1")
+	member, status, err := client.GetOrganizationMember(context.Background(), "00000000-0000-0000-0000-000000000123", "user-1")
 
 	require.NoError(t, err, "getting existing organization member should not return an error")
 	assert.Equal(t, http.StatusOK, int(status), "should return 200 OK status")
@@ -177,7 +177,7 @@ func TestGetOrganizationMember_NotFound(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, "test-key", "test")
-	_, status, err := client.GetOrganizationMember(context.Background(), "org-123", "user-999")
+	_, status, err := client.GetOrganizationMember(context.Background(), "00000000-0000-0000-0000-000000000123", "user-999")
 
 	require.Error(t, err, "getting non-existent organization member should return an error")
 	assert.Equal(t, http.StatusNotFound, int(status), "should return 404 Not Found status")
