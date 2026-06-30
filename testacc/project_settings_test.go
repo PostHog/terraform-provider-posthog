@@ -1,10 +1,14 @@
 package tests
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 func TestProjectSettings_Basic(t *testing.T) {
@@ -85,6 +89,38 @@ func TestProjectSettings_Import(t *testing.T) {
 				ImportStateVerify:       true,
 				ImportStateId:           projectID,
 				ImportStateVerifyIgnore: []string{"project_id"},
+			},
+		},
+	})
+}
+
+// TestProjectSettings_DeleteIsNoOp verifies the documented Delete semantics:
+// destroying the resource stops Terraform managing the settings but does NOT
+// reset them on PostHog. We set surveys_opt_in = true, destroy, then confirm the
+// environment still reports true (a reset would have cleared it to the default).
+func TestProjectSettings_DeleteIsNoOp(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	projectID := getProjectID()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(*terraform.State) error {
+			client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+			env, _, err := client.GetEnvironment(context.Background(), projectID)
+			if err != nil {
+				return fmt.Errorf("fetching environment after destroy: %w", err)
+			}
+			if env.SurveysOptIn == nil || !*env.SurveysOptIn {
+				return fmt.Errorf("expected surveys_opt_in to persist as true after destroy (no-op delete), got %v", env.SurveysOptIn)
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectSettingsConfig(true, false, true), // surveys_opt_in = true
+				Check:  resource.TestCheckResourceAttr("posthog_project_settings.test", "surveys_opt_in", "true"),
 			},
 		},
 	})
