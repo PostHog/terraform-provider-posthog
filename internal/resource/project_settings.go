@@ -68,7 +68,7 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 
 ~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
 
-~> **Domains:** The project's authorized domains are managed via ` + "`app_urls`" + ` (the "Authorized URLs" / permitted domains used by the toolbar and as the project's domain allowlist) and ` + "`recording_domains`" + ` (session-replay domains). PostHog's web analytics has no separate per-domain allowlist of its own; ` + "`app_urls`" + ` is the project-level domains setting.`,
+~> **Domains:** ` + "`app_urls`" + ` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). ` + "`recording_domains`" + ` is the session-replay domains list.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -133,7 +133,7 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 				Optional:            true,
 				Computed:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "Authorized URLs / permitted domains for the project (the \"Authorized URLs\" shown in project settings; used by the toolbar and as the project's domain allowlist). Maps to the team `app_urls` field. Order is preserved.",
+				MarkdownDescription: "The project's authorized domains — shown in PostHog settings as **Web analytics domains** (and used as the toolbar's Authorized URLs). These are the domains tracked in web analytics and where the toolbar is enabled. Maps to the team `app_urls` field. Wildcards are not allowed; order is preserved.",
 				PlanModifiers: []planmodifier.List{
 					listplanmodifier.UseStateForUnknown(),
 				},
