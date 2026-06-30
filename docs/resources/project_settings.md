@@ -8,7 +8,7 @@ description: |-
   ~> Singleton: There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
   ~> Destroy Behavior: Destroying this resource is a no-op. It stops Terraform from managing the settings but does not reset any values on PostHog; the last-applied settings remain in effect.
   ~> Plan-gated settings: If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
-  ~> Out of scope: Managing the web-analytics capture-domain allowlist ("add domains for web analytics") is intentionally not supported here. That allowlist is not writable via the Personal API Key, so there is no clean API field to manage. Follow up if the API exposes it.
+  ~> Domains: The project's authorized domains are managed via app_urls (the "Authorized URLs" / permitted domains used by the toolbar and as the project's domain allowlist) and recording_domains (session-replay domains). PostHog's web analytics has no separate per-domain allowlist of its own; app_urls is the project-level domains setting.
 ---
 
 # posthog_project_settings (Resource)
@@ -23,7 +23,7 @@ These settings live on the PostHog environment object (`/api/environments/{id}/`
 
 ~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
 
-~> **Out of scope:** Managing the web-analytics capture-domain allowlist ("add domains for web analytics") is intentionally not supported here. That allowlist is not writable via the Personal API Key, so there is no clean API field to manage. Follow up if the API exposes it.
+~> **Domains:** The project's authorized domains are managed via `app_urls` (the "Authorized URLs" / permitted domains used by the toolbar and as the project's domain allowlist) and `recording_domains` (session-replay domains). PostHog's web analytics has no separate per-domain allowlist of its own; `app_urls` is the project-level domains setting.
 
 ## Example Usage
 
@@ -39,6 +39,11 @@ resource "posthog_project_settings" "example" {
   surveys_opt_in                = true
   autocapture_web_vitals_opt_in = false
   cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateless, 2=stateful
+
+  # Authorized URLs / permitted domains (toolbar + project domain allowlist).
+  app_urls = ["https://app.example.com", "https://www.example.com"]
+  # Authorized domains for session replay.
+  recording_domains = ["https://app.example.com"]
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
@@ -52,11 +57,13 @@ resource "posthog_project_settings" "minimal" {
 
 ### Optional
 
+- `app_urls` (List of String) Authorized URLs / permitted domains for the project (the "Authorized URLs" shown in project settings; used by the toolbar and as the project's domain allowlist). Maps to the team `app_urls` field. Order is preserved.
 - `autocapture_exceptions_opt_in` (Boolean) Whether exception autocapture is enabled.
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
 - `cookieless_server_hash_mode` (Number) The cookieless server hash mode: `0` (disabled), `1` (stateless), or `2` (stateful). Matches PostHog's `CookielessServerHashMode` enum.
 - `heatmaps_opt_in` (Boolean) Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
+- `recording_domains` (List of String) Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.
 - `session_recording_opt_in` (Boolean) Whether session recording (recording user sessions) is enabled.
 - `surveys_opt_in` (Boolean) Whether surveys are enabled.
 

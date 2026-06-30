@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -37,6 +38,8 @@ type ProjectSettingsModel struct {
 	SurveysOptIn               types.Bool   `tfsdk:"surveys_opt_in"`
 	CookielessServerHashMode   types.Int64  `tfsdk:"cookieless_server_hash_mode"`
 	AutocaptureWebVitalsOptIn  types.Bool   `tfsdk:"autocapture_web_vitals_opt_in"`
+	AppURLs                    types.List   `tfsdk:"app_urls"`
+	RecordingDomains           types.List   `tfsdk:"recording_domains"`
 }
 
 func (m ProjectSettingsModel) GetID() string {
@@ -65,7 +68,7 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 
 ~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
 
-~> **Out of scope:** Managing the web-analytics capture-domain allowlist ("add domains for web analytics") is intentionally not supported here. That allowlist is not writable via the Personal API Key, so there is no clean API field to manage. Follow up if the API exposes it.`,
+~> **Domains:** The project's authorized domains are managed via ` + "`app_urls`" + ` (the "Authorized URLs" / permitted domains used by the toolbar and as the project's domain allowlist) and ` + "`recording_domains`" + ` (session-replay domains). PostHog's web analytics has no separate per-domain allowlist of its own; ` + "`app_urls`" + ` is the project-level domains setting.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -126,11 +129,30 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"app_urls": schema.ListAttribute{
+				Optional:            true,
+				Computed:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Authorized URLs / permitted domains for the project (the \"Authorized URLs\" shown in project settings; used by the toolbar and as the project's domain allowlist). Maps to the team `app_urls` field. Order is preserved.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"recording_domains": schema.ListAttribute{
+				Optional:            true,
+				Computed:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
 
-func (o ProjectSettingsOps) BuildCreateRequest(_ context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+	var diags diag.Diagnostics
 	req := httpclient.EnvironmentSettingsRequest{
 		HeatmapsOptIn:              util.BoolPtrFromValue(model.HeatmapsOptIn),
 		AutocaptureExceptionsOptIn: util.BoolPtrFromValue(model.AutocaptureExceptionsOptIn),
@@ -139,14 +161,45 @@ func (o ProjectSettingsOps) BuildCreateRequest(_ context.Context, model ProjectS
 		AutocaptureWebVitalsOptIn:  util.BoolPtrFromValue(model.AutocaptureWebVitalsOptIn),
 		CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
 	}
-	return req, nil
+
+	appURLs, d := listToStringSlicePtr(ctx, model.AppURLs)
+	diags.Append(d...)
+	req.AppURLs = appURLs
+
+	recordingDomains, d := listToStringSlicePtr(ctx, model.RecordingDomains)
+	diags.Append(d...)
+	req.RecordingDomains = recordingDomains
+
+	return req, diags
+}
+
+// listToStringSlicePtr converts a configured list attribute to a pointer-to-slice
+// for the request body: null/unknown -> nil (omitted from PATCH), otherwise a
+// pointer to the (possibly empty) slice so an explicit empty list clears the value.
+func listToStringSlicePtr(ctx context.Context, l types.List) (*[]string, diag.Diagnostics) {
+	if l.IsNull() || l.IsUnknown() {
+		return nil, nil
+	}
+	out := []string{}
+	diags := l.ElementsAs(ctx, &out, false)
+	return &out, diags
+}
+
+// stringSlicePtrToList converts a server slice back to a list attribute: nil ->
+// null list (PostHog returned no value), otherwise the (possibly empty) list.
+func stringSlicePtrToList(ctx context.Context, s *[]string) (types.List, diag.Diagnostics) {
+	if s == nil {
+		return types.ListNull(types.StringType), nil
+	}
+	return types.ListValueFrom(ctx, types.StringType, *s)
 }
 
 func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, _ ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
 	return o.BuildCreateRequest(ctx, plan)
 }
 
-func (o ProjectSettingsOps) MapResponseToModel(_ context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {
+func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {
+	var diags diag.Diagnostics
 	model.ID = types.StringValue(model.GetEffectiveProjectID())
 	model.HeatmapsOptIn = core.PtrToBool(resp.HeatmapsOptIn)
 	model.AutocaptureExceptionsOptIn = core.PtrToBool(resp.AutocaptureExceptionsOptIn)
@@ -154,7 +207,16 @@ func (o ProjectSettingsOps) MapResponseToModel(_ context.Context, resp httpclien
 	model.SurveysOptIn = core.PtrToBool(resp.SurveysOptIn)
 	model.AutocaptureWebVitalsOptIn = core.PtrToBool(resp.AutocaptureWebVitalsOptIn)
 	model.CookielessServerHashMode = util.PtrToInt64(resp.CookielessServerHashMode)
-	return nil
+
+	appURLs, d := stringSlicePtrToList(ctx, resp.AppURLs)
+	diags.Append(d...)
+	model.AppURLs = appURLs
+
+	recordingDomains, d := stringSlicePtrToList(ctx, resp.RecordingDomains)
+	diags.Append(d...)
+	model.RecordingDomains = recordingDomains
+
+	return diags
 }
 
 func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, error) {

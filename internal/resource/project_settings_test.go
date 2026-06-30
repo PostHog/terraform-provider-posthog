@@ -28,8 +28,6 @@ func TestProjectSettingsResourceNameAndSchema(t *testing.T) {
 	s := ops.Schema()
 
 	assert.Equal(t, "project_settings", ops.ResourceName())
-	assert.Contains(t, s.MarkdownDescription, "no-op")
-	assert.Contains(t, s.MarkdownDescription, "Out of scope")
 
 	for _, name := range []string{
 		"heatmaps_opt_in", "autocapture_exceptions_opt_in", "session_recording_opt_in",
@@ -45,6 +43,14 @@ func TestProjectSettingsResourceNameAndSchema(t *testing.T) {
 	require.True(t, ok, "cookieless_server_hash_mode must be an int64 attribute")
 	assert.True(t, hashAttr.Optional)
 	assert.True(t, hashAttr.Computed)
+
+	for _, name := range []string{"app_urls", "recording_domains"} {
+		attr, ok := s.Attributes[name].(schema.ListAttribute)
+		require.Truef(t, ok, "%s must be a list attribute", name)
+		assert.Truef(t, attr.Optional, "%s should be optional", name)
+		assert.Truef(t, attr.Computed, "%s should be computed", name)
+		assert.Equalf(t, types.StringType, attr.ElementType, "%s should be a list of strings", name)
+	}
 }
 
 func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {

@@ -12,13 +12,15 @@ import (
 // Pointer types are used so that an unset field (nil) can be distinguished from a
 // field that is explicitly set to its zero value (e.g. false or 0).
 type Environment struct {
-	ID                         int64  `json:"id"`
-	HeatmapsOptIn              *bool  `json:"heatmaps_opt_in,omitempty"`
-	AutocaptureExceptionsOptIn *bool  `json:"autocapture_exceptions_opt_in,omitempty"`
-	SessionRecordingOptIn      *bool  `json:"session_recording_opt_in,omitempty"`
-	SurveysOptIn               *bool  `json:"surveys_opt_in,omitempty"`
-	CookielessServerHashMode   *int64 `json:"cookieless_server_hash_mode,omitempty"`
-	AutocaptureWebVitalsOptIn  *bool  `json:"autocapture_web_vitals_opt_in,omitempty"`
+	ID                         int64     `json:"id"`
+	HeatmapsOptIn              *bool     `json:"heatmaps_opt_in,omitempty"`
+	AutocaptureExceptionsOptIn *bool     `json:"autocapture_exceptions_opt_in,omitempty"`
+	SessionRecordingOptIn      *bool     `json:"session_recording_opt_in,omitempty"`
+	SurveysOptIn               *bool     `json:"surveys_opt_in,omitempty"`
+	CookielessServerHashMode   *int64    `json:"cookieless_server_hash_mode,omitempty"`
+	AutocaptureWebVitalsOptIn  *bool     `json:"autocapture_web_vitals_opt_in,omitempty"`
+	AppURLs                    *[]string `json:"app_urls,omitempty"`
+	RecordingDomains           *[]string `json:"recording_domains,omitempty"`
 }
 
 // EnvironmentSettingsRequest carries the writable subset of environment settings.
@@ -27,12 +29,14 @@ type Environment struct {
 // reusing Environment as the request body: ID has no omitempty, so reusing it would
 // serialize "id":0 into every PATCH.
 type EnvironmentSettingsRequest struct {
-	HeatmapsOptIn              *bool  `json:"heatmaps_opt_in,omitempty"`
-	AutocaptureExceptionsOptIn *bool  `json:"autocapture_exceptions_opt_in,omitempty"`
-	SessionRecordingOptIn      *bool  `json:"session_recording_opt_in,omitempty"`
-	SurveysOptIn               *bool  `json:"surveys_opt_in,omitempty"`
-	CookielessServerHashMode   *int64 `json:"cookieless_server_hash_mode,omitempty"`
-	AutocaptureWebVitalsOptIn  *bool  `json:"autocapture_web_vitals_opt_in,omitempty"`
+	HeatmapsOptIn              *bool     `json:"heatmaps_opt_in,omitempty"`
+	AutocaptureExceptionsOptIn *bool     `json:"autocapture_exceptions_opt_in,omitempty"`
+	SessionRecordingOptIn      *bool     `json:"session_recording_opt_in,omitempty"`
+	SurveysOptIn               *bool     `json:"surveys_opt_in,omitempty"`
+	CookielessServerHashMode   *int64    `json:"cookieless_server_hash_mode,omitempty"`
+	AutocaptureWebVitalsOptIn  *bool     `json:"autocapture_web_vitals_opt_in,omitempty"`
+	AppURLs                    *[]string `json:"app_urls,omitempty"`
+	RecordingDomains           *[]string `json:"recording_domains,omitempty"`
 }
 
 func (c *PosthogClient) GetEnvironment(ctx context.Context, projectID string) (Environment, HTTPStatusCode, error) {

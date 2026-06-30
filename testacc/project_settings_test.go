@@ -161,3 +161,39 @@ resource "posthog_project_settings" "test" {
 }
 `
 }
+
+// TestProjectSettings_Domains exercises the app_urls and recording_domains list
+// attributes end-to-end, including ordering (app_urls has two entries). The
+// implicit post-apply plan check confirms the lists round-trip with no ordering
+// drift.
+func TestProjectSettings_Domains(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectSettingsConfigDomains(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "app_urls.#", "2"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "app_urls.0", "https://app.example.com"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "app_urls.1", "https://www.example.com"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "recording_domains.#", "1"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "recording_domains.0", "https://app.example.com"),
+				),
+			},
+		},
+	})
+}
+
+func testAccProjectSettingsConfigDomains() string {
+	return `
+provider "posthog" {}
+
+resource "posthog_project_settings" "test" {
+  app_urls          = ["https://app.example.com", "https://www.example.com"]
+  recording_domains = ["https://app.example.com"]
+}
+`
+}
