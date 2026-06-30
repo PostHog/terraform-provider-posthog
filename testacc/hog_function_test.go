@@ -836,6 +836,7 @@ resource "posthog_alert" "test" {
   threshold_type       = "absolute"
   threshold_upper      = 1000
   condition_type       = "absolute_value"
+  series_index         = 0
   calculation_interval = "daily"
   skip_weekend         = false
 
