@@ -313,7 +313,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	// which also prevents a perpetual diff on subsequent plans.
 	serverHog := core.PtrToStringTrimmed(resp.Hog)
 	if model.Hog.IsNull() || model.Hog.IsUnknown() ||
-		strings.TrimRight(model.Hog.ValueString(), " \t\n\r") != serverHog.ValueString() {
+		core.TrimTrailingWS(model.Hog.ValueString()) != serverHog.ValueString() {
 		model.Hog = serverHog
 	}
 

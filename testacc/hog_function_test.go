@@ -972,11 +972,12 @@ resource "posthog_hog_function" "test" {
 
 // TestHogFunction_HogTrailingNewline is a regression test for issue #91. A raw
 // `<<-EOT` heredoc carries a trailing newline, which PostHog strips server-side.
-// Before the TrimTrailingWhitespace plan modifier, the known planned value (with
-// the newline) didn't match the server-trimmed value, producing "Provider
-// produced inconsistent result after apply". The modifier now trims the planned
-// value so plan == state — no chomp() workaround needed, and the post-apply plan
-// is empty (terraform-plugin-testing fails the step otherwise).
+// Storing the server-trimmed value made the applied value differ from the known
+// planned (config) value, producing "Provider produced inconsistent result after
+// apply". The fix keeps the configured value in MapResponseToModel when it differs
+// from the server's only by trailing whitespace (semantic equality), so apply is
+// consistent and the post-apply plan is empty (terraform-plugin-testing fails the
+// step otherwise) — no chomp() workaround needed.
 func TestHogFunction_HogTrailingNewline(t *testing.T) {
 	skipIfNotAcceptance(t)
 
