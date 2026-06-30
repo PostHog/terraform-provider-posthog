@@ -91,6 +91,31 @@ func TestProject_OrganizationSlug(t *testing.T) {
 	})
 }
 
+// TestProject_OrganizationCurrent exercises the "@current" resolution branch
+// (issue #99): organization_id is the literal "@current", which the provider
+// resolves to the authenticated user's org via GET /api/organizations/@current/.
+// State keeps "@current", not the resolved UUID.
+func TestProject_OrganizationCurrent(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccBasePreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectBasic("@current", rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", "@current"),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
+				),
+			},
+		},
+	})
+}
+
 // TestProject_Basic tests creating a project with only the required fields.
 func TestProject_Basic(t *testing.T) {
 	skipIfNotAcceptance(t)
