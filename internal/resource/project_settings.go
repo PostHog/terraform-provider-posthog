@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -108,7 +110,10 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 			"cookieless_server_hash_mode": schema.Int64Attribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The cookieless server hash mode. Typical values are `0` (disabled), `1` (stateful) and `2` (stateless).",
+				MarkdownDescription: "The cookieless server hash mode: `0` (disabled), `1` (stateless), or `2` (stateful). Matches PostHog's `CookielessServerHashMode` enum.",
+				Validators: []validator.Int64{
+					int64validator.OneOf(0, 1, 2),
+				},
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},

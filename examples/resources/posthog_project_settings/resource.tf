@@ -8,7 +8,7 @@ resource "posthog_project_settings" "example" {
   session_recording_opt_in      = true
   surveys_opt_in                = true
   autocapture_web_vitals_opt_in = false
-  cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateful, 2=stateless
+  cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateless, 2=stateful
 }
 
 # Use the provider-level project_id and manage only a subset of settings.

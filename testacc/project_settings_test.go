@@ -96,31 +96,40 @@ func TestProjectSettings_Import(t *testing.T) {
 
 // TestProjectSettings_DeleteIsNoOp verifies the documented Delete semantics:
 // destroying the resource stops Terraform managing the settings but does NOT
-// reset them on PostHog. We set surveys_opt_in = true, destroy, then confirm the
-// environment still reports true (a reset would have cleared it to the default).
+// reset them on PostHog. To avoid a coincidental match with PostHog's default,
+// it sets surveys_opt_in to the OPPOSITE of the current server value, then after
+// destroy asserts the value is still the one Terraform applied (a reset would
+// have reverted it).
 func TestProjectSettings_DeleteIsNoOp(t *testing.T) {
 	skipIfNotAcceptance(t)
 
 	projectID := getProjectID()
+	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+
+	before, _, err := client.GetEnvironment(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("reading environment before test: %v", err)
+	}
+	// Pick the value distinct from whatever PostHog currently reports.
+	target := before.SurveysOptIn == nil || !*before.SurveysOptIn
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy: func(*terraform.State) error {
-			client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
 			env, _, err := client.GetEnvironment(context.Background(), projectID)
 			if err != nil {
 				return fmt.Errorf("fetching environment after destroy: %w", err)
 			}
-			if env.SurveysOptIn == nil || !*env.SurveysOptIn {
-				return fmt.Errorf("expected surveys_opt_in to persist as true after destroy (no-op delete), got %v", env.SurveysOptIn)
+			if env.SurveysOptIn == nil || *env.SurveysOptIn != target {
+				return fmt.Errorf("expected surveys_opt_in to persist as %t after destroy (no-op delete), got %v", target, env.SurveysOptIn)
 			}
 			return nil
 		},
 		Steps: []resource.TestStep{
 			{
-				Config: testAccProjectSettingsConfig(true, false, true), // surveys_opt_in = true
-				Check:  resource.TestCheckResourceAttr("posthog_project_settings.test", "surveys_opt_in", "true"),
+				Config: testAccProjectSettingsConfig(true, false, target),
+				Check:  resource.TestCheckResourceAttr("posthog_project_settings.test", "surveys_opt_in", fmt.Sprintf("%t", target)),
 			},
 		},
 	})

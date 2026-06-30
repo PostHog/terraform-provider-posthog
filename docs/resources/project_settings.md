@@ -38,7 +38,7 @@ resource "posthog_project_settings" "example" {
   session_recording_opt_in      = true
   surveys_opt_in                = true
   autocapture_web_vitals_opt_in = false
-  cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateful, 2=stateless
+  cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateless, 2=stateful
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
@@ -54,7 +54,7 @@ resource "posthog_project_settings" "minimal" {
 
 - `autocapture_exceptions_opt_in` (Boolean) Whether exception autocapture is enabled.
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
-- `cookieless_server_hash_mode` (Number) The cookieless server hash mode. Typical values are `0` (disabled), `1` (stateful) and `2` (stateless).
+- `cookieless_server_hash_mode` (Number) The cookieless server hash mode: `0` (disabled), `1` (stateless), or `2` (stateful). Matches PostHog's `CookielessServerHashMode` enum.
 - `heatmaps_opt_in` (Boolean) Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `session_recording_opt_in` (Boolean) Whether session recording (recording user sessions) is enabled.
