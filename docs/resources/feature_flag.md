@@ -23,6 +23,7 @@ PostHog Feature Flag resource
 
 - `active` (Boolean) Whether the feature flag is active
 - `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
+- `ensure_experience_continuity` (Boolean) Whether to persist the flag across authentication steps (PostHog's UI labels this as 'Persist flag across authentication steps'). Flags with experience continuity enabled cannot be evaluated by server-side local evaluation; set this to false for flags that must be evaluated locally.
 - `filters` (String) Feature flag filters as JSON
 - `name` (String) Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.

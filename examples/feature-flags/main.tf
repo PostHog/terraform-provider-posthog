@@ -164,6 +164,27 @@ resource "posthog_feature_flag" "remote_config" {
   tags = ["managed-by:terraform"]
 }
 
+# Example 7: Server-Side Flag Without Experience Continuity
+# Pin `ensure_experience_continuity = false` so the flag can be evaluated by
+# server-side local evaluation. Flags with experience continuity enabled cannot
+# be computed locally, so a server-side gate would silently evaluate to false if
+# the setting were toggled on in the UI.
+resource "posthog_feature_flag" "server_side_gate" {
+  key                          = "server-side-gate"
+  name                         = "Server-Side Gate"
+  active                       = true
+  ensure_experience_continuity = false
+
+  filters = jsonencode({
+    groups = [{
+      properties         = []
+      rollout_percentage = 100
+    }]
+  })
+
+  tags = ["managed-by:terraform"]
+}
+
 # Outputs to reference the created feature flags
 output "simple_boolean_flag_id" {
   description = "ID of the simple boolean feature flag"

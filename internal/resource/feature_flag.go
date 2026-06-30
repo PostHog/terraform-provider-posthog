@@ -27,13 +27,14 @@ func NewFeatureFlag() resource.Resource {
 type FeatureFlagTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	Key               types.String `tfsdk:"key"`
-	Name              types.String `tfsdk:"name"`
-	Active            types.Bool   `tfsdk:"active"`
-	Filters           types.String `tfsdk:"filters"`
-	RolloutPercentage types.Int64  `tfsdk:"rollout_percentage"`
-	Tags              types.Set    `tfsdk:"tags"`
-	Deleted           types.Bool   `tfsdk:"deleted"`
+	Key                        types.String `tfsdk:"key"`
+	Name                       types.String `tfsdk:"name"`
+	Active                     types.Bool   `tfsdk:"active"`
+	Filters                    types.String `tfsdk:"filters"`
+	RolloutPercentage          types.Int64  `tfsdk:"rollout_percentage"`
+	Tags                       types.Set    `tfsdk:"tags"`
+	Deleted                    types.Bool   `tfsdk:"deleted"`
+	EnsureExperienceContinuity types.Bool   `tfsdk:"ensure_experience_continuity"`
 }
 
 type FeatureFlagOps struct{}
@@ -70,6 +71,14 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether the feature flag is active",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"ensure_experience_continuity": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether to persist the flag across authentication steps (PostHog's UI labels this as 'Persist flag across authentication steps'). Flags with experience continuity enabled cannot be evaluated by server-side local evaluation; set this to false for flags that must be evaluated locally.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
@@ -118,6 +127,11 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	if !model.Active.IsNull() {
 		active := model.Active.ValueBool()
 		req.Active = &active
+	}
+
+	if !model.EnsureExperienceContinuity.IsNull() {
+		ensureExperienceContinuity := model.EnsureExperienceContinuity.ValueBool()
+		req.EnsureExperienceContinuity = &ensureExperienceContinuity
 	}
 
 	// Handle filters and rollout_percentage
@@ -188,6 +202,11 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Active = &active
 	}
 
+	if !plan.EnsureExperienceContinuity.IsNull() {
+		ensureExperienceContinuity := plan.EnsureExperienceContinuity.ValueBool()
+		req.EnsureExperienceContinuity = &ensureExperienceContinuity
+	}
+
 	// Handle filters and rollout_percentage
 	var filters map[string]interface{}
 
@@ -247,6 +266,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Key = types.StringValue(resp.Key)
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Active = core.PtrToBool(resp.Active)
+	model.EnsureExperienceContinuity = core.PtrToBool(resp.EnsureExperienceContinuity)
 
 	// Set filters if present
 	if len(resp.Filters) > 0 {

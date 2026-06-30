@@ -6,23 +6,25 @@ import (
 )
 
 type FeatureFlag struct {
-	ID                int64                  `json:"id"`
-	Key               string                 `json:"key"`
-	Name              *string                `json:"name,omitempty"`
-	Active            *bool                  `json:"active,omitempty"`
-	Filters           map[string]interface{} `json:"filters,omitempty"`
-	RolloutPercentage *int32                 `json:"rollout_percentage,omitempty"`
-	Tags              []string               `json:"tags,omitempty"`
-	Deleted           *bool                  `json:"deleted,omitempty"`
+	ID                         int64                  `json:"id"`
+	Key                        string                 `json:"key"`
+	Name                       *string                `json:"name,omitempty"`
+	Active                     *bool                  `json:"active,omitempty"`
+	Filters                    map[string]interface{} `json:"filters,omitempty"`
+	RolloutPercentage          *int32                 `json:"rollout_percentage,omitempty"`
+	Tags                       []string               `json:"tags,omitempty"`
+	Deleted                    *bool                  `json:"deleted,omitempty"`
+	EnsureExperienceContinuity *bool                  `json:"ensure_experience_continuity,omitempty"`
 }
 
 type FeatureFlagRequest struct {
-	Key     string                 `json:"key"`
-	Name    *string                `json:"name,omitempty"`
-	Active  *bool                  `json:"active,omitempty"`
-	Filters map[string]interface{} `json:"filters,omitempty"`
-	Tags    []string               `json:"tags,omitempty"`
-	Deleted *bool                  `json:"deleted,omitempty"`
+	Key                        string                 `json:"key"`
+	Name                       *string                `json:"name,omitempty"`
+	Active                     *bool                  `json:"active,omitempty"`
+	Filters                    map[string]interface{} `json:"filters,omitempty"`
+	Tags                       []string               `json:"tags,omitempty"`
+	Deleted                    *bool                  `json:"deleted,omitempty"`
+	EnsureExperienceContinuity *bool                  `json:"ensure_experience_continuity,omitempty"`
 }
 
 func (c *PosthogClient) CreateFeatureFlag(ctx context.Context, projectID string, input FeatureFlagRequest) (FeatureFlag, error) {
