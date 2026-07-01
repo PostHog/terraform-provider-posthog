@@ -190,22 +190,22 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	// leaving the user to trial-and-error each field. Unconfigured (null/unknown)
 	// attributes are skipped, so this only fires on a genuine divergence.
 	var ignored []string
-	if boolDiverged(model.HeatmapsOptIn, resp.HeatmapsOptIn) {
+	if util.BoolDiverged(model.HeatmapsOptIn, resp.HeatmapsOptIn) {
 		ignored = append(ignored, "heatmaps_opt_in")
 	}
-	if boolDiverged(model.AutocaptureExceptionsOptIn, resp.AutocaptureExceptionsOptIn) {
+	if util.BoolDiverged(model.AutocaptureExceptionsOptIn, resp.AutocaptureExceptionsOptIn) {
 		ignored = append(ignored, "autocapture_exceptions_opt_in")
 	}
-	if boolDiverged(model.SessionRecordingOptIn, resp.SessionRecordingOptIn) {
+	if util.BoolDiverged(model.SessionRecordingOptIn, resp.SessionRecordingOptIn) {
 		ignored = append(ignored, "session_recording_opt_in")
 	}
-	if boolDiverged(model.SurveysOptIn, resp.SurveysOptIn) {
+	if util.BoolDiverged(model.SurveysOptIn, resp.SurveysOptIn) {
 		ignored = append(ignored, "surveys_opt_in")
 	}
-	if boolDiverged(model.AutocaptureWebVitalsOptIn, resp.AutocaptureWebVitalsOptIn) {
+	if util.BoolDiverged(model.AutocaptureWebVitalsOptIn, resp.AutocaptureWebVitalsOptIn) {
 		ignored = append(ignored, "autocapture_web_vitals_opt_in")
 	}
-	if int64Diverged(model.CookielessServerHashMode, resp.CookielessServerHashMode) {
+	if util.Int64Diverged(model.CookielessServerHashMode, resp.CookielessServerHashMode) {
 		ignored = append(ignored, "cookieless_server_hash_mode")
 	}
 	if len(ignored) > 0 {
@@ -236,23 +236,6 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.RecordingDomains = recordingDomains
 
 	return diags
-}
-
-// boolDiverged reports whether a configured (non-null, non-unknown) bool attribute
-// differs from the value PostHog returned (nil server value counts as divergent).
-func boolDiverged(configured types.Bool, server *bool) bool {
-	if configured.IsNull() || configured.IsUnknown() {
-		return false
-	}
-	return server == nil || *server != configured.ValueBool()
-}
-
-// int64Diverged is the int64 counterpart of boolDiverged.
-func int64Diverged(configured types.Int64, server *int64) bool {
-	if configured.IsNull() || configured.IsUnknown() {
-		return false
-	}
-	return server == nil || *server != configured.ValueInt64()
 }
 
 func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, error) {
