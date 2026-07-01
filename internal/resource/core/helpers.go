@@ -19,10 +19,8 @@ func PtrToStringNullIfEmptyTrimmed(v *string) types.String {
 	return types.StringValue(*v)
 }
 
-// TrimTrailingWS strips trailing whitespace (" \t\n\r"). It is the single source
-// of truth for the "trailing whitespace doesn't count" normalization that PostHog
-// applies server-side to code fields, so callers that compare against a trimmed
-// server value stay in sync with PtrToStringTrimmed.
+// TrimTrailingWS matches the trailing-whitespace trimming PostHog applies
+// server-side, so configured and server values compare equal.
 func TrimTrailingWS(s string) string {
 	return strings.TrimRight(s, " \t\n\r")
 }
