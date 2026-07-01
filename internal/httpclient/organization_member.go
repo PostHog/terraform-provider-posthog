@@ -26,18 +26,18 @@ type OrganizationMemberRequest struct {
 	Level *int `json:"level,omitempty"`
 }
 
-func (c *PosthogClient) ListOrganizationMembers(ctx context.Context, organizationID string) ([]OrganizationMember, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) ListOrganizationMembers(ctx context.Context, orgIDOrSlug string) ([]OrganizationMember, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/members/")
 	if err != nil {
 		return nil, err
 	}
-	return listAll[OrganizationMember](c, ctx, fmt.Sprintf("/api/organizations/%s/members/", organizationID))
+	return listAll[OrganizationMember](c, ctx, path)
 }
 
 // GetOrganizationMember retrieves a specific member by user UUID.
 // Since there's no direct GET endpoint, we list all members and filter.
-func (c *PosthogClient) GetOrganizationMember(ctx context.Context, organizationID, userUUID string) (OrganizationMember, HTTPStatusCode, error) {
-	members, err := c.ListOrganizationMembers(ctx, organizationID)
+func (c *PosthogClient) GetOrganizationMember(ctx context.Context, orgIDOrSlug, userUUID string) (OrganizationMember, HTTPStatusCode, error) {
+	members, err := c.ListOrganizationMembers(ctx, orgIDOrSlug)
 	if err != nil {
 		return OrganizationMember{}, 0, err
 	}
@@ -48,25 +48,23 @@ func (c *PosthogClient) GetOrganizationMember(ctx context.Context, organizationI
 		}
 	}
 
-	return OrganizationMember{}, http.StatusNotFound, fmt.Errorf("member with user UUID %s not found in organization %s", userUUID, organizationID)
+	return OrganizationMember{}, http.StatusNotFound, fmt.Errorf("member with user UUID %s not found in organization %s", userUUID, orgIDOrSlug)
 }
 
 // UpdateOrganizationMember updates a member's level.
-func (c *PosthogClient) UpdateOrganizationMember(ctx context.Context, organizationID, userUUID string, input OrganizationMemberRequest) (OrganizationMember, HTTPStatusCode, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) UpdateOrganizationMember(ctx context.Context, orgIDOrSlug, userUUID string, input OrganizationMemberRequest) (OrganizationMember, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/members/%s/", userUUID)
 	if err != nil {
 		return OrganizationMember{}, 0, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/members/%s/", organizationID, userUUID)
 	return doPatch[OrganizationMember](c, ctx, path, input)
 }
 
 // DeleteOrganizationMember removes a member from the organization.
-func (c *PosthogClient) DeleteOrganizationMember(ctx context.Context, organizationID, userUUID string) (HTTPStatusCode, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) DeleteOrganizationMember(ctx context.Context, orgIDOrSlug, userUUID string) (HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/members/%s/", userUUID)
 	if err != nil {
 		return 0, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/members/%s/", organizationID, userUUID)
 	return doDelete(c, ctx, path)
 }

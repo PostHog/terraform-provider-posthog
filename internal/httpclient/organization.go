@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 // CurrentOrganizationAlias is the special identifier PostHog accepts to refer to
@@ -58,17 +60,20 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 	}
 
 	if cached, ok := c.cachedOrganizationID(idOrSlug); ok {
+		tflog.Trace(ctx, "resolved organization id from cache", map[string]any{"key": idOrSlug, "resolved_id": cached})
 		return cached, nil
 	}
 
 	var resolved string
 	if idOrSlug == CurrentOrganizationAlias {
+		tflog.Debug(ctx, "resolving @current organization via API", map[string]any{"key": idOrSlug})
 		org, _, err := doGet[Organization](c, ctx, "/api/organizations/@current/")
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve %q organization: %w", CurrentOrganizationAlias, err)
 		}
 		resolved = org.ID
 	} else {
+		tflog.Debug(ctx, "resolving organization slug via API", map[string]any{"key": idOrSlug})
 		orgs, err := c.ListOrganizations(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to list organizations to resolve slug %q: %w", idOrSlug, err)
@@ -85,7 +90,20 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 	}
 
 	c.storeOrganizationID(idOrSlug, resolved)
+	tflog.Debug(ctx, "resolved and cached organization id", map[string]any{"key": idOrSlug, "resolved_id": resolved})
 	return resolved, nil
+}
+
+// orgPath resolves orgIDOrSlug (a UUID, slug, or "@current") to a UUID and formats
+// an org-scoped API path from it, with the resolved id as the first `%s`. It is the
+// single place client methods perform org resolution, so adding a new org-scoped
+// endpoint is a one-line call rather than a repeated resolve-and-check block.
+func (c *PosthogClient) orgPath(ctx context.Context, orgIDOrSlug, format string, args ...any) (string, error) {
+	orgID, err := c.ResolveOrganizationID(ctx, orgIDOrSlug)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(format, append([]any{orgID}, args...)...), nil
 }
 
 func (c *PosthogClient) cachedOrganizationID(key string) (string, bool) {

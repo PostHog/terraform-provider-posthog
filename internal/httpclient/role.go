@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
 )
 
 type Role struct {
@@ -16,47 +15,43 @@ type RoleRequest struct {
 	Name string `json:"name"`
 }
 
-func (c *PosthogClient) ListRoles(ctx context.Context, organizationID string) ([]Role, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) ListRoles(ctx context.Context, orgIDOrSlug string) ([]Role, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/")
 	if err != nil {
 		return nil, err
 	}
-	return listAll[Role](c, ctx, fmt.Sprintf("/api/organizations/%s/roles/", organizationID))
+	return listAll[Role](c, ctx, path)
 }
 
-func (c *PosthogClient) CreateRole(ctx context.Context, organizationID string, input RoleRequest) (Role, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) CreateRole(ctx context.Context, orgIDOrSlug string, input RoleRequest) (Role, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/")
 	if err != nil {
 		return Role{}, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/roles/", organizationID)
 	result, _, err := doPost[Role](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetRole(ctx context.Context, organizationID, roleID string) (Role, HTTPStatusCode, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) GetRole(ctx context.Context, orgIDOrSlug, roleID string) (Role, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/", roleID)
 	if err != nil {
 		return Role{}, 0, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/", organizationID, roleID)
 	return doGet[Role](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateRole(ctx context.Context, organizationID, roleID string, input RoleRequest) (Role, HTTPStatusCode, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) UpdateRole(ctx context.Context, orgIDOrSlug, roleID string, input RoleRequest) (Role, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/", roleID)
 	if err != nil {
 		return Role{}, 0, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/", organizationID, roleID)
 	return doPatch[Role](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteRole(ctx context.Context, organizationID, roleID string) (HTTPStatusCode, error) {
-	organizationID, err := c.ResolveOrganizationID(ctx, organizationID)
+func (c *PosthogClient) DeleteRole(ctx context.Context, orgIDOrSlug, roleID string) (HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/", roleID)
 	if err != nil {
 		return 0, err
 	}
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/", organizationID, roleID)
 	return doDelete(c, ctx, path)
 }
