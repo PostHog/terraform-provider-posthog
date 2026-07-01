@@ -72,3 +72,22 @@ func PtrToInt64(v *int64) types.Int64 {
 	}
 	return types.Int64Value(*v)
 }
+
+// BoolDiverged reports whether a configured (non-null, non-unknown) bool attribute
+// differs from the value the server returned. A nil server value counts as
+// divergent. Unconfigured values never diverge, so callers only surface genuine
+// mismatches (e.g. a setting the server silently ignored).
+func BoolDiverged(configured types.Bool, server *bool) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	return server == nil || *server != configured.ValueBool()
+}
+
+// Int64Diverged is the int64 counterpart of BoolDiverged.
+func Int64Diverged(configured types.Int64, server *int64) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	return server == nil || *server != configured.ValueInt64()
+}
