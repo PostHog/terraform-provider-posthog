@@ -18,5 +18,5 @@ description: |-
 
 - `api_key` (String, Sensitive) PostHog personal API key. Can be set via `POSTHOG_API_KEY` environment variable.
 - `host` (String) Base URL for the PostHog API. Defaults to `https://us.posthog.com`. Can be set via `POSTHOG_HOST`
-- `organization_id` (String) Default organization ID. Can be set via `POSTHOG_ORGANIZATION_ID` environment variable.
+- `organization_id` (String) Default organization to target. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization). Slugs and `@current` are resolved to a UUID for API calls. Can be set via `POSTHOG_ORGANIZATION_ID` environment variable.
 - `project_id` (String) Default project ID (environment) to target. Can be set via `POSTHOG_PROJECT_ID` environment variable.

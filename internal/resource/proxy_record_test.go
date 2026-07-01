@@ -19,7 +19,7 @@ import (
 
 const (
 	testNormalizedProxyRecordDomain       = "proxy.example.com"
-	testProxyRecordOrganizationID         = "org-123"
+	testProxyRecordOrganizationID         = "00000000-0000-0000-0000-000000000123"
 	testProxyRecordIDValue                = "proxy-1"
 	testProxyRecordTargetCNAME            = "abc.proxyhog.com."
 	testProxyRecordStatus                 = "waiting"

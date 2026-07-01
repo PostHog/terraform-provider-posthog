@@ -49,7 +49,7 @@ resource "posthog_organization_member" "alice" {
 ### Optional
 
 - `level` (String) The access level for the member. Valid values are 'member', 'admin', or 'owner'. Defaults to 'member'.
-- `organization_id` (String) Organization ID for this resource. Overrides the provider-level organization_id.
+- `organization_id` (String) Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization); slugs and `@current` are resolved to a UUID for API calls while your original value is preserved in state.
 - `retain_on_destroy` (Boolean) If true, the user will remain in the organization when this resource is destroyed. Defaults to false.
 
 ### Read-Only

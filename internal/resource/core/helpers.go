@@ -126,7 +126,7 @@ func OrganizationIDSchemaAttribute() schema.StringAttribute {
 	return schema.StringAttribute{
 		Optional:            true,
 		Computed:            true,
-		MarkdownDescription: "Organization ID for this resource. Overrides the provider-level organization_id.",
+		MarkdownDescription: "Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization); slugs and `@current` are resolved to a UUID for API calls while your original value is preserved in state.",
 		PlanModifiers: []planmodifier.String{
 			stringplanmodifier.RequiresReplaceIfConfigured(),
 			stringplanmodifier.UseStateForUnknown(),

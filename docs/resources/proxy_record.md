@@ -34,7 +34,7 @@ output "analytics_proxy_target_cname" {
 
 ### Optional
 
-- `organization_id` (String) Organization ID for this resource. Overrides the provider-level organization_id.
+- `organization_id` (String) Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization); slugs and `@current` are resolved to a UUID for API calls while your original value is preserved in state.
 
 ### Read-Only
 

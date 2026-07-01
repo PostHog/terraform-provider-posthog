@@ -16,7 +16,7 @@ const (
 	testProxyRecordID          = "proxy-1"
 	testProxyRecordDomain      = "proxy.example.com"
 	testProxyRecordTargetCNAME = "abc.proxyhog.com."
-	testOrganizationID         = "org-123"
+	testOrganizationID         = "00000000-0000-0000-0000-000000000123"
 	testAPIKey                 = "test-key"
 	testClientVersion          = "test"
 	jsonContentTypeHeader      = "Content-Type"

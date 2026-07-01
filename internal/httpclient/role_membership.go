@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
 )
 
 type RoleMembershipUser struct {
@@ -21,18 +20,27 @@ type RoleMembershipRequest struct {
 	UserUUID string `json:"user_uuid"`
 }
 
-func (c *PosthogClient) CreateRoleMembership(ctx context.Context, organizationID, roleID string, input RoleMembershipRequest) (RoleMembership, error) {
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/role_memberships/", organizationID, roleID)
+func (c *PosthogClient) CreateRoleMembership(ctx context.Context, orgIDOrSlug, roleID string, input RoleMembershipRequest) (RoleMembership, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/role_memberships/", roleID)
+	if err != nil {
+		return RoleMembership{}, err
+	}
 	result, _, err := doPost[RoleMembership](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetRoleMembership(ctx context.Context, organizationID, roleID, membershipID string) (RoleMembership, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/role_memberships/%s/", organizationID, roleID, membershipID)
+func (c *PosthogClient) GetRoleMembership(ctx context.Context, orgIDOrSlug, roleID, membershipID string) (RoleMembership, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/role_memberships/%s/", roleID, membershipID)
+	if err != nil {
+		return RoleMembership{}, 0, err
+	}
 	return doGet[RoleMembership](c, ctx, path)
 }
 
-func (c *PosthogClient) DeleteRoleMembership(ctx context.Context, organizationID, roleID, membershipID string) (HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/roles/%s/role_memberships/%s/", organizationID, roleID, membershipID)
+func (c *PosthogClient) DeleteRoleMembership(ctx context.Context, orgIDOrSlug, roleID, membershipID string) (HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/roles/%s/role_memberships/%s/", roleID, membershipID)
+	if err != nil {
+		return 0, err
+	}
 	return doDelete(c, ctx, path)
 }

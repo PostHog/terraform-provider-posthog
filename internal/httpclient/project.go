@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
 )
 
 type Project struct {
@@ -18,23 +17,35 @@ type ProjectRequest struct {
 	Timezone *string `json:"timezone,omitempty"`
 }
 
-func (c *PosthogClient) CreateProject(ctx context.Context, organizationID string, input ProjectRequest) (Project, error) {
-	path := fmt.Sprintf("/api/organizations/%s/projects/", organizationID)
+func (c *PosthogClient) CreateProject(ctx context.Context, orgIDOrSlug string, input ProjectRequest) (Project, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/")
+	if err != nil {
+		return Project{}, err
+	}
 	result, _, err := doPost[Project](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetProject(ctx context.Context, organizationID, projectID string) (Project, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/projects/%s/", organizationID, projectID)
+func (c *PosthogClient) GetProject(ctx context.Context, orgIDOrSlug, projectID string) (Project, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/%s/", projectID)
+	if err != nil {
+		return Project{}, 0, err
+	}
 	return doGet[Project](c, ctx, path)
 }
 
-func (c *PosthogClient) UpdateProject(ctx context.Context, organizationID, projectID string, input ProjectRequest) (Project, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/projects/%s/", organizationID, projectID)
+func (c *PosthogClient) UpdateProject(ctx context.Context, orgIDOrSlug, projectID string, input ProjectRequest) (Project, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/%s/", projectID)
+	if err != nil {
+		return Project{}, 0, err
+	}
 	return doPatch[Project](c, ctx, path, input)
 }
 
-func (c *PosthogClient) DeleteProject(ctx context.Context, organizationID, projectID string) (HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/projects/%s/", organizationID, projectID)
+func (c *PosthogClient) DeleteProject(ctx context.Context, orgIDOrSlug, projectID string) (HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/%s/", projectID)
+	if err != nil {
+		return 0, err
+	}
 	return doDelete(c, ctx, path)
 }

@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
 )
 
 type ProxyRecord struct {
@@ -25,8 +24,11 @@ type ProxyRecordListResponse struct {
 	Results         []ProxyRecord `json:"results"`
 }
 
-func (c *PosthogClient) ListProxyRecords(ctx context.Context, organizationID string) ([]ProxyRecord, error) {
-	path := fmt.Sprintf("/api/organizations/%s/proxy_records/", organizationID)
+func (c *PosthogClient) ListProxyRecords(ctx context.Context, orgIDOrSlug string) ([]ProxyRecord, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/proxy_records/")
+	if err != nil {
+		return nil, err
+	}
 	resp, _, err := doGet[ProxyRecordListResponse](c, ctx, path)
 	if err != nil {
 		return nil, err
@@ -34,18 +36,27 @@ func (c *PosthogClient) ListProxyRecords(ctx context.Context, organizationID str
 	return resp.Results, nil
 }
 
-func (c *PosthogClient) CreateProxyRecord(ctx context.Context, organizationID string, input ProxyRecordRequest) (ProxyRecord, error) {
-	path := fmt.Sprintf("/api/organizations/%s/proxy_records/", organizationID)
+func (c *PosthogClient) CreateProxyRecord(ctx context.Context, orgIDOrSlug string, input ProxyRecordRequest) (ProxyRecord, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/proxy_records/")
+	if err != nil {
+		return ProxyRecord{}, err
+	}
 	result, _, err := doPost[ProxyRecord](c, ctx, path, input)
 	return result, err
 }
 
-func (c *PosthogClient) GetProxyRecord(ctx context.Context, organizationID, proxyRecordID string) (ProxyRecord, HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/proxy_records/%s/", organizationID, proxyRecordID)
+func (c *PosthogClient) GetProxyRecord(ctx context.Context, orgIDOrSlug, proxyRecordID string) (ProxyRecord, HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/proxy_records/%s/", proxyRecordID)
+	if err != nil {
+		return ProxyRecord{}, 0, err
+	}
 	return doGet[ProxyRecord](c, ctx, path)
 }
 
-func (c *PosthogClient) DeleteProxyRecord(ctx context.Context, organizationID, proxyRecordID string) (HTTPStatusCode, error) {
-	path := fmt.Sprintf("/api/organizations/%s/proxy_records/%s/", organizationID, proxyRecordID)
+func (c *PosthogClient) DeleteProxyRecord(ctx context.Context, orgIDOrSlug, proxyRecordID string) (HTTPStatusCode, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/proxy_records/%s/", proxyRecordID)
+	if err != nil {
+		return 0, err
+	}
 	return doDelete(c, ctx, path)
 }

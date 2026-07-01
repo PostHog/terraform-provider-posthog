@@ -1,12 +1,15 @@
 package tests
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
 func testAccProjectPreCheck(t *testing.T) {
@@ -32,6 +35,81 @@ func TestProject_ProviderLevelOrganizationID(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
 					// Verify organization_id is set from provider default
 					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", orgID),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
+				),
+			},
+		},
+	})
+}
+
+// TestProject_OrganizationSlug exercises the slug-resolution path end-to-end
+// (issue #99): organization_id is given as the org's slug instead of its UUID.
+// Creation only succeeds if the provider resolves the slug to the org UUID when
+// building the org-scoped API path — and state must keep the slug, not the
+// resolved UUID, or every subsequent plan would show a permanent diff.
+//
+// The slug is derived from the configured org UUID at runtime so the test stays
+// portable across instances.
+func TestProject_OrganizationSlug(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoOrganizationID(t)
+
+	orgID := getOrganizationID()
+
+	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+	orgs, err := client.ListOrganizations(context.Background())
+	if err != nil {
+		t.Fatalf("listing organizations to resolve slug: %v", err)
+	}
+	var slug string
+	for _, o := range orgs {
+		if o.ID == orgID {
+			slug = o.Slug
+			break
+		}
+	}
+	if slug == "" {
+		t.Skipf("organization %s has no slug; cannot exercise slug resolution", orgID)
+	}
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccProjectPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectBasic(slug, rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					// State keeps the slug the user wrote, not the resolved UUID.
+					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", slug),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_project.test", "api_token"),
+				),
+			},
+		},
+	})
+}
+
+// TestProject_OrganizationCurrent exercises the "@current" resolution branch
+// (issue #99): organization_id is the literal "@current", which the provider
+// resolves to the authenticated user's org via GET /api/organizations/@current/.
+// State keeps "@current", not the resolved UUID.
+func TestProject_OrganizationCurrent(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccBasePreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectBasic("@current", rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", "@current"),
 					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
 				),
 			},

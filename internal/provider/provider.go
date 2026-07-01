@@ -81,7 +81,7 @@ func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 			"organization_id": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: fmt.Sprintf(
-					"Default organization ID. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
+					"Default organization to target. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization). Slugs and `@current` are resolved to a UUID for API calls. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
 				),
 			},
 		},
