@@ -2,6 +2,8 @@ package resource
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -14,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 	"github.com/posthog/terraform-provider/internal/util"
@@ -66,7 +69,7 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 
 ~> **Destroy Behavior:** Destroying this resource is a no-op. It stops Terraform from managing the settings but does **not** reset any values on PostHog; the last-applied settings remain in effect.
 
-~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
+~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
 
 ~> **Domains:** ` + "`app_urls`" + ` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). ` + "`recording_domains`" + ` is the session-replay domains list.`,
 		Attributes: map[string]schema.Attribute{
@@ -113,9 +116,9 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 			"cookieless_server_hash_mode": schema.Int64Attribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "The cookieless server hash mode: `0` (disabled), `1` (stateless), or `2` (stateful). Matches PostHog's `CookielessServerHashMode` enum.",
+				MarkdownDescription: "The cookieless server hash mode. Known values: `0` (disabled), `1` (stateless), `2` (stateful) — matching PostHog's `CookielessServerHashMode` enum. PostHog may add modes over time, so any non-negative value is accepted rather than a fixed set; consult the PostHog docs for the current options.",
 				Validators: []validator.Int64{
-					int64validator.OneOf(0, 1, 2),
+					int64validator.AtLeast(0),
 				},
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
@@ -162,36 +165,15 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 		CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
 	}
 
-	appURLs, d := listToStringSlicePtr(ctx, model.AppURLs)
+	appURLs, d := util.StringListToSlicePtr(ctx, model.AppURLs)
 	diags.Append(d...)
 	req.AppURLs = appURLs
 
-	recordingDomains, d := listToStringSlicePtr(ctx, model.RecordingDomains)
+	recordingDomains, d := util.StringListToSlicePtr(ctx, model.RecordingDomains)
 	diags.Append(d...)
 	req.RecordingDomains = recordingDomains
 
 	return req, diags
-}
-
-// listToStringSlicePtr converts a configured list attribute to a pointer-to-slice
-// for the request body: null/unknown -> nil (omitted from PATCH), otherwise a
-// pointer to the (possibly empty) slice so an explicit empty list clears the value.
-func listToStringSlicePtr(ctx context.Context, l types.List) (*[]string, diag.Diagnostics) {
-	if l.IsNull() || l.IsUnknown() {
-		return nil, nil
-	}
-	out := []string{}
-	diags := l.ElementsAs(ctx, &out, false)
-	return &out, diags
-}
-
-// stringSlicePtrToList converts a server slice back to a list attribute: nil ->
-// null list (PostHog returned no value), otherwise the (possibly empty) list.
-func stringSlicePtrToList(ctx context.Context, s *[]string) (types.List, diag.Diagnostics) {
-	if s == nil {
-		return types.ListNull(types.StringType), nil
-	}
-	return types.ListValueFrom(ctx, types.StringType, *s)
 }
 
 func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, _ ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
@@ -200,6 +182,43 @@ func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, _ Proj
 
 func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {
 	var diags diag.Diagnostics
+
+	// Before overwriting state, detect any setting the user explicitly configured
+	// that PostHog returned with a different value (e.g. a feature not enabled for
+	// their plan). Naming those attributes turns the framework's otherwise generic
+	// "inconsistent result after apply" error into an actionable message instead of
+	// leaving the user to trial-and-error each field. Unconfigured (null/unknown)
+	// attributes are skipped, so this only fires on a genuine divergence.
+	var ignored []string
+	if boolDiverged(model.HeatmapsOptIn, resp.HeatmapsOptIn) {
+		ignored = append(ignored, "heatmaps_opt_in")
+	}
+	if boolDiverged(model.AutocaptureExceptionsOptIn, resp.AutocaptureExceptionsOptIn) {
+		ignored = append(ignored, "autocapture_exceptions_opt_in")
+	}
+	if boolDiverged(model.SessionRecordingOptIn, resp.SessionRecordingOptIn) {
+		ignored = append(ignored, "session_recording_opt_in")
+	}
+	if boolDiverged(model.SurveysOptIn, resp.SurveysOptIn) {
+		ignored = append(ignored, "surveys_opt_in")
+	}
+	if boolDiverged(model.AutocaptureWebVitalsOptIn, resp.AutocaptureWebVitalsOptIn) {
+		ignored = append(ignored, "autocapture_web_vitals_opt_in")
+	}
+	if int64Diverged(model.CookielessServerHashMode, resp.CookielessServerHashMode) {
+		ignored = append(ignored, "cookieless_server_hash_mode")
+	}
+	if len(ignored) > 0 {
+		diags.AddWarning(
+			"PostHog did not apply some configured settings",
+			fmt.Sprintf(
+				"PostHog returned a different value for: %s. These settings are likely not available for your project or plan, "+
+					"so PostHog silently ignored them. Remove them from your configuration or enable the feature in PostHog.",
+				strings.Join(ignored, ", "),
+			),
+		)
+	}
+
 	model.ID = types.StringValue(model.GetEffectiveProjectID())
 	model.HeatmapsOptIn = core.PtrToBool(resp.HeatmapsOptIn)
 	model.AutocaptureExceptionsOptIn = core.PtrToBool(resp.AutocaptureExceptionsOptIn)
@@ -208,15 +227,32 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.AutocaptureWebVitalsOptIn = core.PtrToBool(resp.AutocaptureWebVitalsOptIn)
 	model.CookielessServerHashMode = util.PtrToInt64(resp.CookielessServerHashMode)
 
-	appURLs, d := stringSlicePtrToList(ctx, resp.AppURLs)
+	appURLs, d := util.StringSlicePtrToList(ctx, resp.AppURLs)
 	diags.Append(d...)
 	model.AppURLs = appURLs
 
-	recordingDomains, d := stringSlicePtrToList(ctx, resp.RecordingDomains)
+	recordingDomains, d := util.StringSlicePtrToList(ctx, resp.RecordingDomains)
 	diags.Append(d...)
 	model.RecordingDomains = recordingDomains
 
 	return diags
+}
+
+// boolDiverged reports whether a configured (non-null, non-unknown) bool attribute
+// differs from the value PostHog returned (nil server value counts as divergent).
+func boolDiverged(configured types.Bool, server *bool) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	return server == nil || *server != configured.ValueBool()
+}
+
+// int64Diverged is the int64 counterpart of boolDiverged.
+func int64Diverged(configured types.Int64, server *int64) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	return server == nil || *server != configured.ValueInt64()
 }
 
 func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, error) {
@@ -232,9 +268,14 @@ func (o ProjectSettingsOps) Update(ctx context.Context, client httpclient.Postho
 	return client.UpdateEnvironment(ctx, model.GetEffectiveProjectID(), req)
 }
 
-func (o ProjectSettingsOps) Delete(_ context.Context, _ httpclient.PosthogClient, _ ProjectSettingsModel) (httpclient.HTTPStatusCode, error) {
+func (o ProjectSettingsOps) Delete(ctx context.Context, _ httpclient.PosthogClient, model ProjectSettingsModel) (httpclient.HTTPStatusCode, error) {
 	// Settings live on the environment, which is never destroyed by this resource.
 	// Deleting simply stops Terraform from managing the settings; PostHog keeps the
-	// last-applied values. This is intentionally a no-op.
+	// last-applied values. This is intentionally a no-op, so log it explicitly:
+	// otherwise the generic framework logs "Deleted ..." and an operator could
+	// wrongly conclude the settings were reset server-side.
+	tflog.Warn(ctx, "posthog_project_settings destroy is a no-op: settings remain on PostHog and are NOT reset; only Terraform stops managing them", map[string]any{
+		"project_id": model.GetEffectiveProjectID(),
+	})
 	return 0, nil
 }

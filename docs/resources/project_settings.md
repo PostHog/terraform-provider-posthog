@@ -7,7 +7,7 @@ description: |-
   These settings live on the PostHog environment object (/api/environments/{id}/), which is distinct from the organization-scoped posthog_project resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state.
   ~> Singleton: There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
   ~> Destroy Behavior: Destroying this resource is a no-op. It stops Terraform from managing the settings but does not reset any values on PostHog; the last-applied settings remain in effect.
-  ~> Plan-gated settings: If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
+  ~> Plan-gated settings: If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
   ~> Domains: app_urls is the project's authorized-domains list — shown in PostHog settings as Web analytics domains and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). recording_domains is the session-replay domains list.
 ---
 
@@ -21,7 +21,7 @@ These settings live on the PostHog environment object (`/api/environments/{id}/`
 
 ~> **Destroy Behavior:** Destroying this resource is a no-op. It stops Terraform from managing the settings but does **not** reset any values on PostHog; the last-applied settings remain in effect.
 
-~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error for that attribute. This usually means the setting cannot be toggled for your project rather than a provider bug.
+~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
 
 ~> **Domains:** `app_urls` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). `recording_domains` is the session-replay domains list.
 
@@ -60,7 +60,7 @@ resource "posthog_project_settings" "minimal" {
 - `app_urls` (List of String) The project's authorized domains — shown in PostHog settings as **Web analytics domains** (and used as the toolbar's Authorized URLs). These are the domains tracked in web analytics and where the toolbar is enabled. Maps to the team `app_urls` field. Wildcards are not allowed; order is preserved.
 - `autocapture_exceptions_opt_in` (Boolean) Whether exception autocapture is enabled.
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
-- `cookieless_server_hash_mode` (Number) The cookieless server hash mode: `0` (disabled), `1` (stateless), or `2` (stateful). Matches PostHog's `CookielessServerHashMode` enum.
+- `cookieless_server_hash_mode` (Number) The cookieless server hash mode. Known values: `0` (disabled), `1` (stateless), `2` (stateful) — matching PostHog's `CookielessServerHashMode` enum. PostHog may add modes over time, so any non-negative value is accepted rather than a fixed set; consult the PostHog docs for the current options.
 - `heatmaps_opt_in` (Boolean) Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `recording_domains` (List of String) Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.

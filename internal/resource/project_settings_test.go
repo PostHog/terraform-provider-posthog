@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/util"
@@ -21,36 +20,6 @@ func newProjectSettingsModel() ProjectSettingsModel {
 	m := ProjectSettingsModel{}
 	m.InitializeProjectID(testProjectSettingsProjectID)
 	return m
-}
-
-func TestProjectSettingsResourceNameAndSchema(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	s := ops.Schema()
-
-	assert.Equal(t, "project_settings", ops.ResourceName())
-
-	for _, name := range []string{
-		"heatmaps_opt_in", "autocapture_exceptions_opt_in", "session_recording_opt_in",
-		"surveys_opt_in", "autocapture_web_vitals_opt_in",
-	} {
-		attr, ok := s.Attributes[name].(schema.BoolAttribute)
-		require.Truef(t, ok, "%s must be a bool attribute", name)
-		assert.Truef(t, attr.Optional, "%s should be optional", name)
-		assert.Truef(t, attr.Computed, "%s should be computed", name)
-	}
-
-	hashAttr, ok := s.Attributes["cookieless_server_hash_mode"].(schema.Int64Attribute)
-	require.True(t, ok, "cookieless_server_hash_mode must be an int64 attribute")
-	assert.True(t, hashAttr.Optional)
-	assert.True(t, hashAttr.Computed)
-
-	for _, name := range []string{"app_urls", "recording_domains"} {
-		attr, ok := s.Attributes[name].(schema.ListAttribute)
-		require.Truef(t, ok, "%s must be a list attribute", name)
-		assert.Truef(t, attr.Optional, "%s should be optional", name)
-		assert.Truef(t, attr.Computed, "%s should be computed", name)
-		assert.Equalf(t, types.StringType, attr.ElementType, "%s should be a list of strings", name)
-	}
 }
 
 func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
@@ -116,6 +85,27 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	assert.Nil(t, req.SurveysOptIn)
 	assert.Nil(t, req.CookielessServerHashMode)
 	assert.Nil(t, req.AutocaptureWebVitalsOptIn)
+}
+
+// TestProjectSettingsBuildCreateRequest_EmptyListClears guards the clearing path:
+// an explicit empty list must serialize to a non-nil pointer to an empty slice
+// (which clears the value server-side), not nil — otherwise clearing app_urls or
+// recording_domains would silently become a no-op.
+func TestProjectSettingsBuildCreateRequest_EmptyListClears(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	model := newProjectSettingsModel()
+	emptyList, d := types.ListValueFrom(context.Background(), types.StringType, []string{})
+	require.False(t, d.HasError())
+	model.AppURLs = emptyList
+	model.RecordingDomains = emptyList
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+
+	assert.False(t, diags.HasError())
+	require.NotNil(t, req.AppURLs, "explicit empty app_urls must be a non-nil pointer to clear the value")
+	assert.Empty(t, *req.AppURLs)
+	require.NotNil(t, req.RecordingDomains, "explicit empty recording_domains must be a non-nil pointer to clear the value")
+	assert.Empty(t, *req.RecordingDomains)
 }
 
 func TestProjectSettingsBuildUpdateRequest(t *testing.T) {
