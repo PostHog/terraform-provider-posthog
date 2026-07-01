@@ -302,8 +302,20 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
 	model.Enabled = core.PtrToBool(resp.Enabled)
-	model.Hog = core.PtrToStringTrimmed(resp.Hog)
 	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
+
+	// Preserve the configured/prior hog value when it differs from the server's
+	// only by trailing whitespace. PostHog strips trailing whitespace (e.g. the
+	// newline a `<<-EOT` heredoc adds), so overwriting state with the server value
+	// would make the applied value differ from the known planned value — which
+	// Terraform rejects as "Provider produced inconsistent result after apply"
+	// (issue #91). Keeping the user's value treats the two as semantically equal,
+	// which also prevents a perpetual diff on subsequent plans.
+	serverHog := core.PtrToStringTrimmed(resp.Hog)
+	if model.Hog.IsNull() || model.Hog.IsUnknown() ||
+		core.TrimTrailingWS(model.Hog.ValueString()) != serverHog.ValueString() {
+		model.Hog = serverHog
+	}
 
 	// TemplateID - only set if the model already has one (write-only field)
 	// The API returns template object, not template_id

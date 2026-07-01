@@ -58,6 +58,55 @@ func TestPtrToStringNullIfEmptyTrimmed(t *testing.T) {
 	}
 }
 
+func TestPtrToStringTrimmed(t *testing.T) {
+	tests := map[string]struct {
+		input    *string
+		wantNull bool
+		wantVal  string
+	}{
+		"nil returns null": {
+			input:    nil,
+			wantNull: true,
+		},
+		"empty string returns null": {
+			input:    ptr(""),
+			wantNull: true,
+		},
+		"whitespace-only returns null": {
+			input:    ptr("  \t\n\r "),
+			wantNull: true,
+		},
+		"trailing whitespace is trimmed": {
+			input:   ptr("code\n"),
+			wantVal: "code",
+		},
+		"mixed trailing whitespace is trimmed": {
+			input:   ptr("code  \t\n\r"),
+			wantVal: "code",
+		},
+		"no trailing whitespace is unchanged": {
+			input:   ptr("code"),
+			wantVal: "code",
+		},
+		"leading and interior whitespace is preserved": {
+			input:   ptr("  line1\n  line2\n"),
+			wantVal: "  line1\n  line2",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := PtrToStringTrimmed(tc.input)
+			if tc.wantNull {
+				assert.True(t, got.IsNull(), "expected null")
+				return
+			}
+			require.False(t, got.IsNull(), "expected non-null")
+			assert.Equal(t, tc.wantVal, got.ValueString())
+		})
+	}
+}
+
 func TestPtrToBool(t *testing.T) {
 	tests := map[string]struct {
 		input    *bool
