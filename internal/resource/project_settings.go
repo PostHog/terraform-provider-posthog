@@ -6,16 +6,19 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -41,8 +44,23 @@ type ProjectSettingsModel struct {
 	SurveysOptIn               types.Bool   `tfsdk:"surveys_opt_in"`
 	CookielessServerHashMode   types.Int64  `tfsdk:"cookieless_server_hash_mode"`
 	AutocaptureWebVitalsOptIn  types.Bool   `tfsdk:"autocapture_web_vitals_opt_in"`
-	AppURLs                    types.List   `tfsdk:"app_urls"`
-	RecordingDomains           types.List   `tfsdk:"recording_domains"`
+	CapturePerformanceOptIn    types.Bool   `tfsdk:"capture_performance_opt_in"`
+	// NetworkPayloadCapture holds a NetworkPayloadCaptureModel object.
+	NetworkPayloadCapture types.Object `tfsdk:"session_recording_network_payload_capture_config"`
+	AppURLs               types.List   `tfsdk:"app_urls"`
+	RecordingDomains      types.List   `tfsdk:"recording_domains"`
+}
+
+// NetworkPayloadCaptureModel is the Terraform shape of the
+// session_recording_network_payload_capture_config JSON blob.
+type NetworkPayloadCaptureModel struct {
+	RecordHeaders types.Bool `tfsdk:"record_headers"`
+	RecordBody    types.Bool `tfsdk:"record_body"`
+}
+
+var networkPayloadCaptureAttrTypes = map[string]attr.Type{
+	"record_headers": types.BoolType,
+	"record_body":    types.BoolType,
 }
 
 func (m ProjectSettingsModel) GetID() string {
@@ -132,6 +150,34 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"capture_performance_opt_in": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether network performance capture is enabled for session replay. This must be `true` for `session_recording_network_payload_capture_config` to have any effect — without it, session replay does not capture network requests at all.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"session_recording_network_payload_capture_config": schema.SingleNestedAttribute{
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Controls whether session replay records the headers and bodies of captured network requests. Only takes effect when `capture_performance_opt_in` is `true`. " +
+					"**Security:** recorded headers and bodies can contain sensitive data such as `Authorization` tokens, cookies, and PII from request/response payloads — enable these deliberately and review PostHog's network-capture redaction options in your SDK configuration. " +
+					"PostHog replaces this JSON object wholesale on update, so both `record_headers` and `record_body` must be set when the block is configured; omitting the whole block leaves the current PostHog value untouched.",
+				Attributes: map[string]schema.Attribute{
+					"record_headers": schema.BoolAttribute{
+						Required:            true,
+						MarkdownDescription: "Whether to record the headers of network requests in session replay.",
+					},
+					"record_body": schema.BoolAttribute{
+						Required:            true,
+						MarkdownDescription: "Whether to record the bodies of network requests in session replay.",
+					},
+				},
+				PlanModifiers: []planmodifier.Object{
+					objectplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"app_urls": schema.ListAttribute{
 				Optional:            true,
 				Computed:            true,
@@ -162,7 +208,22 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 		SessionRecordingOptIn:      util.BoolPtrFromValue(model.SessionRecordingOptIn),
 		SurveysOptIn:               util.BoolPtrFromValue(model.SurveysOptIn),
 		AutocaptureWebVitalsOptIn:  util.BoolPtrFromValue(model.AutocaptureWebVitalsOptIn),
+		CapturePerformanceOptIn:    util.BoolPtrFromValue(model.CapturePerformanceOptIn),
 		CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
+	}
+
+	// An unset block stays nil so the PATCH omits the field entirely (leave
+	// untouched). When set, both children are sent: PostHog replaces the whole
+	// JSON blob, so a partial object would wipe the missing key server-side.
+	if !model.NetworkPayloadCapture.IsNull() && !model.NetworkPayloadCapture.IsUnknown() {
+		var cfg NetworkPayloadCaptureModel
+		diags.Append(model.NetworkPayloadCapture.As(ctx, &cfg, basetypes.ObjectAsOptions{})...)
+		if !diags.HasError() {
+			req.SessionRecordingNetworkPayloadCaptureConfig = &httpclient.NetworkPayloadCaptureConfig{
+				RecordHeaders: util.BoolPtrFromValue(cfg.RecordHeaders),
+				RecordBody:    util.BoolPtrFromValue(cfg.RecordBody),
+			}
+		}
 	}
 
 	appURLs, d := util.StringListToSlicePtr(ctx, model.AppURLs)
@@ -208,6 +269,12 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	if util.Int64Diverged(model.CookielessServerHashMode, resp.CookielessServerHashMode) {
 		ignored = append(ignored, "cookieless_server_hash_mode")
 	}
+	if util.BoolDiverged(model.CapturePerformanceOptIn, resp.CapturePerformanceOptIn) {
+		ignored = append(ignored, "capture_performance_opt_in")
+	}
+	if networkPayloadCaptureDiverged(ctx, model.NetworkPayloadCapture, resp.SessionRecordingNetworkPayloadCaptureConfig) {
+		ignored = append(ignored, "session_recording_network_payload_capture_config")
+	}
 	if len(ignored) > 0 {
 		diags.AddWarning(
 			"PostHog did not apply some configured settings",
@@ -225,7 +292,21 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.SessionRecordingOptIn = core.PtrToBool(resp.SessionRecordingOptIn)
 	model.SurveysOptIn = core.PtrToBool(resp.SurveysOptIn)
 	model.AutocaptureWebVitalsOptIn = core.PtrToBool(resp.AutocaptureWebVitalsOptIn)
+	model.CapturePerformanceOptIn = core.PtrToBool(resp.CapturePerformanceOptIn)
 	model.CookielessServerHashMode = util.PtrToInt64(resp.CookielessServerHashMode)
+
+	if resp.SessionRecordingNetworkPayloadCaptureConfig == nil {
+		// PostHog stores null until the setting is first written; map that to a
+		// null object rather than an object of null bools.
+		model.NetworkPayloadCapture = types.ObjectNull(networkPayloadCaptureAttrTypes)
+	} else {
+		obj, d := types.ObjectValueFrom(ctx, networkPayloadCaptureAttrTypes, NetworkPayloadCaptureModel{
+			RecordHeaders: core.PtrToBool(resp.SessionRecordingNetworkPayloadCaptureConfig.RecordHeaders),
+			RecordBody:    core.PtrToBool(resp.SessionRecordingNetworkPayloadCaptureConfig.RecordBody),
+		})
+		diags.Append(d...)
+		model.NetworkPayloadCapture = obj
+	}
 
 	appURLs, d := util.StringSlicePtrToList(ctx, resp.AppURLs)
 	diags.Append(d...)
@@ -236,6 +317,25 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.RecordingDomains = recordingDomains
 
 	return diags
+}
+
+// networkPayloadCaptureDiverged reports whether a configured (non-null,
+// non-unknown) payload-capture object differs from what the server returned.
+// It is the object counterpart of util.BoolDiverged: unconfigured objects
+// never diverge, a nil server value counts as divergent.
+func networkPayloadCaptureDiverged(ctx context.Context, configured types.Object, server *httpclient.NetworkPayloadCaptureConfig) bool {
+	if configured.IsNull() || configured.IsUnknown() {
+		return false
+	}
+	var cfg NetworkPayloadCaptureModel
+	if configured.As(ctx, &cfg, basetypes.ObjectAsOptions{}).HasError() {
+		return false
+	}
+	if server == nil {
+		return true
+	}
+	return util.BoolDiverged(cfg.RecordHeaders, server.RecordHeaders) ||
+		util.BoolDiverged(cfg.RecordBody, server.RecordBody)
 }
 
 func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, error) {

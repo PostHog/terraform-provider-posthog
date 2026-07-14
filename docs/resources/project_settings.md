@@ -44,6 +44,16 @@ resource "posthog_project_settings" "example" {
   app_urls = ["https://app.example.com", "https://www.example.com"]
   # Authorized domains for session replay.
   recording_domains = ["https://app.example.com"]
+
+  # Capture network performance in session replay; required for the payload
+  # capture settings below to have any effect.
+  capture_performance_opt_in = true
+  # Record network request headers/bodies in session replay. Both keys must be
+  # set together. Careful: headers and bodies can contain tokens and PII.
+  session_recording_network_payload_capture_config = {
+    record_headers = true
+    record_body    = false
+  }
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
@@ -60,16 +70,26 @@ resource "posthog_project_settings" "minimal" {
 - `app_urls` (List of String) The project's authorized domains — shown in PostHog settings as **Web analytics domains** (and used as the toolbar's Authorized URLs). These are the domains tracked in web analytics and where the toolbar is enabled. Maps to the team `app_urls` field. Wildcards are not allowed; order is preserved.
 - `autocapture_exceptions_opt_in` (Boolean) Whether exception autocapture is enabled.
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
+- `capture_performance_opt_in` (Boolean) Whether network performance capture is enabled for session replay. This must be `true` for `session_recording_network_payload_capture_config` to have any effect — without it, session replay does not capture network requests at all.
 - `cookieless_server_hash_mode` (Number) The cookieless server hash mode. Known values: `0` (disabled), `1` (stateless), `2` (stateful) — matching PostHog's `CookielessServerHashMode` enum. PostHog may add modes over time, so any non-negative value is accepted rather than a fixed set; consult the PostHog docs for the current options.
 - `heatmaps_opt_in` (Boolean) Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `recording_domains` (List of String) Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.
+- `session_recording_network_payload_capture_config` (Attributes) Controls whether session replay records the headers and bodies of captured network requests. Only takes effect when `capture_performance_opt_in` is `true`. **Security:** recorded headers and bodies can contain sensitive data such as `Authorization` tokens, cookies, and PII from request/response payloads — enable these deliberately and review PostHog's network-capture redaction options in your SDK configuration. PostHog replaces this JSON object wholesale on update, so both `record_headers` and `record_body` must be set when the block is configured; omitting the whole block leaves the current PostHog value untouched. (see [below for nested schema](#nestedatt--session_recording_network_payload_capture_config))
 - `session_recording_opt_in` (Boolean) Whether session recording (recording user sessions) is enabled.
 - `surveys_opt_in` (Boolean) Whether surveys are enabled.
 
 ### Read-Only
 
 - `id` (String) The project (environment) ID, used as the resource identifier.
+
+<a id="nestedatt--session_recording_network_payload_capture_config"></a>
+### Nested Schema for `session_recording_network_payload_capture_config`
+
+Required:
+
+- `record_body` (Boolean) Whether to record the bodies of network requests in session replay.
+- `record_headers` (Boolean) Whether to record the headers of network requests in session replay.
 
 ## Import
 
