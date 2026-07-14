@@ -18,18 +18,19 @@ import (
 )
 
 const (
-	testNormalizedProxyRecordDomain       = "proxy.example.com"
-	testProxyRecordOrganizationID         = "00000000-0000-0000-0000-000000000123"
-	testProxyRecordIDValue                = "proxy-1"
-	testProxyRecordTargetCNAME            = "abc.proxyhog.com."
-	testProxyRecordStatus                 = "waiting"
-	testProxyRecordCreatedAt              = "2026-04-21T07:13:42.440644Z"
-	testProxyRecordUpdatedAt              = "2026-04-21T07:13:42.440655Z"
-	testProxyRecordAPIKey                 = "test-key"
-	testProxyRecordClientVersion          = "test"
-	testProxyRecordCreatorID        int64 = 432419
-	testProxyRecordAPIPathPrefix          = "/api/organizations/"
-	testProxyRecordAPIPathSuffix          = "/proxy_records/"
+	testNormalizedProxyRecordDomain            = "proxy.example.com"
+	testProxyRecordOrganizationID              = "00000000-0000-0000-0000-000000000123"
+	testProxyRecordIDValue                     = "proxy-1"
+	testProxyRecordTargetCNAME                 = "abc.proxyhog.com."
+	testNormalizedProxyRecordTargetCNAME       = "abc.proxyhog.com"
+	testProxyRecordStatus                      = "waiting"
+	testProxyRecordCreatedAt                   = "2026-04-21T07:13:42.440644Z"
+	testProxyRecordUpdatedAt                   = "2026-04-21T07:13:42.440655Z"
+	testProxyRecordAPIKey                      = "test-key"
+	testProxyRecordClientVersion               = "test"
+	testProxyRecordCreatorID             int64 = 432419
+	testProxyRecordAPIPathPrefix               = "/api/organizations/"
+	testProxyRecordAPIPathSuffix               = "/proxy_records/"
 )
 
 func TestNormalizeProxyRecordDomain(t *testing.T) {
@@ -164,7 +165,7 @@ func TestProxyRecordMapResponseToModel(t *testing.T) {
 	assert.False(t, diags.HasError())
 	assert.Equal(t, testProxyRecordIDValue, model.ID.ValueString())
 	assert.Equal(t, testNormalizedProxyRecordDomain, model.Domain.ValueString())
-	assert.Equal(t, testProxyRecordTargetCNAME, model.TargetCNAME.ValueString())
+	assert.Equal(t, testNormalizedProxyRecordTargetCNAME, model.TargetCNAME.ValueString())
 	assert.Equal(t, testProxyRecordStatus, model.Status.ValueString())
 	assert.Equal(t, testProxyRecordCreatedAt, model.CreatedAt.ValueString())
 	assert.Equal(t, testProxyRecordUpdatedAt, model.UpdatedAt.ValueString())

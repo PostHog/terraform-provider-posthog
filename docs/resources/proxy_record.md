@@ -43,7 +43,7 @@ output "analytics_proxy_target_cname" {
 - `id` (String) The UUID of the proxy record.
 - `message` (String) Additional status detail returned by PostHog, when present.
 - `status` (String) The current provisioning status reported by PostHog.
-- `target_cname` (String) The PostHog-managed CNAME target that your DNS record must point to.
+- `target_cname` (String) The PostHog-managed CNAME target that your DNS record must point to. Normalised without a trailing dot, ready to use as DNS record content. If your DNS provider requires the DNS-canonical dotted form (e.g. `hashicorp/dns`), append it yourself: `"${posthog_proxy_record.example.target_cname}."`.
 - `updated_at` (String) Timestamp when the proxy record was last updated.
 
 ## Import
