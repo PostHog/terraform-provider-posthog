@@ -54,6 +54,40 @@ func TestGetEnvironment(t *testing.T) {
 	assert.True(t, *env.AutocaptureWebVitalsOptIn)
 }
 
+func TestGetEnvironmentDeserializesNetworkPayloadCaptureFromRawJSON(t *testing.T) {
+	// The other tests round-trip Environment through this package's own json tags,
+	// which would agree with each other even if the tags were wrong. This handler
+	// writes a hand-written body instead (mirroring a real /api/environments/{id}/
+	// response) to pin the inbound contract: camelCase keys inside the
+	// session_recording_network_payload_capture_config blob, snake_case around it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, apiEnvironmentsPath, r.URL.Path)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{
+			"id": 123,
+			"capture_performance_opt_in": true,
+			"session_recording_network_payload_capture_config": {"recordHeaders": true, "recordBody": false}
+		}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	client := newTestPosthogClient(server)
+	env, status, err := client.GetEnvironment(context.Background(), testEnvironmentID)
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, int(status))
+	require.NotNil(t, env.CapturePerformanceOptIn)
+	assert.True(t, *env.CapturePerformanceOptIn)
+	require.NotNil(t, env.SessionRecordingNetworkPayloadCaptureConfig)
+	require.NotNil(t, env.SessionRecordingNetworkPayloadCaptureConfig.RecordHeaders)
+	assert.True(t, *env.SessionRecordingNetworkPayloadCaptureConfig.RecordHeaders)
+	require.NotNil(t, env.SessionRecordingNetworkPayloadCaptureConfig.RecordBody)
+	assert.False(t, *env.SessionRecordingNetworkPayloadCaptureConfig.RecordBody, "explicit false must deserialize as a set value")
+}
+
 func TestUpdateEnvironmentSerializesOnlySetFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPatch, r.Method)
