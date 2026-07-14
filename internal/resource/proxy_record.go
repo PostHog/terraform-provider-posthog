@@ -77,7 +77,7 @@ func (o ProxyRecordOps) Schema() schema.Schema {
 					normalizeProxyRecordDomainPlanModifier{},
 				},
 			},
-			"target_cname": proxyRecordComputedStringAttribute("The PostHog-managed CNAME target that your DNS record must point to. Normalised without a trailing dot, ready to use as DNS record content."),
+			"target_cname": proxyRecordComputedStringAttribute("The PostHog-managed CNAME target that your DNS record must point to. Normalised without a trailing dot, ready to use as DNS record content. If your DNS provider requires the DNS-canonical dotted form (e.g. `hashicorp/dns`), append it yourself: `\"${posthog_proxy_record.example.target_cname}.\"`."),
 			"status":       proxyRecordComputedStringAttribute("The current provisioning status reported by PostHog."),
 			"message":      proxyRecordComputedStringAttribute("Additional status detail returned by PostHog, when present."),
 			"created_at":   proxyRecordComputedStringAttribute("Timestamp when the proxy record was created."),
