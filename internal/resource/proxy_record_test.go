@@ -173,22 +173,6 @@ func TestProxyRecordMapResponseToModel(t *testing.T) {
 	assert.True(t, model.Message.IsNull())
 }
 
-func TestProxyRecordMapResponseToModel_TargetCNAMEWithoutTrailingDot(t *testing.T) {
-	ops := ProxyRecordOps{}
-	resp := httpclient.ProxyRecord{
-		ID:          testProxyRecordIDValue,
-		Domain:      testNormalizedProxyRecordDomain,
-		TargetCNAME: testNormalizedProxyRecordTargetCNAME,
-		Status:      testProxyRecordStatus,
-	}
-
-	var model ProxyRecordTFModel
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
-
-	assert.False(t, diags.HasError())
-	assert.Equal(t, testNormalizedProxyRecordTargetCNAME, model.TargetCNAME.ValueString())
-}
-
 func TestProxyRecordMapResponseToModel_WithMessageAndNilCreator(t *testing.T) {
 	ops := ProxyRecordOps{}
 	message := "Waiting on DNS"

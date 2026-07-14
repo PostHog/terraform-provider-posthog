@@ -112,7 +112,7 @@ func (o ProxyRecordOps) MapResponseToModel(_ context.Context, resp httpclient.Pr
 	// Most DNS providers (Cloudflare, Route53) store record content without it,
 	// so passing the dot through causes a perpetual diff on the downstream DNS
 	// resource (https://github.com/PostHog/terraform-provider-posthog/issues/105).
-	model.TargetCNAME = types.StringValue(strings.TrimSuffix(resp.TargetCNAME, "."))
+	model.TargetCNAME = types.StringValue(trimTrailingDot(resp.TargetCNAME))
 	model.Status = types.StringValue(resp.Status)
 	model.Message = core.PtrToStringNullIfEmptyTrimmed(resp.Message)
 	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
@@ -139,7 +139,11 @@ func (o ProxyRecordOps) Delete(ctx context.Context, client httpclient.PosthogCli
 }
 
 func normalizeProxyRecordDomain(raw string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+	return strings.ToLower(trimTrailingDot(strings.TrimSpace(raw)))
+}
+
+func trimTrailingDot(fqdn string) string {
+	return strings.TrimSuffix(fqdn, ".")
 }
 
 // normalizeProxyRecordDomainPlanModifier rewrites the planned `domain` value
