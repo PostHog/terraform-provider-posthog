@@ -77,7 +77,7 @@ func (o ProxyRecordOps) Schema() schema.Schema {
 					normalizeProxyRecordDomainPlanModifier{},
 				},
 			},
-			"target_cname": proxyRecordComputedStringAttribute("The PostHog-managed CNAME target that your DNS record must point to."),
+			"target_cname": proxyRecordComputedStringAttribute("The PostHog-managed CNAME target that your DNS record must point to. Normalised without a trailing dot, ready to use as DNS record content."),
 			"status":       proxyRecordComputedStringAttribute("The current provisioning status reported by PostHog."),
 			"message":      proxyRecordComputedStringAttribute("Additional status detail returned by PostHog, when present."),
 			"created_at":   proxyRecordComputedStringAttribute("Timestamp when the proxy record was created."),
@@ -108,7 +108,11 @@ func (o ProxyRecordOps) MapResponseToModel(_ context.Context, resp httpclient.Pr
 
 	model.ID = types.StringValue(resp.ID)
 	model.Domain = types.StringValue(resp.Domain)
-	model.TargetCNAME = types.StringValue(resp.TargetCNAME)
+	// PostHog emits target_cname as a DNS-canonical FQDN with a trailing dot.
+	// Most DNS providers (Cloudflare, Route53) store record content without it,
+	// so passing the dot through causes a perpetual diff on the downstream DNS
+	// resource (https://github.com/PostHog/terraform-provider-posthog/issues/105).
+	model.TargetCNAME = types.StringValue(strings.TrimSuffix(resp.TargetCNAME, "."))
 	model.Status = types.StringValue(resp.Status)
 	model.Message = core.PtrToStringNullIfEmptyTrimmed(resp.Message)
 	model.CreatedAt = core.PtrToStringNullIfEmptyTrimmed(resp.CreatedAt)
