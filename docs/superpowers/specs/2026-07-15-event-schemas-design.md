@@ -102,17 +102,19 @@ resource "posthog_event_schema" "checkout_completed" {
   place via PATCH — no ForceNew.
 - Read: no retrieve endpoint, so Read lists
   `GET /event_schemas/?event_definition=<uuid>` and finds our id; import
-  (`project_id:id`) falls back to an unfiltered list scan. Id missing from
-  the list is treated as deleted (resource removed from state).
+  (`project_id/resource_id`, the provider's standard format) falls back to
+  an unfiltered list scan. Id missing from the list is treated as deleted
+  (resource removed from state).
 - Duplicate attachment (same event + group) 400s → clear diagnostic.
 - New client file: `internal/httpclient/event_schema.go` (plus an
   event-definition list/search helper for name resolution).
 
 ## Error handling
 
-- Name-resolution failure, duplicate-name 400s, and duplicate-attachment
-  400s all get specific diagnostics (no raw API error passthrough as the
-  primary message).
+- Name-resolution failure gets a purpose-built actionable error (event must
+  have been ingested at least once). Duplicate-name and duplicate-attachment
+  400s surface the API's already-descriptive validation message through the
+  standard generic-resource diagnostic — no bespoke error mapping.
 - Standard generic-resource handling covers 404-on-read (remove from state)
   and auth/permission errors.
 
