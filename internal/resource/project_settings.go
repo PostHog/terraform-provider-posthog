@@ -224,6 +224,19 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 				RecordBody:    util.BoolPtrFromValue(cfg.RecordBody),
 			}
 		}
+		// ValueBool is false for null and unknown too, which is the intent:
+		// warn unless performance capture is known to be enabled in this plan
+		// (an unset attribute carries the last-read server value, so users who
+		// enabled it outside Terraform are not nagged after the first refresh).
+		if !model.CapturePerformanceOptIn.ValueBool() {
+			diags.AddWarning(
+				"session_recording_network_payload_capture_config has no effect without capture_performance_opt_in",
+				"Session replay only captures network requests when network performance capture is enabled, "+
+					"so the configured payload capture settings will do nothing until capture_performance_opt_in is true. "+
+					"Set capture_performance_opt_in = true in this resource, or ignore this warning if network capture "+
+					"is already enabled for the project outside Terraform.",
+			)
+		}
 	}
 
 	appURLs, d := util.StringListToSlicePtr(ctx, model.AppURLs)
@@ -322,14 +335,21 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 // networkPayloadCaptureDiverged reports whether a configured (non-null,
 // non-unknown) payload-capture object differs from what the server returned.
 // It is the object counterpart of util.BoolDiverged: unconfigured objects
-// never diverge, a nil server value counts as divergent.
+// never diverge; a nil server value or an unparseable configured value counts
+// as divergent.
 func networkPayloadCaptureDiverged(ctx context.Context, configured types.Object, server *httpclient.NetworkPayloadCaptureConfig) bool {
 	if configured.IsNull() || configured.IsUnknown() {
 		return false
 	}
 	var cfg NetworkPayloadCaptureModel
-	if configured.As(ctx, &cfg, basetypes.ObjectAsOptions{}).HasError() {
-		return false
+	if d := configured.As(ctx, &cfg, basetypes.ObjectAsOptions{}); d.HasError() {
+		// Unreachable for a schema-derived object, but if it ever fires the
+		// attribute must be named in the divergence warning rather than
+		// vanishing into the generic "inconsistent result after apply" error.
+		tflog.Error(ctx, "failed to parse configured session_recording_network_payload_capture_config; treating as diverged", map[string]any{
+			"diagnostics": fmt.Sprintf("%v", d),
+		})
+		return true
 	}
 	if server == nil {
 		return true

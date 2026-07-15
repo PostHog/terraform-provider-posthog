@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/posthog/terraform-provider/internal/httpclient"
@@ -162,6 +163,54 @@ func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureExplicitFalse(t 
 // TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureAbsent guards the
 // leave-untouched contract: an unset block must be omitted from the PATCH body
 // entirely, not sent as null or {} (the API replaces the whole JSON blob).
+// TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerformanceCapture
+// guards the no-op warning: payload capture only takes effect when network
+// performance capture is enabled, so configuring the block without a known-true
+// capture_performance_opt_in must warn (and only then).
+func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerformanceCapture(t *testing.T) {
+	ops := ProjectSettingsOps{}
+
+	t.Run("warns when capture_performance_opt_in is unset", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
+
+		_, diags := ops.BuildCreateRequest(context.Background(), model)
+
+		assert.False(t, diags.HasError())
+		require.Equal(t, 1, diags.WarningsCount())
+		assert.Contains(t, diags.Warnings()[0].Summary(), "capture_performance_opt_in")
+	})
+
+	t.Run("warns when capture_performance_opt_in is false", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		model.CapturePerformanceOptIn = types.BoolValue(false)
+		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
+
+		_, diags := ops.BuildCreateRequest(context.Background(), model)
+
+		require.Equal(t, 1, diags.WarningsCount())
+	})
+
+	t.Run("no warning when capture_performance_opt_in is true", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		model.CapturePerformanceOptIn = types.BoolValue(true)
+		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
+
+		_, diags := ops.BuildCreateRequest(context.Background(), model)
+
+		assert.Equal(t, 0, diags.WarningsCount())
+	})
+
+	t.Run("no warning when the block is not configured", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		model.CapturePerformanceOptIn = types.BoolValue(false)
+
+		_, diags := ops.BuildCreateRequest(context.Background(), model)
+
+		assert.Equal(t, 0, diags.WarningsCount())
+	})
+}
+
 func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureAbsent(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
@@ -334,6 +383,27 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "capture_performance_opt_in")
+	})
+
+	t.Run("unparseable configured object counts as diverged", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		// Wrong child type: As() into NetworkPayloadCaptureModel must fail, and
+		// the attribute must still be named in the warning (not suppressed).
+		model.NetworkPayloadCapture = types.ObjectValueMust(
+			map[string]attr.Type{"record_headers": types.StringType, "record_body": types.BoolType},
+			map[string]attr.Value{"record_headers": types.StringValue("not-a-bool"), "record_body": types.BoolValue(true)},
+		)
+
+		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+			ID: 123,
+			SessionRecordingNetworkPayloadCaptureConfig: &httpclient.NetworkPayloadCaptureConfig{
+				RecordHeaders: util.BoolPtr(true),
+				RecordBody:    util.BoolPtr(true),
+			},
+		}, &model)
+
+		require.Equal(t, 1, diags.WarningsCount())
+		assert.Contains(t, diags.Warnings()[0].Detail(), "session_recording_network_payload_capture_config")
 	})
 
 	t.Run("no warning when server matches", func(t *testing.T) {
