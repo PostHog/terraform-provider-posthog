@@ -117,6 +117,8 @@ func TestEventSchema_Basic(t *testing.T) {
 	eventName := acctest.RandomWithPrefix("tf-acc-event")
 	createTestEventDefinition(t, eventName)
 
+	var capturedEventDefID string
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -127,7 +129,13 @@ func TestEventSchema_Basic(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_event_schema.test", "event", eventName),
 					resource.TestCheckResourceAttrSet("posthog_event_schema.test", "id"),
-					resource.TestCheckResourceAttrSet("posthog_event_schema.test", "event_definition_id"),
+					resource.TestCheckResourceAttrWith("posthog_event_schema.test", "event_definition_id", func(v string) error {
+						if v == "" {
+							return fmt.Errorf("event_definition_id is empty")
+						}
+						capturedEventDefID = v
+						return nil
+					}),
 					resource.TestCheckResourceAttrPair(
 						"posthog_event_schema.test", "property_group_id",
 						"posthog_schema_property_group.test", "id",
@@ -141,6 +149,12 @@ func TestEventSchema_Basic(t *testing.T) {
 						"posthog_event_schema.test", "property_group_id",
 						"posthog_schema_property_group.second", "id",
 					),
+					resource.TestCheckResourceAttrWith("posthog_event_schema.test", "event_definition_id", func(v string) error {
+						if v != capturedEventDefID {
+							return fmt.Errorf("event_definition_id changed across steps: %q -> %q", capturedEventDefID, v)
+						}
+						return nil
+					}),
 				),
 			},
 			{
