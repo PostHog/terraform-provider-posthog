@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -27,14 +28,14 @@ func NewFeatureFlag() resource.Resource {
 type FeatureFlagTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	Key                        types.String `tfsdk:"key"`
-	Name                       types.String `tfsdk:"name"`
-	Active                     types.Bool   `tfsdk:"active"`
-	Filters                    types.String `tfsdk:"filters"`
-	RolloutPercentage          types.Int64  `tfsdk:"rollout_percentage"`
-	Tags                       types.Set    `tfsdk:"tags"`
-	Deleted                    types.Bool   `tfsdk:"deleted"`
-	EnsureExperienceContinuity types.Bool   `tfsdk:"ensure_experience_continuity"`
+	Key                        types.String         `tfsdk:"key"`
+	Name                       types.String         `tfsdk:"name"`
+	Active                     types.Bool           `tfsdk:"active"`
+	Filters                    jsontypes.Normalized `tfsdk:"filters"`
+	RolloutPercentage          types.Int64          `tfsdk:"rollout_percentage"`
+	Tags                       types.Set            `tfsdk:"tags"`
+	Deleted                    types.Bool           `tfsdk:"deleted"`
+	EnsureExperienceContinuity types.Bool           `tfsdk:"ensure_experience_continuity"`
 }
 
 type FeatureFlagOps struct{}
@@ -84,9 +85,10 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				},
 			},
 			"filters": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag filters as JSON",
+				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff.",
 			},
 			"rollout_percentage": schema.Int64Attribute{
 				Optional:            true,
@@ -272,10 +274,10 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	if len(resp.Filters) > 0 {
 		normalizedFilters, err := normalizeJSONForState(resp.Filters, model.Filters.ValueString())
 		if err == nil {
-			model.Filters = types.StringValue(normalizedFilters)
+			model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
 		}
 	} else {
-		model.Filters = types.StringNull()
+		model.Filters = jsontypes.NewNormalizedNull()
 	}
 
 	model.RolloutPercentage = extractRolloutPercentage(resp)
