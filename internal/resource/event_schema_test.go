@@ -74,6 +74,16 @@ func TestEventSchemaMapResponseToModel(t *testing.T) {
 	assert.Equal(t, testESResourceDefID, model.EventDefinitionID.ValueString())
 	assert.Equal(t, testESResourceGroupID, model.PropertyGroupID.ValueString())
 	assert.Equal(t, testESResourceEvent, model.Event.ValueString())
+
+	// Empty EventName (routine Read skipped the definition fetch) must keep
+	// the event name already in state.
+	kept := EventSchemaTFModel{Event: types.StringValue(testESResourceEvent)}
+	diags = ops.MapResponseToModel(context.Background(), httpclient.EventSchema{
+		ID:              testESResourceID,
+		EventDefinition: testESResourceDefID,
+	}, &kept)
+	require.False(t, diags.HasError())
+	assert.Equal(t, testESResourceEvent, kept.Event.ValueString(), "state event name must survive a skipped definition fetch")
 }
 
 // eventSchemaTestServer covers create/list/patch/delete plus the event
@@ -131,10 +141,24 @@ func TestEventSchemaOpsResolveAndCRUD(t *testing.T) {
 	assert.Equal(t, testESResourceID, created.ID)
 	assert.Equal(t, testESResourceEvent, created.EventName, "Create must backfill the resolved event name")
 
+	// Routine read: state already has the name for an unchanged definition id,
+	// so Read skips the definition fetch and leaves EventName empty (state keeps
+	// its value via MapResponseToModel's guard).
 	read, status, err := ops.Read(context.Background(), client, model)
 	require.NoError(t, err)
 	assert.Equal(t, httpclient.HTTPStatusCode(http.StatusOK), status)
-	assert.Equal(t, testESResourceEvent, read.EventName, "Read must recover the event name for state")
+	assert.Empty(t, read.EventName, "routine Read must skip the definition fetch when state already has the name")
+
+	// Import-shaped read: no event name or definition id in state yet — Read
+	// must recover the name via GetEventDefinition.
+	importModel := EventSchemaTFModel{
+		BaseStringIdentifiable: core.BaseStringIdentifiable{ID: types.StringValue(testESResourceID)},
+		BaseProjectID:          core.BaseProjectID{ProjectID: types.StringValue(testESResourceProjectID)},
+	}
+	imported, status, err := ops.Read(context.Background(), client, importModel)
+	require.NoError(t, err)
+	assert.Equal(t, httpclient.HTTPStatusCode(http.StatusOK), status)
+	assert.Equal(t, testESResourceEvent, imported.EventName, "import Read must recover the event name for state")
 
 	updated, status, err := ops.Update(context.Background(), client, model, req)
 	require.NoError(t, err)

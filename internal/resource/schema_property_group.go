@@ -135,10 +135,7 @@ func (o SchemaPropertyGroupOps) BuildCreateRequest(ctx context.Context, model Sc
 	name := model.Name.ValueString()
 	req := httpclient.SchemaPropertyGroupRequest{Name: &name}
 
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
-		desc := model.Description.ValueString()
-		req.Description = &desc
-	}
+	req.Description = util.StringPtrFromValue(model.Description)
 
 	if !model.Properties.IsNull() && !model.Properties.IsUnknown() {
 		var props []schemaPropertyTFModel
@@ -149,23 +146,13 @@ func (o SchemaPropertyGroupOps) BuildCreateRequest(ctx context.Context, model Sc
 
 		apiProps := make([]httpclient.SchemaPropertyGroupProperty, 0, len(props))
 		for _, p := range props {
-			apiProp := httpclient.SchemaPropertyGroupProperty{
-				Name:         p.Name.ValueString(),
-				PropertyType: p.PropertyType.ValueString(),
-			}
-			if !p.IsRequired.IsNull() && !p.IsRequired.IsUnknown() {
-				v := p.IsRequired.ValueBool()
-				apiProp.IsRequired = &v
-			}
-			if !p.IsOptionalInTypes.IsNull() && !p.IsOptionalInTypes.IsUnknown() {
-				v := p.IsOptionalInTypes.ValueBool()
-				apiProp.IsOptionalInTypes = &v
-			}
-			if !p.Description.IsNull() && !p.Description.IsUnknown() {
-				v := p.Description.ValueString()
-				apiProp.Description = &v
-			}
-			apiProps = append(apiProps, apiProp)
+			apiProps = append(apiProps, httpclient.SchemaPropertyGroupProperty{
+				Name:              p.Name.ValueString(),
+				PropertyType:      p.PropertyType.ValueString(),
+				IsRequired:        util.BoolPtrFromValue(p.IsRequired),
+				IsOptionalInTypes: util.BoolPtrFromValue(p.IsOptionalInTypes),
+				Description:       util.StringPtrFromValue(p.Description),
+			})
 		}
 		req.Properties = &apiProps
 	}

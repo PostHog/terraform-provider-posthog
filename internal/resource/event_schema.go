@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 func NewEventSchema() resource.Resource {
@@ -94,6 +95,8 @@ func (o EventSchemaOps) BuildUpdateRequest(ctx context.Context, plan, state Even
 func (o EventSchemaOps) MapResponseToModel(ctx context.Context, resp httpclient.EventSchema, model *EventSchemaTFModel) diag.Diagnostics {
 	model.ID = types.StringValue(resp.ID)
 	model.EventDefinitionID = types.StringValue(resp.EventDefinition)
+	// EventName is empty when Read skipped the definition fetch because state
+	// already carried the name for an unchanged definition id — keep it then.
 	if resp.EventName != "" {
 		model.Event = types.StringValue(resp.EventName)
 	}
@@ -130,14 +133,17 @@ func (o EventSchemaOps) Create(ctx context.Context, client httpclient.PosthogCli
 func (o EventSchemaOps) Read(ctx context.Context, client httpclient.PosthogClient, model EventSchemaTFModel) (httpclient.EventSchema, httpclient.HTTPStatusCode, error) {
 	// On import event_definition_id is not in state yet; fall back to an
 	// unfiltered list scan.
-	eventDefID := ""
-	if !model.EventDefinitionID.IsNull() && !model.EventDefinitionID.IsUnknown() {
-		eventDefID = model.EventDefinitionID.ValueString()
-	}
+	eventDefID := util.ValueStringOrEmpty(model.EventDefinitionID)
 
 	resp, status, err := client.GetEventSchema(ctx, model.GetEffectiveProjectID(), model.GetID(), eventDefID)
 	if err != nil {
 		return resp, status, err
+	}
+
+	// State already knows the name for this definition id (event definitions
+	// are never renamed) — skip the extra definition fetch on routine reads.
+	if resp.EventDefinition == eventDefID && !model.Event.IsNull() && model.Event.ValueString() != "" {
+		return resp, http.StatusOK, nil
 	}
 
 	def, defStatus, err := client.GetEventDefinition(ctx, model.GetEffectiveProjectID(), resp.EventDefinition)
