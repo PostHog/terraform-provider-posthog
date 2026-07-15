@@ -14,6 +14,16 @@ resource "posthog_project_settings" "example" {
   app_urls = ["https://app.example.com", "https://www.example.com"]
   # Authorized domains for session replay.
   recording_domains = ["https://app.example.com"]
+
+  # Capture network performance in session replay; required for the payload
+  # capture settings below to have any effect.
+  capture_performance_opt_in = true
+  # Record network request headers/bodies in session replay. Both keys must be
+  # set together. Careful: headers and bodies can contain tokens and PII.
+  session_recording_network_payload_capture_config = {
+    record_headers = true
+    record_body    = false
+  }
 }
 
 # Use the provider-level project_id and manage only a subset of settings.

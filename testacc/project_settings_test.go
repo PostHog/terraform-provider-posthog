@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -160,6 +161,51 @@ func TestProjectSettings_Domains(t *testing.T) {
 	})
 }
 
+// TestProjectSettings_NetworkPayloadCapture exercises capture_performance_opt_in
+// and the session_recording_network_payload_capture_config nested object
+// end-to-end: apply, read-back, update (flip record_body), and import. It also
+// verifies the required-children contract: a partial block must fail validation
+// before any API call, since PostHog replaces the whole JSON blob on PATCH.
+func TestProjectSettings_NetworkPayloadCapture(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	projectID := getProjectID()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccProjectSettingsConfigNetworkPayloadCapturePartial(),
+				ExpectError: regexp.MustCompile(`record_body`),
+			},
+			{
+				Config: testAccProjectSettingsConfigNetworkPayloadCapture(true, false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "capture_performance_opt_in", "true"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "session_recording_network_payload_capture_config.record_headers", "true"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "session_recording_network_payload_capture_config.record_body", "false"),
+				),
+			},
+			{
+				Config: testAccProjectSettingsConfigNetworkPayloadCapture(true, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "capture_performance_opt_in", "true"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "session_recording_network_payload_capture_config.record_headers", "true"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "session_recording_network_payload_capture_config.record_body", "true"),
+				),
+			},
+			{
+				ResourceName:            "posthog_project_settings.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateId:           projectID,
+				ImportStateVerifyIgnore: []string{"project_id"},
+			},
+		},
+	})
+}
+
 func testAccProjectSettingsConfig(heatmaps, sessionRecording, surveys bool) string {
 	return fmt.Sprintf(`
 provider "posthog" {}
@@ -194,6 +240,36 @@ provider "posthog" {}
 resource "posthog_project_settings" "test" {
   app_urls          = ["https://app.example.com", "https://www.example.com"]
   recording_domains = ["https://app.example.com"]
+}
+`
+}
+
+func testAccProjectSettingsConfigNetworkPayloadCapture(recordHeaders, recordBody bool) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_project_settings" "test" {
+  session_recording_opt_in   = true
+  capture_performance_opt_in = true
+
+  session_recording_network_payload_capture_config = {
+    record_headers = %t
+    record_body    = %t
+  }
+}
+`, recordHeaders, recordBody)
+}
+
+// A partial payload-capture block: must fail config validation (record_body is
+// required) rather than PATCH a partial object that would wipe the other key.
+func testAccProjectSettingsConfigNetworkPayloadCapturePartial() string {
+	return `
+provider "posthog" {}
+
+resource "posthog_project_settings" "test" {
+  session_recording_network_payload_capture_config = {
+    record_headers = true
+  }
 }
 `
 }
