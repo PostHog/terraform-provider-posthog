@@ -272,7 +272,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	// Set filters if present
 	if len(resp.Filters) > 0 {
-		normalizedFilters, err := normalizeJSONForState(resp.Filters, model.Filters.ValueString())
+		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString())
 		if err == nil {
 			model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
 		}
@@ -292,6 +292,63 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Deleted = types.BoolValue(deleted)
 
 	return diags
+}
+
+// normalizeFeatureFlagFiltersForState keeps meaningful API fields so Terraform
+// can detect remote filter changes, while omitting unconfigured empty defaults
+// that PostHog adds to the response.
+func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string) (string, error) {
+	var stateData interface{}
+	if err := json.Unmarshal([]byte(stateJSON), &stateData); err != nil {
+		stateData = nil
+	}
+
+	return marshalJSON(normalizeFeatureFlagFilterValue(stateData, apiData))
+}
+
+func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{} {
+	switch apiValue := apiData.(type) {
+	case map[string]interface{}:
+		stateMap, _ := stateData.(map[string]interface{})
+		result := make(map[string]interface{})
+		for key, apiFieldValue := range apiValue {
+			stateFieldValue, configured := stateMap[key]
+			normalized := normalizeFeatureFlagFilterValue(stateFieldValue, apiFieldValue)
+			if !configured && isEmptyFeatureFlagFilterValue(normalized) {
+				continue
+			}
+			result[key] = normalized
+		}
+		return result
+
+	case []interface{}:
+		stateSlice, _ := stateData.([]interface{})
+		result := make([]interface{}, len(apiValue))
+		for i, apiItem := range apiValue {
+			var stateItem interface{}
+			if i < len(stateSlice) {
+				stateItem = stateSlice[i]
+			}
+			result[i] = normalizeFeatureFlagFilterValue(stateItem, apiItem)
+		}
+		return result
+
+	default:
+		return apiData
+	}
+}
+
+func isEmptyFeatureFlagFilterValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case map[string]interface{}:
+		return len(typed) == 0
+	case []interface{}:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {

@@ -81,6 +81,74 @@ func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 	assert.True(t, eq, "filters state must be semantically equal to config to avoid a perpetual diff")
 }
 
+func TestFeatureFlagMapResponseToModel_PreservesRemoteFilterDrift(t *testing.T) {
+	ops := FeatureFlagOps{}
+	model := FeatureFlagTFModel{
+		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100},{"properties":[{"key":"email","operator":"exact","type":"person","value":["admin@example.com"]}],"rollout_percentage":100}]}`),
+	}
+
+	resp := httpclient.FeatureFlag{
+		ID:  123,
+		Key: "create-additional-business",
+		Filters: map[string]interface{}{
+			"aggregation_group_type_index": nil,
+			"payloads":                     map[string]interface{}{},
+			"groups": []interface{}{
+				map[string]interface{}{
+					"aggregation_group_type_index": nil,
+					"properties": []interface{}{
+						map[string]interface{}{
+							"key":      "email",
+							"operator": "exact",
+							"type":     "person",
+							"value":    []interface{}{"brad@example.com"},
+						},
+					},
+					"rollout_percentage": float64(100),
+				},
+				map[string]interface{}{
+					"aggregation_group_type_index": nil,
+					"variant":                      nil,
+					"properties": []interface{}{
+						map[string]interface{}{
+							"key":      "email",
+							"operator": "exact",
+							"type":     "person",
+							"value":    []interface{}{"admin@example.com"},
+						},
+					},
+					"rollout_percentage": float64(100),
+				},
+			},
+		},
+	}
+
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.JSONEq(t, `{
+		"groups": [
+			{
+				"properties": [{
+					"key": "email",
+					"operator": "exact",
+					"type": "person",
+					"value": ["brad@example.com"]
+				}],
+				"rollout_percentage": 100
+			},
+			{
+				"properties": [{
+					"key": "email",
+					"operator": "exact",
+					"type": "person",
+					"value": ["admin@example.com"]
+				}],
+				"rollout_percentage": 100
+			}
+		]
+	}`, model.Filters.ValueString())
+}
+
 func TestFeatureFlagBuildCreateRequestSetsEnsureExperienceContinuity(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
