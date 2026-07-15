@@ -153,6 +153,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewProxyRecord,
 		posthogresource.NewRole,
 		posthogresource.NewRoleMembership,
+		posthogresource.NewSchemaPropertyGroup,
 		posthogresource.NewSurvey,
 	}
 }
