@@ -85,6 +85,19 @@ func TestSchemaPropertyGroupBuildCreateRequest(t *testing.T) {
 	assert.Nil(t, prop.ID, "requests must not send property ids (replace-all contract)")
 }
 
+func TestSchemaPropertyGroupBuildCreateRequestNoProperties(t *testing.T) {
+	ops := SchemaPropertyGroupOps{}
+	model := SchemaPropertyGroupTFModel{
+		Name:       types.StringValue("Checkout"),
+		Properties: types.SetNull(types.ObjectType{AttrTypes: schemaPropertyAttrTypes}),
+	}
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.False(t, diags.HasError())
+	assert.Nil(t, req.Properties, "null properties must be omitted, not sent as an empty replace-all list")
+	assert.Nil(t, req.Description)
+}
+
 func TestSchemaPropertyGroupBuildUpdateRequestClears(t *testing.T) {
 	ops := SchemaPropertyGroupOps{}
 	state := SchemaPropertyGroupTFModel{
@@ -144,6 +157,16 @@ func TestSchemaPropertyGroupMapResponseToModel(t *testing.T) {
 	diags = ops.MapResponseToModel(context.Background(), httpclient.SchemaPropertyGroup{ID: testSPGResourceID, Name: "Empty"}, &nullModel)
 	require.False(t, diags.HasError())
 	assert.True(t, nullModel.Properties.IsNull())
+
+	// user cleared all properties: model non-null, server returns none — state
+	// must become an empty set, not null, to match the configured empty list
+	clearedModel := SchemaPropertyGroupTFModel{
+		Properties: testPropertiesSet(t),
+	}
+	diags = ops.MapResponseToModel(context.Background(), httpclient.SchemaPropertyGroup{ID: testSPGResourceID, Name: "Cleared"}, &clearedModel)
+	require.False(t, diags.HasError())
+	require.False(t, clearedModel.Properties.IsNull(), "explicit empty must stay an empty set, not become null")
+	assert.Empty(t, clearedModel.Properties.Elements())
 }
 
 func TestSchemaPropertyGroupCRUDWrapperMethods(t *testing.T) {

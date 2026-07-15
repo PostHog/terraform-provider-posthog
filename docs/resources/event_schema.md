@@ -3,12 +3,12 @@
 page_title: "posthog_event_schema Resource - posthog"
 subcategory: ""
 description: |-
-  Attach a posthog_schema_property_group to an event. The event must have been ingested at least once so its event definition exists.
+  Attach a posthog_schema_property_group to an event. The event must have been ingested at least once so its event definition exists. Schema management is currently observational: attached schemas describe the expected shape but do not reject non-conforming events at ingestion until PostHog enables schema enforcement.
 ---
 
 # posthog_event_schema (Resource)
 
-Attach a `posthog_schema_property_group` to an event. The event must have been ingested at least once so its event definition exists.
+Attach a `posthog_schema_property_group` to an event. The event must have been ingested at least once so its event definition exists. Schema management is currently observational: attached schemas describe the expected shape but do not reject non-conforming events at ingestion until PostHog enables schema enforcement.
 
 ## Example Usage
 

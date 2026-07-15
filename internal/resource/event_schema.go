@@ -41,7 +41,9 @@ func (o EventSchemaOps) ResourceName() string {
 func (o EventSchemaOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: "Attach a `posthog_schema_property_group` to an event. The event must have been " +
-			"ingested at least once so its event definition exists.",
+			"ingested at least once so its event definition exists. Schema management is currently " +
+			"observational: attached schemas describe the expected shape but do not reject non-conforming " +
+			"events at ingestion until PostHog enables schema enforcement.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -142,6 +144,8 @@ func (o EventSchemaOps) Read(ctx context.Context, client httpclient.PosthogClien
 
 	// State already knows the name for this definition id (event definitions
 	// are never renamed) — skip the extra definition fetch on routine reads.
+	// Returning EventName == "" is the contract signal MapResponseToModel's
+	// guard relies on to keep the event name already in state.
 	if resp.EventDefinition == eventDefID && !model.Event.IsNull() && model.Event.ValueString() != "" {
 		return resp, http.StatusOK, nil
 	}
