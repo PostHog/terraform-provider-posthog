@@ -24,7 +24,8 @@ PostHog Feature Flag resource
 - `active` (Boolean) Whether the feature flag is active
 - `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
 - `ensure_experience_continuity` (Boolean) Whether to persist the flag across authentication steps (PostHog's UI labels this as 'Persist flag across authentication steps'). Flags with experience continuity enabled cannot be evaluated by server-side local evaluation; set this to false for flags that must be evaluated locally.
-- `filters` (String) Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff.
+- `filters` (String) Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.
+- `ignore_filter_fields` (Set of String) Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). When unset, defaults to the keys other PostHog products wire into a flag — `["super_groups", "holdout_groups", "holdout"]` (Early Access Features and Experiments). Set to `[]` to track the entire filters blob, or provide your own set to replace the default. A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).
 - `name` (String) Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `rollout_percentage` (Number) Rollout percentage (0-100)

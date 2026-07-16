@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/stretchr/testify/assert"
@@ -107,7 +108,7 @@ func TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults(t *
 	}
 
 	for _, stateJSON := range []string{"", "not valid json"} {
-		got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON)
+		got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON, defaultIgnoredFilterKeys)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{
 			"groups": [{
@@ -121,6 +122,76 @@ func TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults(t *
 			}]
 		}`, got, "stateJSON=%q", stateJSON)
 	}
+}
+
+// ffFilters with super_groups + holdout_groups (cross-product wiring, populated by Early
+// Access Features / Experiments) alongside user-authored groups, multivariate and payloads.
+func ffFiltersWithWiring() map[string]interface{} {
+	return map[string]interface{}{
+		"groups": []interface{}{
+			map[string]interface{}{"rollout_percentage": float64(100)},
+		},
+		"multivariate": map[string]interface{}{
+			"variants": []interface{}{map[string]interface{}{"key": "control", "rollout_percentage": float64(100)}},
+		},
+		"payloads":       map[string]interface{}{"control": `{"x":1}`},
+		"super_groups":   []interface{}{map[string]interface{}{"rollout_percentage": float64(100)}},
+		"holdout_groups": []interface{}{map[string]interface{}{"rollout_percentage": float64(10)}},
+	}
+}
+
+// The default ignore set drops the cross-product wiring keys (super_groups, holdout_groups)
+// that the user did not configure, but KEEPS multivariate and payloads — those are part of
+// the flag's own definition and stay in the normal drift-detected flow.
+func TestNormalizeFeatureFlagFiltersForState_DefaultIgnoresWiringKeepsMultivariateAndPayloads(t *testing.T) {
+	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, defaultIgnoredFilterKeys)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"groups": [{"rollout_percentage": 100}],
+		"multivariate": {"variants": [{"key": "control", "rollout_percentage": 100}]},
+		"payloads": {"control": "{\"x\":1}"}
+	}`, got)
+}
+
+// An empty ignore set (ignore_filter_fields = []) tracks the entire blob — exactly the
+// original #114 behavior, including the wiring keys.
+func TestNormalizeFeatureFlagFiltersForState_EmptyIgnoreTracksEverything(t *testing.T) {
+	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, []string{})
+	require.NoError(t, err)
+	assert.Contains(t, got, `"super_groups"`)
+	assert.Contains(t, got, `"holdout_groups"`)
+}
+
+// Configured beats ignored: a key the user declares in filters is tracked even when it is
+// in the ignore set.
+func TestNormalizeFeatureFlagFiltersForState_ConfiguredKeyBeatsIgnore(t *testing.T) {
+	// super_groups is in the default ignore set, but the user declared it in prior state.
+	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(),
+		`{"groups":[{"rollout_percentage":100}],"super_groups":[{"rollout_percentage":100}]}`, defaultIgnoredFilterKeys)
+	require.NoError(t, err)
+	assert.Contains(t, got, `"super_groups"`)      // configured → kept
+	assert.NotContains(t, got, `"holdout_groups"`) // still ignored (not configured)
+}
+
+func TestResolveIgnoredFilterKeys(t *testing.T) {
+	ctx := context.Background()
+
+	// Unset → default set.
+	keys, diags := resolveIgnoredFilterKeys(ctx, types.SetNull(types.StringType))
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, defaultIgnoredFilterKeys, keys)
+
+	// Explicit empty → empty (track everything), NOT the default.
+	empty, _ := types.SetValue(types.StringType, []attr.Value{})
+	keys, diags = resolveIgnoredFilterKeys(ctx, empty)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Empty(t, keys)
+
+	// Explicit set → that set.
+	custom, _ := types.SetValue(types.StringType, []attr.Value{types.StringValue("payloads")})
+	keys, diags = resolveIgnoredFilterKeys(ctx, custom)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, []string{"payloads"}, keys)
 }
 
 func TestFeatureFlagMapResponseToModel_PreservesRemoteFilterDrift(t *testing.T) {

@@ -32,6 +32,7 @@ type FeatureFlagTFModel struct {
 	Name                       types.String         `tfsdk:"name"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
+	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
 	RolloutPercentage          types.Int64          `tfsdk:"rollout_percentage"`
 	Tags                       types.Set            `tfsdk:"tags"`
 	Deleted                    types.Bool           `tfsdk:"deleted"`
@@ -88,7 +89,15 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff.",
+				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.",
+			},
+			"ignore_filter_fields": schema.SetAttribute{
+				ElementType: types.StringType,
+				Optional:    true,
+				MarkdownDescription: "Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). " +
+					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
+					"Set to `[]` to track the entire filters blob, or provide your own set to replace the default. " +
+					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
 				Optional:            true,
@@ -272,7 +281,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	// Set filters if present
 	if len(resp.Filters) > 0 {
-		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString())
+		ignoredKeys, d := resolveIgnoredFilterKeys(ctx, model.IgnoreFilterFields)
+		diags.Append(d...)
+		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString(), ignoredKeys)
 		if err == nil {
 			model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
 		}
@@ -294,6 +305,26 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	return diags
 }
 
+// defaultIgnoredFilterKeys are the top-level `filters` keys other PostHog products wire
+// into a flag rather than the flag author writing them: Early Access Features populate
+// super_groups, and Experiments populate holdout_groups / holdout. Tracking them by
+// default would show a perpetual diff on every EAF- or experiment-linked flag. Users can
+// override the set via the ignore_filter_fields attribute, and declaring any of these
+// inside filters opts back into managing it.
+var defaultIgnoredFilterKeys = []string{"super_groups", "holdout_groups", "holdout"}
+
+// resolveIgnoredFilterKeys returns the effective set of top-level filters keys to ignore:
+// the default set when the attribute is unset (null/unknown), or the user's explicit set
+// otherwise — including an empty set, which tracks the entire filters blob.
+func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, diag.Diagnostics) {
+	if set.IsNull() || set.IsUnknown() {
+		return defaultIgnoredFilterKeys, nil
+	}
+	var keys []string
+	diags := set.ElementsAs(ctx, &keys, false)
+	return keys, diags
+}
+
 // normalizeFeatureFlagFiltersForState canonicalizes the API's filters for state so
 // Terraform can detect remote changes to a flag's targeting.
 //
@@ -307,15 +338,32 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 // JSON attributes ever need the same behavior, lift this into the shared helper rather
 // than copying it.
 //
+// ignoredKeys are top-level filters keys to drop unless the user configured them (see
+// defaultIgnoredFilterKeys) — cross-product wiring the flag author doesn't own.
+//
 // An unparseable prior state is treated as "nothing configured" (stateData = nil), so
 // all empty API defaults are dropped.
-func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string) (string, error) {
+func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string, ignoredKeys []string) (string, error) {
 	var stateData interface{}
 	if err := json.Unmarshal([]byte(stateJSON), &stateData); err != nil {
 		stateData = nil
 	}
+	stateMap, _ := stateData.(map[string]interface{})
 
-	return marshalJSON(normalizeFeatureFlagFilterValue(stateData, apiData))
+	normalized := normalizeFeatureFlagFilterValue(stateData, apiData)
+
+	// Drop ignored top-level keys the user did not configure. Applied only at the top
+	// level of filters (never recursively) so a like-named nested key can't be stripped
+	// by accident. "Configured beats ignored": declaring the key in filters keeps it.
+	if result, ok := normalized.(map[string]interface{}); ok {
+		for _, key := range ignoredKeys {
+			if _, configured := stateMap[key]; !configured {
+				delete(result, key)
+			}
+		}
+	}
+
+	return marshalJSON(normalized)
 }
 
 func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{} {
