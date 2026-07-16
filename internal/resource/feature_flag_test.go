@@ -137,6 +137,7 @@ func ffFiltersWithWiring() map[string]interface{} {
 		"payloads":       map[string]interface{}{"control": `{"x":1}`},
 		"super_groups":   []interface{}{map[string]interface{}{"rollout_percentage": float64(100)}},
 		"holdout_groups": []interface{}{map[string]interface{}{"rollout_percentage": float64(10)}},
+		"holdout":        map[string]interface{}{"id": float64(7)},
 	}
 }
 
@@ -160,6 +161,18 @@ func TestNormalizeFeatureFlagFiltersForState_EmptyIgnoreTracksEverything(t *test
 	require.NoError(t, err)
 	assert.Contains(t, got, `"super_groups"`)
 	assert.Contains(t, got, `"holdout_groups"`)
+	assert.Contains(t, got, `"holdout"`)
+}
+
+// An ignore_filter_fields entry that matches no top-level key is a harmless no-op —
+// there is no fixed enum validator, so a user typo simply doesn't drop anything.
+func TestNormalizeFeatureFlagFiltersForState_UnknownIgnoreKeyIsNoop(t *testing.T) {
+	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, []string{"suprgroups", "not_a_key"})
+	require.NoError(t, err)
+	// Nothing matched, so every non-empty key survives (same as an empty ignore set).
+	assert.Contains(t, got, `"super_groups"`)
+	assert.Contains(t, got, `"holdout_groups"`)
+	assert.Contains(t, got, `"multivariate"`)
 }
 
 // Configured beats ignored: a key the user declares in filters is tracked even when it is

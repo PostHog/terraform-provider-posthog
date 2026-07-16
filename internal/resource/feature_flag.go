@@ -96,7 +96,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				Optional:    true,
 				MarkdownDescription: "Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). " +
 					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
-					"Set to `[]` to track the entire filters blob, or provide your own set to replace the default. " +
+					"Set to `[]` to track the entire filters blob — including any Early Access Feature or Experiment wiring, which will then show as drift if not declared in `filters` — or provide your own set to replace the default. " +
 					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
