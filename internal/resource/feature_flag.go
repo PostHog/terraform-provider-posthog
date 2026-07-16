@@ -294,9 +294,21 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	return diags
 }
 
-// normalizeFeatureFlagFiltersForState keeps meaningful API fields so Terraform
-// can detect remote filter changes, while omitting unconfigured empty defaults
-// that PostHog adds to the response.
+// normalizeFeatureFlagFiltersForState canonicalizes the API's filters for state so
+// Terraform can detect remote changes to a flag's targeting.
+//
+// This deliberately diverges from the shared normalizeJSONForState /
+// filterToOnlyIncludeUserFields whitelist (used by survey, action, hog_function and
+// insight), which drops every field the user did not configure and so hides remote
+// drift in unconfigured fields. Here we keep every API field that carries a value and
+// drop only unconfigured empty defaults (null, {}, []) that PostHog echoes back — so a
+// meaningful UI-side edit (e.g. a property added to a group) surfaces as drift instead
+// of being silently swallowed. The divergence is feature-flag-specific; if the other
+// JSON attributes ever need the same behavior, lift this into the shared helper rather
+// than copying it.
+//
+// An unparseable prior state is treated as "nothing configured" (stateData = nil), so
+// all empty API defaults are dropped.
 func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string) (string, error) {
 	var stateData interface{}
 	if err := json.Unmarshal([]byte(stateJSON), &stateData); err != nil {

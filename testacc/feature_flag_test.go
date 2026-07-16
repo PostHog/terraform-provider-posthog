@@ -114,6 +114,39 @@ func TestFeatureFlag_Filters(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_FiltersOmittedRolloutNoPerpetualDiff guards the interaction between the
+// drift-preserving normalizer (normalizeFeatureFlagFiltersForState) and semantic equality:
+// a group that omits rollout_percentage must not drift. The normalizer keeps every non-empty
+// API field, so if PostHog ever echoed a non-empty default (e.g. rollout_percentage=100) for
+// a field the config omits, that field would be stored in state and surface as a permanent
+// plan. Verified against the live API: PostHog returns the group WITHOUT rollout_percentage
+// when it is omitted, so the re-plan stays empty. This test pins that behavior.
+func TestFeatureFlag_FiltersOmittedRolloutNoPerpetualDiff(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagFiltersNoRollout(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+			{
+				// Re-plan with the identical config whose group omits rollout_percentage. A
+				// non-empty plan would mean the normalizer kept a server-injected default.
+				Config:   testAccFeatureFlagFiltersNoRollout(rKey),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestFeatureFlag_FiltersNoPerpetualDiff is the end-to-end regression test for issue #111.
 // It configures filters as a RAW JSON string whose object keys are in a natural,
 // non-alphabetical order (key, type, operator, value) — unlike jsonencode, which sorts
@@ -484,6 +517,32 @@ resource "posthog_feature_flag" "test" {
   active = true
 
   filters = "{\"groups\":[{\"properties\":[{\"key\":\"email\",\"type\":\"person\",\"operator\":\"exact\",\"value\":[\"test@example.com\"]}],\"rollout_percentage\":100}]}"
+}
+`, key)
+}
+
+// testAccFeatureFlagFiltersNoRollout builds a config whose single group omits
+// rollout_percentage, to verify PostHog does not echo a non-empty default that the
+// drift-preserving normalizer would then surface as a perpetual diff.
+func testAccFeatureFlagFiltersNoRollout(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Filters without rollout"
+  active = true
+
+  filters = jsonencode({
+    groups = [{
+      properties = [{
+        key      = "email"
+        type     = "person"
+        operator = "exact"
+        value    = ["test@example.com"]
+      }]
+    }]
+  })
 }
 `, key)
 }

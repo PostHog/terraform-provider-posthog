@@ -81,6 +81,48 @@ func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 	assert.True(t, eq, "filters state must be semantically equal to config to avoid a perpetual diff")
 }
 
+// TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults pins the
+// documented fallback: when the prior state is empty or unparseable it is treated as
+// "nothing configured", so every empty API default (null, {}, []) is dropped while
+// non-empty values are kept. This is the initial-create path (state is null).
+func TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults(t *testing.T) {
+	apiData := map[string]interface{}{
+		"aggregation_group_type_index": nil,
+		"payloads":                     map[string]interface{}{},
+		"groups": []interface{}{
+			map[string]interface{}{
+				"aggregation_group_type_index": nil,
+				"variant":                      nil,
+				"properties": []interface{}{
+					map[string]interface{}{
+						"key":      "email",
+						"operator": "exact",
+						"type":     "person",
+						"value":    []interface{}{"brad@example.com"},
+					},
+				},
+				"rollout_percentage": float64(100),
+			},
+		},
+	}
+
+	for _, stateJSON := range []string{"", "not valid json"} {
+		got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{
+			"groups": [{
+				"properties": [{
+					"key": "email",
+					"operator": "exact",
+					"type": "person",
+					"value": ["brad@example.com"]
+				}],
+				"rollout_percentage": 100
+			}]
+		}`, got, "stateJSON=%q", stateJSON)
+	}
+}
+
 func TestFeatureFlagMapResponseToModel_PreservesRemoteFilterDrift(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
