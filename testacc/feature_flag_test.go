@@ -114,6 +114,41 @@ func TestFeatureFlag_Filters(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_IgnoreFilterFieldsRoundTripsAndUpdates exercises the config→apply→state
+// round-trip of the ignore_filter_fields Set attribute (the schema-wiring path that had the
+// import bug), plus updating the set. No wiring keys are present here — the point is that the
+// attribute itself applies, stays in state without a perpetual diff, and can be changed.
+func TestFeatureFlag_IgnoreFilterFieldsRoundTripsAndUpdates(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagWithIgnore(rKey, `["payloads", "super_groups"]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "ignore_filter_fields.#", "2"),
+				),
+			},
+			{
+				// The Set attribute round-trips with no perpetual diff.
+				Config:   testAccFeatureFlagWithIgnore(rKey, `["payloads", "super_groups"]`),
+				PlanOnly: true,
+			},
+			{
+				// Updating the set applies cleanly.
+				Config: testAccFeatureFlagWithIgnore(rKey, `["holdout"]`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "ignore_filter_fields.#", "1"),
+				),
+			},
+		},
+	})
+}
+
 // TestFeatureFlag_DefaultIgnoresServerWiredKeys is the end-to-end test of the feature's
 // core value. A flag carrying Early Access Feature / Experiment wiring (super_groups,
 // holdout_groups) — the kind PostHog attaches server-side and which a plain update strips —
@@ -574,6 +609,20 @@ resource "posthog_feature_flag" "test" {
   filters = "{\"groups\":[{\"properties\":[{\"key\":\"email\",\"type\":\"person\",\"operator\":\"exact\",\"value\":[\"test@example.com\"]}],\"rollout_percentage\":100}]}"
 }
 `, key)
+}
+
+// testAccFeatureFlagWithIgnore manages a simple flag with an explicit ignore_filter_fields.
+func testAccFeatureFlagWithIgnore(key, ignoreHCL string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                  = %q
+  active               = true
+  filters              = jsonencode({ groups = [{ rollout_percentage = 100 }] })
+  ignore_filter_fields = %s
+}
+`, key, ignoreHCL)
 }
 
 // testAccFeatureFlagGroupsOnly manages just a single rollout group — no super_groups,
