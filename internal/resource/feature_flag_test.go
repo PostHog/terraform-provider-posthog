@@ -154,36 +154,50 @@ func TestNormalizeFeatureFlagFiltersForState_DefaultIgnoresWiringKeepsMultivaria
 	}`, got)
 }
 
-// An empty ignore set (ignore_filter_fields = []) tracks the entire blob — exactly the
-// original #114 behavior, including the wiring keys.
-func TestNormalizeFeatureFlagFiltersForState_EmptyIgnoreTracksEverything(t *testing.T) {
-	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, []string{})
-	require.NoError(t, err)
-	assert.Contains(t, got, `"super_groups"`)
-	assert.Contains(t, got, `"holdout_groups"`)
-	assert.Contains(t, got, `"holdout"`)
-}
-
-// An ignore_filter_fields entry that matches no top-level key is a harmless no-op —
-// there is no fixed enum validator, so a user typo simply doesn't drop anything.
-func TestNormalizeFeatureFlagFiltersForState_UnknownIgnoreKeyIsNoop(t *testing.T) {
-	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, []string{"suprgroups", "not_a_key"})
-	require.NoError(t, err)
-	// Nothing matched, so every non-empty key survives (same as an empty ignore set).
-	assert.Contains(t, got, `"super_groups"`)
-	assert.Contains(t, got, `"holdout_groups"`)
-	assert.Contains(t, got, `"multivariate"`)
+// When no ignore key matches a top-level key, every non-empty field survives unchanged —
+// whether the ignore set is explicitly empty (`[]` = track everything, the original #114
+// behavior) or contains only near-misses/typos (unknown keys are a harmless no-op; there
+// is no prefix or fuzzy matching). Asserted with exact JSONEq against the full fixture.
+func TestNormalizeFeatureFlagFiltersForState_KeepsAllWhenNoIgnoreKeyMatches(t *testing.T) {
+	const wantAll = `{
+		"groups": [{"rollout_percentage": 100}],
+		"multivariate": {"variants": [{"key": "control", "rollout_percentage": 100}]},
+		"payloads": {"control": "{\"x\":1}"},
+		"super_groups": [{"rollout_percentage": 100}],
+		"holdout_groups": [{"rollout_percentage": 10}],
+		"holdout": {"id": 7}
+	}`
+	cases := []struct {
+		name        string
+		ignoredKeys []string
+	}{
+		{"explicit empty set tracks everything", []string{}},
+		{"near-miss and typo keys are a no-op", []string{"super_group", "payload", "not_a_key"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(), `{"groups":[{"rollout_percentage":100}]}`, tc.ignoredKeys)
+			require.NoError(t, err)
+			assert.JSONEq(t, wantAll, got)
+		})
+	}
 }
 
 // Configured beats ignored: a key the user declares in filters is tracked even when it is
-// in the ignore set.
+// in the ignore set, while the other default-ignored wiring keys are still dropped.
 func TestNormalizeFeatureFlagFiltersForState_ConfiguredKeyBeatsIgnore(t *testing.T) {
 	// super_groups is in the default ignore set, but the user declared it in prior state.
 	got, err := normalizeFeatureFlagFiltersForState(ffFiltersWithWiring(),
 		`{"groups":[{"rollout_percentage":100}],"super_groups":[{"rollout_percentage":100}]}`, defaultIgnoredFilterKeys)
 	require.NoError(t, err)
-	assert.Contains(t, got, `"super_groups"`)      // configured → kept
-	assert.NotContains(t, got, `"holdout_groups"`) // still ignored (not configured)
+	// super_groups kept (configured wins); holdout_groups + holdout dropped (ignored, not
+	// configured); multivariate + payloads kept (never default-ignored).
+	assert.JSONEq(t, `{
+		"groups": [{"rollout_percentage": 100}],
+		"super_groups": [{"rollout_percentage": 100}],
+		"multivariate": {"variants": [{"key": "control", "rollout_percentage": 100}]},
+		"payloads": {"control": "{\"x\":1}"}
+	}`, got)
 }
 
 func TestResolveIgnoredFilterKeys(t *testing.T) {
