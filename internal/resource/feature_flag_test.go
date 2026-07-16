@@ -82,10 +82,8 @@ func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 	assert.True(t, eq, "filters state must be semantically equal to config to avoid a perpetual diff")
 }
 
-// TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults pins the
-// documented fallback: when the prior state is empty or unparseable it is treated as
-// "nothing configured", so every empty API default (null, {}, []) is dropped while
-// non-empty values are kept. This is the initial-create path (state is null).
+// Empty/unparseable prior state is treated as nothing configured (the initial-create
+// path), so empty API defaults drop while non-empty values are kept.
 func TestNormalizeFeatureFlagFiltersForState_UnparsedStateDropsEmptyDefaults(t *testing.T) {
 	apiData := map[string]interface{}{
 		"aggregation_group_type_index": nil,
@@ -154,10 +152,8 @@ func TestNormalizeFeatureFlagFiltersForState_DefaultIgnoresWiringKeepsMultivaria
 	}`, got)
 }
 
-// When no ignore key matches a top-level key, every non-empty field survives unchanged —
-// whether the ignore set is explicitly empty (`[]` = track everything, the original #114
-// behavior) or contains only near-misses/typos (unknown keys are a harmless no-op; there
-// is no prefix or fuzzy matching). Asserted with exact JSONEq against the full fixture.
+// When no ignore key matches, every non-empty field survives — whether the set is empty
+// (`[]` = track everything) or holds only near-misses/typos (no prefix or fuzzy matching).
 func TestNormalizeFeatureFlagFiltersForState_KeepsAllWhenNoIgnoreKeyMatches(t *testing.T) {
 	const wantAll = `{
 		"groups": [{"rollout_percentage": 100}],

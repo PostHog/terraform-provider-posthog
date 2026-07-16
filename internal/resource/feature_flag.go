@@ -305,17 +305,14 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	return diags
 }
 
-// defaultIgnoredFilterKeys are the top-level `filters` keys other PostHog products wire
-// into a flag rather than the flag author writing them: Early Access Features populate
-// super_groups, and Experiments populate holdout_groups / holdout. Tracking them by
-// default would show a perpetual diff on every EAF- or experiment-linked flag. Users can
-// override the set via the ignore_filter_fields attribute, and declaring any of these
-// inside filters opts back into managing it.
+// defaultIgnoredFilterKeys are the top-level filters keys other PostHog products wire into
+// a flag rather than the author writing them (super_groups via Early Access Features;
+// holdout_groups/holdout via Experiments). Tracking them would show a perpetual diff on
+// every EAF- or experiment-linked flag.
 var defaultIgnoredFilterKeys = []string{"super_groups", "holdout_groups", "holdout"}
 
-// resolveIgnoredFilterKeys returns the effective set of top-level filters keys to ignore:
-// the default set when the attribute is unset (null/unknown), or the user's explicit set
-// otherwise — including an empty set, which tracks the entire filters blob.
+// resolveIgnoredFilterKeys returns the default set when unset, else the user's set —
+// including an empty set, which tracks the entire filters blob.
 func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, diag.Diagnostics) {
 	if set.IsNull() || set.IsUnknown() {
 		return defaultIgnoredFilterKeys, nil
@@ -325,36 +322,23 @@ func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, dia
 	return keys, diags
 }
 
-// normalizeFeatureFlagFiltersForState canonicalizes the API's filters for state so
-// Terraform can detect remote changes to a flag's targeting.
-//
-// This deliberately diverges from the shared normalizeJSONForState /
-// filterToOnlyIncludeUserFields whitelist (used by survey, action, hog_function and
-// insight), which drops every field the user did not configure and so hides remote
-// drift in unconfigured fields. Here we keep every API field that carries a value and
-// drop only unconfigured empty defaults (null, {}, []) that PostHog echoes back — so a
-// meaningful UI-side edit (e.g. a property added to a group) surfaces as drift instead
-// of being silently swallowed. The divergence is feature-flag-specific; if the other
-// JSON attributes ever need the same behavior, lift this into the shared helper rather
-// than copying it.
-//
-// ignoredKeys are top-level filters keys to drop unless the user configured them (see
-// defaultIgnoredFilterKeys) — cross-product wiring the flag author doesn't own.
-//
-// An unparseable prior state is treated as "nothing configured" (stateData = nil), so
-// all empty API defaults are dropped.
+// normalizeFeatureFlagFiltersForState shapes the API's filters for state so remote changes
+// to a flag's targeting surface as drift. Unlike the shared normalizeJSONForState whitelist
+// (survey/action/hog_function/insight), which drops unconfigured fields and so hides
+// remote-added ones, this keeps every API field with a value, dropping only unconfigured
+// empty defaults and ignoredKeys the user hasn't configured (see defaultIgnoredFilterKeys).
+// Feature-flag-specific by design.
 func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string, ignoredKeys []string) (string, error) {
 	var stateData interface{}
 	if err := json.Unmarshal([]byte(stateJSON), &stateData); err != nil {
-		stateData = nil
+		stateData = nil // unparseable/empty prior state → nothing configured
 	}
 	stateMap, _ := stateData.(map[string]interface{})
 
 	normalized := normalizeFeatureFlagFilterValue(stateData, apiData)
 
-	// Drop ignored top-level keys the user did not configure. Applied only at the top
-	// level of filters (never recursively) so a like-named nested key can't be stripped
-	// by accident. "Configured beats ignored": declaring the key in filters keeps it.
+	// Top level only (never recursively) so a like-named nested key is safe; a key the
+	// user declared in filters is kept.
 	if result, ok := normalized.(map[string]interface{}); ok {
 		for _, key := range ignoredKeys {
 			if _, configured := stateMap[key]; !configured {
