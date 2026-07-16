@@ -114,6 +114,38 @@ func TestFeatureFlag_Filters(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_FiltersNoPerpetualDiff is the end-to-end regression test for issue #111.
+// It configures filters as a RAW JSON string whose object keys are in a natural,
+// non-alphabetical order (key, type, operator, value) — unlike jsonencode, which sorts
+// keys. PostHog's API returns the same filters with alphabetically-sorted keys, so with
+// the old types.String attribute the second (PlanOnly) step would report a perpetual diff.
+// With jsontypes.Normalized the two are compared semantically, so the re-plan is empty.
+func TestFeatureFlag_FiltersNoPerpetualDiff(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagRawFilters(rKey),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+			{
+				// Re-plan with the identical raw, non-alphabetical config. A non-empty plan
+				// here is exactly the issue #111 perpetual diff; PlanOnly fails on any change.
+				Config:   testAccFeatureFlagRawFilters(rKey),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestFeatureFlag_FiltersWithRollout tests filters JSON with embedded rollout_percentage.
 func TestFeatureFlag_FiltersWithRollout(t *testing.T) {
 	skipIfNotAcceptance(t)
@@ -435,6 +467,23 @@ resource "posthog_feature_flag" "test" {
       rollout_percentage = 100
     }]
   })
+}
+`, key)
+}
+
+// testAccFeatureFlagRawFilters builds a config whose filters is a RAW JSON string (not
+// jsonencode) with object keys deliberately in non-alphabetical order, to reproduce the
+// key-ordering drift from issue #111.
+func testAccFeatureFlagRawFilters(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Raw Filters No Perpetual Diff"
+  active = true
+
+  filters = "{\"groups\":[{\"properties\":[{\"key\":\"email\",\"type\":\"person\",\"operator\":\"exact\",\"value\":[\"test@example.com\"]}],\"rollout_percentage\":100}]}"
 }
 `, key)
 }

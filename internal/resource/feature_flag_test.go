@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,7 @@ import (
 func TestFeatureFlagMapResponseToModel_NormalizesServerOnlyFilterFields(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
-		Filters: types.StringValue(`{"groups":[{"rollout_percentage":0}]}`),
+		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":0}]}`),
 	}
 
 	resp := httpclient.FeatureFlag{
@@ -34,6 +35,50 @@ func TestFeatureFlagMapResponseToModel_NormalizesServerOnlyFilterFields(t *testi
 	require.False(t, diags.HasError(), diags.Errors())
 	assert.Equal(t, `{"groups":[{"rollout_percentage":0}]}`, model.Filters.ValueString())
 	assert.Equal(t, int64(0), model.RolloutPercentage.ValueInt64())
+}
+
+// TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder reproduces issue #111:
+// PostHog's API returns filters JSON with alphabetically-sorted object keys, while the
+// user's config uses a natural (non-alphabetical) key order. A byte-for-byte comparison
+// of config vs. state therefore reports an endless diff. Using jsontypes.Normalized makes
+// the framework compare the two semantically, so equivalent JSON no longer drifts.
+func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
+	ops := FeatureFlagOps{}
+
+	// User config: property object keys in a natural (non-alphabetical) order.
+	configJSON := `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@posthog.com"}]}]}`
+	model := FeatureFlagTFModel{
+		Filters: jsontypes.NewNormalizedValue(configJSON),
+	}
+
+	// API returns the same data but with alphabetically-sorted keys.
+	resp := httpclient.FeatureFlag{
+		ID:  1,
+		Key: "my_flag",
+		Filters: map[string]interface{}{
+			"groups": []interface{}{
+				map[string]interface{}{
+					"properties": []interface{}{
+						map[string]interface{}{
+							"key":      "email",
+							"operator": "icontains",
+							"type":     "person",
+							"value":    "@posthog.com",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+
+	// The stored state must be semantically equal to the user's config; otherwise
+	// Terraform reports a perpetual diff even though nothing changed.
+	eq, d := model.Filters.StringSemanticEquals(context.Background(), jsontypes.NewNormalizedValue(configJSON))
+	require.False(t, d.HasError(), d.Errors())
+	assert.True(t, eq, "filters state must be semantically equal to config to avoid a perpetual diff")
 }
 
 func TestFeatureFlagBuildCreateRequestSetsEnsureExperienceContinuity(t *testing.T) {
