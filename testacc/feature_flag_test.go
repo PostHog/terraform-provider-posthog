@@ -114,6 +114,61 @@ func TestFeatureFlag_Filters(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_DefaultIgnoresServerWiredKeys is the end-to-end test of the feature's
+// core value. A flag carrying Early Access Feature / Experiment wiring (super_groups,
+// holdout_groups) — the kind PostHog attaches server-side and which a plain update strips —
+// is created OUTSIDE Terraform, then imported. The config manages only groups and leaves
+// ignore_filter_fields at its default. Because the default ignores those wiring keys, the
+// imported flag matches the config and a re-plan is empty; without the feature it would
+// show a perpetual diff.
+func TestFeatureFlag_DefaultIgnoresServerWiredKeys(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "acceptance-test")
+
+	var flagID int64
+	createWiredFlag := func() {
+		active := true
+		f, err := (&client).CreateFeatureFlag(context.Background(), projectID, httpclient.FeatureFlagRequest{
+			Key:    rKey,
+			Active: &active,
+			Filters: map[string]interface{}{
+				"groups":         []interface{}{map[string]interface{}{"rollout_percentage": 100}},
+				"super_groups":   []interface{}{map[string]interface{}{"rollout_percentage": 100}},
+				"holdout_groups": []interface{}{map[string]interface{}{"rollout_percentage": 50}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Failed to create server-wired flag externally: %v", err)
+		}
+		flagID = f.ID
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				PreConfig:          createWiredFlag,
+				Config:             testAccFeatureFlagGroupsOnly(rKey),
+				ResourceName:       "posthog_feature_flag.test",
+				ImportState:        true,
+				ImportStatePersist: true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return fmt.Sprintf("%s/%d", projectID, flagID), nil
+				},
+			},
+			{
+				// Default ignore set drops super_groups/holdout_groups → no perpetual diff.
+				Config:   testAccFeatureFlagGroupsOnly(rKey),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestFeatureFlag_FiltersOmittedRolloutNoPerpetualDiff guards the interaction between the
 // drift-preserving normalizer (normalizeFeatureFlagFiltersForState) and semantic equality:
 // a group that omits rollout_percentage must not drift. The normalizer keeps every non-empty
@@ -517,6 +572,23 @@ resource "posthog_feature_flag" "test" {
   active = true
 
   filters = "{\"groups\":[{\"properties\":[{\"key\":\"email\",\"type\":\"person\",\"operator\":\"exact\",\"value\":[\"test@example.com\"]}],\"rollout_percentage\":100}]}"
+}
+`, key)
+}
+
+// testAccFeatureFlagGroupsOnly manages just a single rollout group — no super_groups,
+// holdout_groups, or other wiring — relying on the default ignore_filter_fields.
+func testAccFeatureFlagGroupsOnly(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  active = true
+
+  filters = jsonencode({
+    groups = [{ rollout_percentage = 100 }]
+  })
 }
 `, key)
 }

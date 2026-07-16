@@ -283,12 +283,24 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	if len(resp.Filters) > 0 {
 		ignoredKeys, d := resolveIgnoredFilterKeys(ctx, model.IgnoreFilterFields)
 		diags.Append(d...)
-		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString(), ignoredKeys)
-		if err == nil {
-			model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
+		if diags.HasError() {
+			return diags
 		}
+		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString(), ignoredKeys)
+		if err != nil {
+			diags.AddError("Failed to normalize filters", err.Error())
+			return diags
+		}
+		model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
 	} else {
 		model.Filters = jsontypes.NewNormalizedNull()
+	}
+
+	// ignore_filter_fields is config-only (never from the API). On paths that start from an
+	// empty model (import), the zero-value Set has no element type; give it a typed null so
+	// it converts cleanly to the schema's Set[String].
+	if model.IgnoreFilterFields.IsNull() {
+		model.IgnoreFilterFields = types.SetNull(types.StringType)
 	}
 
 	model.RolloutPercentage = extractRolloutPercentage(resp)
@@ -350,6 +362,10 @@ func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJS
 	return marshalJSON(normalized)
 }
 
+// normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping only
+// unconfigured empty defaults. It mirrors the recursive shape of insight.go's
+// filterToOnlyIncludeUserFields but inverts the intent (keep-all vs whitelist) and drives
+// off the API rather than user config; kept separate deliberately.
 func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{} {
 	switch apiValue := apiData.(type) {
 	case map[string]interface{}:

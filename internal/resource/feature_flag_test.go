@@ -217,6 +217,33 @@ func TestResolveIgnoredFilterKeys(t *testing.T) {
 	assert.Equal(t, []string{"payloads"}, keys)
 }
 
+// An explicit ignore_filter_fields set is threaded through MapResponseToModel and replaces
+// the default: here it ignores only super_groups, so holdout_groups (default-ignored) is
+// now tracked. Exercises the full ops-layer wiring, not just the pure helpers.
+func TestFeatureFlagMapResponseToModel_ExplicitIgnoreFilterFieldsReplacesDefault(t *testing.T) {
+	ops := FeatureFlagOps{}
+	ignore, d := types.SetValue(types.StringType, []attr.Value{types.StringValue("super_groups")})
+	require.False(t, d.HasError(), d.Errors())
+	model := FeatureFlagTFModel{
+		Filters:            jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
+		IgnoreFilterFields: ignore,
+	}
+
+	resp := httpclient.FeatureFlag{ID: 1, Key: "my_flag", Filters: ffFiltersWithWiring()}
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+
+	// super_groups dropped (in the explicit set); everything else — including holdout_groups
+	// and holdout, which the default would have dropped — is kept because the set replaces it.
+	assert.JSONEq(t, `{
+		"groups": [{"rollout_percentage": 100}],
+		"multivariate": {"variants": [{"key": "control", "rollout_percentage": 100}]},
+		"payloads": {"control": "{\"x\":1}"},
+		"holdout_groups": [{"rollout_percentage": 10}],
+		"holdout": {"id": 7}
+	}`, model.Filters.ValueString())
+}
+
 func TestFeatureFlagMapResponseToModel_PreservesRemoteFilterDrift(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
