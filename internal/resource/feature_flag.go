@@ -32,6 +32,7 @@ type FeatureFlagTFModel struct {
 	Name                       types.String         `tfsdk:"name"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
+	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
 	RolloutPercentage          types.Int64          `tfsdk:"rollout_percentage"`
 	Tags                       types.Set            `tfsdk:"tags"`
 	Deleted                    types.Bool           `tfsdk:"deleted"`
@@ -88,7 +89,15 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff.",
+				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.",
+			},
+			"ignore_filter_fields": schema.SetAttribute{
+				ElementType: types.StringType,
+				Optional:    true,
+				MarkdownDescription: "Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). " +
+					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
+					"Set to `[]` to track the entire filters blob — including any Early Access Feature or Experiment wiring, which will then show as drift if not declared in `filters` — or provide your own set to replace the default. " +
+					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
 				Optional:            true,
@@ -272,12 +281,26 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	// Set filters if present
 	if len(resp.Filters) > 0 {
-		normalizedFilters, err := normalizeJSONForState(resp.Filters, model.Filters.ValueString())
-		if err == nil {
-			model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
+		ignoredKeys, d := resolveIgnoredFilterKeys(ctx, model.IgnoreFilterFields)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
 		}
+		normalizedFilters, err := normalizeFeatureFlagFiltersForState(resp.Filters, model.Filters.ValueString(), ignoredKeys)
+		if err != nil {
+			diags.AddError("Failed to normalize filters", err.Error())
+			return diags
+		}
+		model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
 	} else {
 		model.Filters = jsontypes.NewNormalizedNull()
+	}
+
+	// ignore_filter_fields is config-only (never from the API). On paths that start from an
+	// empty model (import), the zero-value Set has no element type; give it a typed null so
+	// it converts cleanly to the schema's Set[String].
+	if model.IgnoreFilterFields.IsNull() {
+		model.IgnoreFilterFields = types.SetNull(types.StringType)
 	}
 
 	model.RolloutPercentage = extractRolloutPercentage(resp)
@@ -292,6 +315,100 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Deleted = types.BoolValue(deleted)
 
 	return diags
+}
+
+// defaultIgnoredFilterKeys are the top-level filters keys other PostHog products wire into
+// a flag rather than the author writing them (super_groups via Early Access Features;
+// holdout_groups/holdout via Experiments). Tracking them would show a perpetual diff on
+// every EAF- or experiment-linked flag.
+var defaultIgnoredFilterKeys = []string{"super_groups", "holdout_groups", "holdout"}
+
+// resolveIgnoredFilterKeys returns the default set when unset, else the user's set —
+// including an empty set, which tracks the entire filters blob.
+func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, diag.Diagnostics) {
+	if set.IsNull() || set.IsUnknown() {
+		return defaultIgnoredFilterKeys, nil
+	}
+	var keys []string
+	diags := set.ElementsAs(ctx, &keys, false)
+	return keys, diags
+}
+
+// normalizeFeatureFlagFiltersForState shapes the API's filters for state so remote changes
+// to a flag's targeting surface as drift. Unlike the shared normalizeJSONForState whitelist
+// (survey/action/hog_function/insight), which drops unconfigured fields and so hides
+// remote-added ones, this keeps every API field with a value, dropping only unconfigured
+// empty defaults and ignoredKeys the user hasn't configured (see defaultIgnoredFilterKeys).
+// Feature-flag-specific by design.
+func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string, ignoredKeys []string) (string, error) {
+	var stateData interface{}
+	if err := json.Unmarshal([]byte(stateJSON), &stateData); err != nil {
+		stateData = nil // unparseable/empty prior state → nothing configured
+	}
+	stateMap, _ := stateData.(map[string]interface{})
+
+	normalized := normalizeFeatureFlagFilterValue(stateData, apiData)
+
+	// Top level only (never recursively) so a like-named nested key is safe; a key the
+	// user declared in filters is kept.
+	if result, ok := normalized.(map[string]interface{}); ok {
+		for _, key := range ignoredKeys {
+			if _, configured := stateMap[key]; !configured {
+				delete(result, key)
+			}
+		}
+	}
+
+	return marshalJSON(normalized)
+}
+
+// normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping only
+// unconfigured empty defaults. It mirrors the recursive shape of insight.go's
+// filterToOnlyIncludeUserFields but inverts the intent (keep-all vs whitelist) and drives
+// off the API rather than user config; kept separate deliberately.
+func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{} {
+	switch apiValue := apiData.(type) {
+	case map[string]interface{}:
+		stateMap, _ := stateData.(map[string]interface{})
+		result := make(map[string]interface{})
+		for key, apiFieldValue := range apiValue {
+			stateFieldValue, configured := stateMap[key]
+			normalized := normalizeFeatureFlagFilterValue(stateFieldValue, apiFieldValue)
+			if !configured && isEmptyFeatureFlagFilterValue(normalized) {
+				continue
+			}
+			result[key] = normalized
+		}
+		return result
+
+	case []interface{}:
+		stateSlice, _ := stateData.([]interface{})
+		result := make([]interface{}, len(apiValue))
+		for i, apiItem := range apiValue {
+			var stateItem interface{}
+			if i < len(stateSlice) {
+				stateItem = stateSlice[i]
+			}
+			result[i] = normalizeFeatureFlagFilterValue(stateItem, apiItem)
+		}
+		return result
+
+	default:
+		return apiData
+	}
+}
+
+func isEmptyFeatureFlagFilterValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case map[string]interface{}:
+		return len(typed) == 0
+	case []interface{}:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
