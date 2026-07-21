@@ -25,6 +25,10 @@ type FeatureFlagRequest struct {
 	Tags                       []string               `json:"tags,omitempty"`
 	Deleted                    *bool                  `json:"deleted,omitempty"`
 	EnsureExperienceContinuity *bool                  `json:"ensure_experience_continuity,omitempty"`
+	// Write-only create option. PostHog's API defaults this to true, which
+	// auto-creates a "Generated Dashboard: <key> Usage" dashboard for every
+	// flag created via the API. Only sent on create; never returned by the API.
+	ShouldCreateUsageDashboard *bool `json:"_should_create_usage_dashboard,omitempty"`
 }
 
 func (c *PosthogClient) CreateFeatureFlag(ctx context.Context, projectID string, input FeatureFlagRequest) (FeatureFlag, error) {

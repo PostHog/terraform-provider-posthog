@@ -22,6 +22,7 @@ PostHog Feature Flag resource
 ### Optional
 
 - `active` (Boolean) Whether the feature flag is active
+- `create_usage_dashboard` (Boolean) Whether PostHog should auto-create a "Generated Dashboard: <key> Usage" dashboard when the flag is created. Defaults to `false`: PostHog's API defaults this to `true`, which silently creates one usage dashboard per flag — for Terraform-managed flag fleets that quickly clutters the dashboard list. Set to `true` to keep the API's auto-generation. Create-time only; changing it later has no effect and a usage dashboard can always be generated on demand from the flag's Usage tab.
 - `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
 - `ensure_experience_continuity` (Boolean) Whether to persist the flag across authentication steps (PostHog's UI labels this as 'Persist flag across authentication steps'). Flags with experience continuity enabled cannot be evaluated by server-side local evaluation; set this to false for flags that must be evaluated locally.
 - `filters` (String) Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.

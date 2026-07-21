@@ -336,6 +336,43 @@ func TestFeatureFlagBuildCreateRequestOmitsEnsureExperienceContinuityWhenNull(t 
 	assert.Nil(t, req.EnsureExperienceContinuity)
 }
 
+func TestFeatureFlagBuildCreateRequestSuppressesUsageDashboardByDefault(t *testing.T) {
+	ops := FeatureFlagOps{}
+	model := FeatureFlagTFModel{
+		Key: types.StringValue("my_flag"),
+	}
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.False(t, diags.HasError(), diags.Errors())
+	require.NotNil(t, req.ShouldCreateUsageDashboard)
+	assert.False(t, *req.ShouldCreateUsageDashboard)
+}
+
+func TestFeatureFlagBuildCreateRequestAllowsUsageDashboardOptIn(t *testing.T) {
+	ops := FeatureFlagOps{}
+	model := FeatureFlagTFModel{
+		Key:                  types.StringValue("my_flag"),
+		CreateUsageDashboard: types.BoolValue(true),
+	}
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.False(t, diags.HasError(), diags.Errors())
+	require.NotNil(t, req.ShouldCreateUsageDashboard)
+	assert.True(t, *req.ShouldCreateUsageDashboard)
+}
+
+func TestFeatureFlagBuildUpdateRequestNeverSendsUsageDashboardField(t *testing.T) {
+	ops := FeatureFlagOps{}
+	plan := FeatureFlagTFModel{
+		Key:                  types.StringValue("my_flag"),
+		CreateUsageDashboard: types.BoolValue(true),
+	}
+
+	req, diags := ops.BuildUpdateRequest(context.Background(), plan, FeatureFlagTFModel{})
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Nil(t, req.ShouldCreateUsageDashboard)
+}
+
 func TestFeatureFlagBuildUpdateRequestSetsEnsureExperienceContinuity(t *testing.T) {
 	ops := FeatureFlagOps{}
 	plan := FeatureFlagTFModel{
