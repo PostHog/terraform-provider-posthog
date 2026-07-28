@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -35,20 +36,20 @@ func NewHogFunction() resource.Resource {
 type HogFunctionResourceTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Type                types.String `tfsdk:"type"`
-	Name                types.String `tfsdk:"name"`
-	Description         types.String `tfsdk:"description"`
-	Enabled             types.Bool   `tfsdk:"enabled"`
-	Hog                 types.String `tfsdk:"hog"`
-	InputsJSON          types.String `tfsdk:"inputs_json"`
-	SensitiveInputsJSON types.String `tfsdk:"sensitive_inputs_json"`
-	InputsSchemaJSON    types.String `tfsdk:"inputs_schema_json"`
-	FiltersJSON         types.String `tfsdk:"filters_json"`
-	MaskingJSON         types.String `tfsdk:"masking_json"`
-	MappingsJSON        types.String `tfsdk:"mappings_json"`
-	IconURL             types.String `tfsdk:"icon_url"`
-	TemplateID          types.String `tfsdk:"template_id"`
-	ExecutionOrder      types.Int64  `tfsdk:"execution_order"`
+	Type                types.String         `tfsdk:"type"`
+	Name                types.String         `tfsdk:"name"`
+	Description         types.String         `tfsdk:"description"`
+	Enabled             types.Bool           `tfsdk:"enabled"`
+	Hog                 types.String         `tfsdk:"hog"`
+	InputsJSON          jsontypes.Normalized `tfsdk:"inputs_json"`
+	SensitiveInputsJSON jsontypes.Normalized `tfsdk:"sensitive_inputs_json"`
+	InputsSchemaJSON    jsontypes.Normalized `tfsdk:"inputs_schema_json"`
+	FiltersJSON         jsontypes.Normalized `tfsdk:"filters_json"`
+	MaskingJSON         jsontypes.Normalized `tfsdk:"masking_json"`
+	MappingsJSON        jsontypes.Normalized `tfsdk:"mappings_json"`
+	IconURL             types.String         `tfsdk:"icon_url"`
+	TemplateID          types.String         `tfsdk:"template_id"`
+	ExecutionOrder      types.Int64          `tfsdk:"execution_order"`
 }
 
 type HogFunctionOps struct{}
@@ -102,27 +103,33 @@ func (o HogFunctionOps) Schema() schema.Schema {
 				},
 			},
 			"inputs_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties. For inputs containing secrets, use `sensitive_inputs_json` instead.",
 			},
 			"sensitive_inputs_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Sensitive:           true,
 				MarkdownDescription: "JSON object containing sensitive input values (e.g. API keys, tokens, credentials) for the Hog function. Same format as `inputs_json`. Values are merged with `inputs_json` at apply time and redacted from plan/apply output. If the same key appears in both, `sensitive_inputs_json` takes precedence.",
 			},
 			"inputs_schema_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "JSON array defining custom input schema entries for the Hog function. Each entry is an object with `key`, `type`, `secret`, `required`, and other properties. Sent directly as `inputs_schema` in the API request. When using a template, this replaces the template's default schema.",
 			},
 			"filters_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object defining filters for when the Hog function should execute. Includes `events`, `actions`, `properties`, and `filter_test_accounts` options.",
 			},
 			"masking_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.",
 			},
 			"mappings_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.",
 			},
@@ -344,7 +351,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 				diags.AddError("Failed to normalize inputs", err.Error())
 				return diags
 			}
-			model.InputsJSON = types.StringValue(normalized)
+			model.InputsJSON = jsontypes.NewNormalizedValue(normalized)
 		} else if model.SensitiveInputsJSON.IsNull() {
 			// Import case: both fields are null, populate inputs_json with all API inputs
 			normalized, err := normalizeJSONStripServerFields(resp.Inputs, "")
@@ -352,7 +359,7 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 				diags.AddError("Failed to normalize inputs", err.Error())
 				return diags
 			}
-			model.InputsJSON = types.StringValue(normalized)
+			model.InputsJSON = jsontypes.NewNormalizedValue(normalized)
 		}
 
 		// sensitive_inputs_json: do NOT update from API response. The PostHog API never
@@ -362,12 +369,12 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		// value is always the correct value to keep in state.
 	} else {
 		if !model.InputsJSON.IsNull() {
-			model.InputsJSON = types.StringValue("{}")
+			model.InputsJSON = jsontypes.NewNormalizedValue("{}")
 		}
 		// When the API returns no inputs at all, reflect that in state so drift is
 		// surfaced correctly (the resource genuinely has no inputs configured).
 		if !model.SensitiveInputsJSON.IsNull() {
-			model.SensitiveInputsJSON = types.StringValue("{}")
+			model.SensitiveInputsJSON = jsontypes.NewNormalizedValue("{}")
 		}
 	}
 
@@ -418,12 +425,12 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 				diags.AddError("Failed to normalize inputs_schema", err.Error())
 				return diags
 			}
-			model.InputsSchemaJSON = types.StringValue(normalized)
+			model.InputsSchemaJSON = jsontypes.NewNormalizedValue(normalized)
 		}
 	} else if !model.InputsSchemaJSON.IsNull() {
-		model.InputsSchemaJSON = types.StringValue("[]")
+		model.InputsSchemaJSON = jsontypes.NewNormalizedValue("[]")
 	} else {
-		model.InputsSchemaJSON = types.StringNull()
+		model.InputsSchemaJSON = jsontypes.NewNormalizedNull()
 	}
 
 	if len(resp.Filters) > 0 {
@@ -432,11 +439,11 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 			diags.AddError("Failed to normalize filters", err.Error())
 			return diags
 		}
-		model.FiltersJSON = types.StringValue(normalized)
+		model.FiltersJSON = jsontypes.NewNormalizedValue(normalized)
 	} else if !model.FiltersJSON.IsNull() {
-		model.FiltersJSON = types.StringValue("{}")
+		model.FiltersJSON = jsontypes.NewNormalizedValue("{}")
 	} else {
-		model.FiltersJSON = types.StringNull()
+		model.FiltersJSON = jsontypes.NewNormalizedNull()
 	}
 
 	if len(resp.Masking) > 0 {
@@ -445,11 +452,11 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 			diags.AddError("Failed to normalize masking", err.Error())
 			return diags
 		}
-		model.MaskingJSON = types.StringValue(normalized)
+		model.MaskingJSON = jsontypes.NewNormalizedValue(normalized)
 	} else if !model.MaskingJSON.IsNull() {
-		model.MaskingJSON = types.StringValue("{}")
+		model.MaskingJSON = jsontypes.NewNormalizedValue("{}")
 	} else {
-		model.MaskingJSON = types.StringNull()
+		model.MaskingJSON = jsontypes.NewNormalizedNull()
 	}
 
 	// Mappings contain nested inputs and filters that need server fields stripped
@@ -459,11 +466,11 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 			diags.AddError("Failed to normalize mappings", err.Error())
 			return diags
 		}
-		model.MappingsJSON = types.StringValue(normalized)
+		model.MappingsJSON = jsontypes.NewNormalizedValue(normalized)
 	} else if !model.MappingsJSON.IsNull() {
-		model.MappingsJSON = types.StringValue("[]")
+		model.MappingsJSON = jsontypes.NewNormalizedValue("[]")
 	} else {
-		model.MappingsJSON = types.StringNull()
+		model.MappingsJSON = jsontypes.NewNormalizedNull()
 	}
 
 	return diags
