@@ -95,7 +95,7 @@ resource "posthog_experiment" "onboarding" {
 
 - `allow_unknown_events` (Boolean) Opt-in bypass of the API validation that rejects metrics referencing not-yet-ingested events. Create-time only and not read back from the API.
 - `description` (String) Experiment description.
-- `exposure_criteria` (String) Exposure criteria as a JSON object (this is where `filter_test_accounts` lives). Same semantic-compare handling as `metrics`.
+- `exposure_criteria` (String) Exposure criteria as a JSON object (this is where `filterTestAccounts` lives). Same semantic-compare handling as `metrics`.
 - `holdout_id` (Number) ID of an existing holdout group to reference. Holdout management itself is out of scope.
 - `metrics` (String) Primary metrics as a JSON array. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Only fields you declare are tracked; server-computed fields (e.g. metric fingerprints) are ignored.
 - `metrics_secondary` (String) Secondary metrics as a JSON array. Same semantic-compare handling as `metrics`.
