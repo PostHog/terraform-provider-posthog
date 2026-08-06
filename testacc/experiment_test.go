@@ -300,3 +300,181 @@ func TestExperiment_NoStatus(t *testing.T) {
 		},
 	})
 }
+
+// meanMetricHCL / funnelMetricHCL are valid ExperimentMetric shapes verified against a live stack
+// (both accrete server uuid/fingerprint, exercising the normalizer).
+const meanMetricHCL = `jsonencode([{
+    kind        = "ExperimentMetric"
+    metric_type = "mean"
+    name        = "%s"
+    source      = { kind = "EventsNode", event = "$pageview", math = "total" }
+  }])`
+
+const funnelMetricHCL = `jsonencode([{
+    kind        = "ExperimentMetric"
+    metric_type = "funnel"
+    name        = "Signup funnel"
+    series      = [{ kind = "EventsNode", event = "$pageview" }, { kind = "EventsNode", event = "signed_up" }]
+  }])`
+
+// TestExperiment_DefinitionUpdate updates non-status definition fields (description, metrics, and
+// adds metrics_secondary) on an existing draft — the BuildUpdateRequest field-mapping path that
+// the status-only lifecycle test never exercises.
+func TestExperiment_DefinitionUpdate(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-defupd")
+	step1 := testAccExperimentConfigWith(name, `  description          = "first"
+  allow_unknown_events = true
+  metrics              = `+fmt.Sprintf(meanMetricHCL, "Primary")+`
+`, `status { state = "draft" }`)
+	step2 := testAccExperimentConfigWith(name, `  description          = "second"
+  allow_unknown_events = true
+  metrics              = `+fmt.Sprintf(meanMetricHCL, "Primary renamed")+`
+  metrics_secondary    = `+funnelMetricHCL+`
+`, `status { state = "draft" }`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: step1,
+				Check:  resource.TestCheckResourceAttr(testExperimentResourceName, "description", "first"),
+			},
+			{
+				Config: step2,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(testExperimentResourceName, "description", "second"),
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "metrics_secondary"),
+				),
+			},
+			{Config: step2, PlanOnly: true}, // no perpetual diff after the update
+		},
+	})
+}
+
+// testAccExperimentVariantConfig builds a config with a specific control/test split (draft).
+func testAccExperimentVariantConfig(name string, controlPct, testPct int) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_experiment" "test" {
+  name             = %q
+  feature_flag_key = %q
+
+  variant {
+    key                = "control"
+    rollout_percentage = %d
+  }
+  variant {
+    key                = "test"
+    rollout_percentage = %d
+  }
+
+  status { state = "draft" }
+}
+`, name, name, controlPct, testPct)
+}
+
+// TestExperiment_VariantUpdate changes the variant split on a draft — the only exerciser of the
+// variantsChanged -> buildFeatureFlagConfig-on-update path.
+func TestExperiment_VariantUpdate(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-varupd")
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccExperimentVariantConfig(name, 50, 50),
+				Check:  resource.TestCheckResourceAttr(testExperimentResourceName, "variant.0.rollout_percentage", "50"),
+			},
+			{
+				Config: testAccExperimentVariantConfig(name, 70, 30),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.0.rollout_percentage", "70"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.1.rollout_percentage", "30"),
+				),
+			},
+		},
+	})
+}
+
+// TestExperiment_ShipLater stops an experiment with a plain end, then ships a winner on the
+// already-stopped experiment in a second apply — exercising computeTransition's same-state ship
+// branch and the ship-idempotency guard (a re-plan after shipping must be empty).
+func TestExperiment_ShipLater(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-shiplater")
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{Config: testAccExperimentConfig(name, `status { state = "running" }`)},
+			{ // stop, no ship
+				Config: testAccExperimentConfig(name, `status {
+    state = "stopped"
+    stopped { conclusion = "inconclusive" }
+  }`),
+				Check: resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "stopped"),
+			},
+			{ // ship a winner on the already-stopped experiment
+				Config: testAccExperimentConfig(name, `status {
+    state = "stopped"
+    stopped {
+      ship_variant = "test"
+      conclusion   = "won"
+    }
+  }`),
+				Check: resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.ship_variant", "test"),
+			},
+		},
+	})
+}
+
+// TestExperiment_IllegalBackwardTransition asserts a forward-only violation (running -> draft)
+// fails with the provider's structural error rather than an invalid API call.
+func TestExperiment_IllegalBackwardTransition(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-backward")
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{Config: testAccExperimentConfig(name, `status { state = "running" }`)},
+			{
+				Config:      testAccExperimentConfig(name, `status { state = "draft" }`),
+				ExpectError: regexp.MustCompile(`(?i)no transition available`),
+			},
+		},
+	})
+}
+
+// TestExperiment_FunnelMetric exercises a second metric_type (funnel) and asserts no perpetual
+// diff, guarding that normalization is metric-shape-agnostic.
+func TestExperiment_FunnelMetric(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-funnel")
+	cfg := testAccExperimentConfigWith(name, `  allow_unknown_events = true
+  metrics              = `+funnelMetricHCL+`
+`, `status { state = "draft" }`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{Config: cfg, Check: resource.TestCheckResourceAttrSet(testExperimentResourceName, "metrics")},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
