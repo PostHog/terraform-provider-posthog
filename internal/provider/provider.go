@@ -141,6 +141,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewAlert,
 		posthogresource.NewDashboard,
 		posthogresource.NewDashboardLayout,
+		posthogresource.NewEventSchema,
 		posthogresource.NewExternalDataSource,
 		posthogresource.NewFeatureFlag,
 		posthogresource.NewHogFunction,
@@ -153,6 +154,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewProxyRecord,
 		posthogresource.NewRole,
 		posthogresource.NewRoleMembership,
+		posthogresource.NewSchemaPropertyGroup,
 		posthogresource.NewSurvey,
 	}
 }
