@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **New Resource:** `posthog_experiment` - Manage experiments (A/B tests) with typed variant blocks, JSON-normalized `metrics`/`metrics_secondary`/`exposure_criteria`, and the full draft → running → paused → stopped lifecycle (including shipping a winning variant on stop) via a `status` block
+
 ## 1.0.0
 
 ### Features
