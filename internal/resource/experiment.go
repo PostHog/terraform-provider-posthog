@@ -129,8 +129,10 @@ func (o ExperimentOps) Schema() schema.Schema {
 			},
 			"feature_flag_key": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Key of the backing feature flag. The flag is auto-created and owned by the experiment. " +
-					"Changing this forces a new experiment (a linked flag cannot be re-keyed in place).",
+				MarkdownDescription: "Key of the backing feature flag. Must be a new, unused key — the flag is " +
+					"created for you and owned by the experiment; pointing at a feature flag that already exists is " +
+					"not supported (the API rejects it). Changing this forces a new experiment (a linked flag cannot " +
+					"be re-keyed in place).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
