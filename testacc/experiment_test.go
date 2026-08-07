@@ -456,3 +456,39 @@ func TestExperiment_FunnelMetric(t *testing.T) {
 		},
 	})
 }
+
+// TestExperiment_BareKeyDefaultFlag uses a bare (unmanaged) feature_flag_key rather than
+// referencing a posthog_feature_flag resource. PostHog auto-creates a default control/test flag
+// for the key and the experiment links it — the lightweight path where the flag isn't managed by
+// Terraform (and is left behind on destroy).
+func TestExperiment_BareKeyDefaultFlag(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-barekey")
+	cfg := fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_experiment" "test" {
+  name             = %q
+  feature_flag_key = %q # bare, unused key -> PostHog auto-creates a default flag
+  status { state = "draft" }
+}
+`, name, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "id"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "feature_flag_key", name),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "draft"),
+				),
+			},
+			{Config: cfg, PlanOnly: true}, // no perpetual diff even though PostHog created the flag
+		},
+	})
+}
