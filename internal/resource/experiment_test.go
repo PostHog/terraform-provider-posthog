@@ -270,28 +270,31 @@ func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 	assert.Equal(t, stateStopped, model.Status.State.ValueString())
 }
 
-// Variants are read back from parameters.feature_flag_variants.
-func TestExperimentMapResponseToModel_VariantsFromParameters(t *testing.T) {
+// Variants are config-only: MapResponseToModel never reads them back from the API — declared
+// variants (create mode) are kept as-is, and omitted variants (link mode) stay empty.
+func TestExperimentMapResponseToModel_VariantsConfigOnly(t *testing.T) {
 	ops := ExperimentOps{}
-	model := ExperimentTFModel{}
-
 	resp := httpclient.Experiment{
-		ID:   3,
-		Name: "exp",
+		ID: 3, Name: "exp", Status: stateRunning,
 		Parameters: json.RawMessage(`{"feature_flag_variants":[` +
-			`{"key":"control","name":"Original","rollout_percentage":50},` +
-			`{"key":"test","name":"Redesign","rollout_percentage":50}]}`),
-		Status: stateRunning,
+			`{"key":"control","rollout_percentage":50},{"key":"test","rollout_percentage":50}]}`),
 	}
 
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	// Declared variants are kept, not overwritten by the API's parameters.
+	declared := ExperimentTFModel{Variant: []ExperimentVariantModel{
+		{Key: types.StringValue("control"), RolloutPercentage: types.Int64Value(60)},
+		{Key: types.StringValue("test"), RolloutPercentage: types.Int64Value(40)},
+	}}
+	diags := ops.MapResponseToModel(context.Background(), resp, &declared)
 	require.False(t, diags.HasError(), diags.Errors())
+	require.Len(t, declared.Variant, 2)
+	assert.Equal(t, int64(60), declared.Variant[0].RolloutPercentage.ValueInt64(), "declared variants kept, not overwritten by the API")
 
-	require.Len(t, model.Variant, 2)
-	assert.Equal(t, "control", model.Variant[0].Key.ValueString())
-	assert.Equal(t, "Original", model.Variant[0].Name.ValueString())
-	assert.Equal(t, int64(50), model.Variant[0].RolloutPercentage.ValueInt64())
-	assert.Equal(t, "test", model.Variant[1].Key.ValueString())
+	// Link mode (variants omitted): the API's variants are NOT populated into state.
+	linked := ExperimentTFModel{}
+	diags = ops.MapResponseToModel(context.Background(), resp, &linked)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Empty(t, linked.Variant, "link mode: variants not read back from the API")
 }
 
 // Import starts from an empty model (nil status block): status must be populated without panic.

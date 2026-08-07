@@ -66,3 +66,23 @@ resource "posthog_experiment" "onboarding" {
     }
   }
 }
+
+# Linking an existing feature flag instead of auto-creating one: omit the variant blocks and
+# point feature_flag_key at a flag managed by a posthog_feature_flag resource. The variant split
+# is owned by that flag.
+resource "posthog_feature_flag" "checkout" {
+  key = "checkout-flow"
+  filters = jsonencode({
+    multivariate = { variants = [
+      { key = "control", rollout_percentage = 50 },
+      { key = "test", rollout_percentage = 50 },
+    ] }
+    groups = [{ properties = [], rollout_percentage = 100 }]
+  })
+}
+
+resource "posthog_experiment" "checkout" {
+  name             = "Checkout flow test"
+  feature_flag_key = posthog_feature_flag.checkout.key # link the existing flag
+  status { state = "draft" }
+}

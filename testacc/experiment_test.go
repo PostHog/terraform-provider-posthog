@@ -173,7 +173,7 @@ func TestExperiment_Import(t *testing.T) {
 				ResourceName:            testExperimentResourceName,
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"allow_unknown_events", "update_feature_flag_params", "status.stopped"},
+				ImportStateVerifyIgnore: []string{"allow_unknown_events", "update_feature_flag_params", "status.stopped", "variant"},
 				ImportStateIdFunc: func(s *terraform.State) (string, error) {
 					rs, ok := s.RootModule().Resources[testExperimentResourceName]
 					if !ok {
@@ -213,19 +213,32 @@ func TestExperiment_ExposureCriteriaNoDrift(t *testing.T) {
 	})
 }
 
-// TestExperiment_NoVariants asserts that omitting variants fails at plan time with a clear
-// "declare at least one variant" error, rather than the cryptic inconsistent-result error that
-// PostHog's auto-created default split would otherwise trigger.
-func TestExperiment_NoVariants(t *testing.T) {
+// TestExperiment_LinkExistingFlag omits the variant blocks and points feature_flag_key at a
+// feature flag managed by a separate posthog_feature_flag resource — the experiment links that
+// existing multivariate flag instead of creating one, with no perpetual diff (variants live on
+// the flag, not the experiment).
+func TestExperiment_LinkExistingFlag(t *testing.T) {
 	skipIfNotAcceptance(t)
 
-	name := acctest.RandomWithPrefix("tf-acc-exp-nov")
+	name := acctest.RandomWithPrefix("tf-acc-exp-link")
 	cfg := fmt.Sprintf(`
 provider "posthog" {}
 
+resource "posthog_feature_flag" "backing" {
+  key = %q
+  filters = jsonencode({
+    multivariate = { variants = [
+      { key = "control", rollout_percentage = 50 },
+      { key = "test", rollout_percentage = 50 },
+    ] }
+    groups = [{ properties = [], rollout_percentage = 100 }]
+  })
+}
+
 resource "posthog_experiment" "test" {
   name             = %q
-  feature_flag_key = %q
+  feature_flag_key = posthog_feature_flag.backing.key
+  # no variant blocks -> link the existing flag
   status { state = "draft" }
 }
 `, name, name)
@@ -233,11 +246,17 @@ resource "posthog_experiment" "test" {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config:      cfg,
-				ExpectError: regexp.MustCompile(`(?i)at least one .*variant`),
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "id"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "draft"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.#", "0"),
+				),
 			},
+			{Config: cfg, PlanOnly: true}, // no perpetual diff — variants belong to the linked flag
 		},
 	})
 }

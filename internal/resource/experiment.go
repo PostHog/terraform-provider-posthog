@@ -106,9 +106,9 @@ func (o ExperimentOps) ResourceName() string {
 func (o ExperimentOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: "Manage PostHog experiments (A/B tests) — definition, variants, metrics, and the " +
-			"draft → running → paused → stopped lifecycle. Creating an experiment auto-creates its backing " +
-			"feature flag from `feature_flag_key`; that flag is owned by the experiment and should not also be " +
-			"managed by a separate `posthog_feature_flag` resource. Business rules (rollout sums, variant counts, " +
+			"draft → running → paused → stopped lifecycle. Provide `variant` blocks to auto-create a backing " +
+			"feature flag from `feature_flag_key` (owned by the experiment), or omit them to link an existing " +
+			"multivariate flag with that key (e.g. a `posthog_feature_flag` resource). Business rules (rollout sums, variant counts, " +
 			"transition legality, metric schema) are enforced by the PostHog API at apply time, not by the provider.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.Int64Attribute{
@@ -129,9 +129,9 @@ func (o ExperimentOps) Schema() schema.Schema {
 			},
 			"feature_flag_key": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Key of the backing feature flag. Must be a new, unused key — the flag is " +
-					"created for you and owned by the experiment; pointing at a feature flag that already exists is " +
-					"not supported (the API rejects it). Changing this forces a new experiment (a linked flag cannot " +
+				MarkdownDescription: "Key of the backing feature flag. With `variant` blocks this creates a new flag with this key " +
+					"(the key must be unused). Omit `variant` blocks to instead link an existing multivariate flag " +
+					"with this key (e.g. `posthog_feature_flag.<name>.key`). Changing this forces a new experiment (a linked flag cannot " +
 					"be re-keyed in place).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -176,9 +176,9 @@ func (o ExperimentOps) Schema() schema.Schema {
 		},
 		Blocks: map[string]schema.Block{
 			"variant": schema.ListNestedBlock{
-				MarkdownDescription: "Multivariate split for the backing feature flag. Declare at least one; rollout " +
-					"percentages must sum to 100 and the API enforces the 2–20 variant range. Variants are " +
-					"authoritative from config — they are not re-read from the API after apply, so an out-of-band " +
+				MarkdownDescription: "Multivariate split for the backing feature flag (create mode). Provide at least two; rollout " +
+					"percentages must sum to 100 and the API enforces the 2–20 variant range. Omit these blocks " +
+					"entirely to link an existing multivariate flag referenced by `feature_flag_key`. Config-only, not re-read, so an out-of-band " +
 					"edit (or the 100/0 split left by shipping a winner) is not tracked as drift.",
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
@@ -327,15 +327,10 @@ func (o ExperimentOps) MapResponseToModel(_ context.Context, resp httpclient.Exp
 	model.MetricsSecondary = normalizeRawForState(resp.MetricsSecondary, model.MetricsSecondary)
 	model.ExposureCriteria = normalizeRawForState(resp.ExposureCriteria, model.ExposureCriteria)
 
-	// Variants are authoritative from config: only populate them from the API when the model has
-	// none (i.e. import). Keeping declared variants stable in state avoids an inconsistent-result
-	// error after ship_variant rewrites the flag distribution (winner→100%), and after PostHog
-	// auto-creates a default split. Out-of-band variant edits are therefore not tracked as drift.
-	if len(model.Variant) == 0 {
-		if variants := readVariants(resp.Parameters); variants != nil {
-			model.Variant = variants
-		}
-	}
+	// Variants are config-only — never read back from the API. In create mode the declared variants
+	// are the source of truth (kept stable through ship_variant's flag rewrite); in link mode
+	// (variants omitted) they live on the linked flag, not the experiment. Out-of-band variant edits
+	// are not tracked as drift.
 
 	// Status: map the server-derived state string. Create the block on import (empty model).
 	if model.Status == nil {
@@ -413,12 +408,11 @@ func (o ExperimentOps) Delete(ctx context.Context, client httpclient.PosthogClie
 	return client.DeleteExperiment(ctx, model.GetEffectiveProjectID(), model.GetID())
 }
 
-// ModifyResourcePlan requires the `variant` and `status` blocks to be declared explicitly.
-// Both are non-computed blocks that MapResponseToModel always populates from the server (variants
-// default to a control/test split; status derives from the lifecycle). Omitting either leaves it
-// null in the plan, so the provider materializing it after apply trips Terraform's
-// "inconsistent result / report a bug" error. These plan-time checks give a clear message
-// instead. (Skipped on destroy, where the plan is null.)
+// ModifyResourcePlan requires the `status` block to be declared explicitly. It is a non-computed
+// block that MapResponseToModel always populates from the server (it derives from the lifecycle),
+// so omitting it would leave it null in the plan and trip Terraform's "inconsistent result /
+// report a bug" error; this check gives a clear message instead. (variant is optional — omitting
+// it links an existing flag; skipped on destroy, where the plan is null.)
 func (o ExperimentOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
@@ -427,13 +421,6 @@ func (o ExperimentOps) ModifyResourcePlan(ctx context.Context, req resource.Modi
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
-	}
-	if len(plan.Variant) == 0 {
-		resp.Diagnostics.AddError(
-			"Missing experiment variants",
-			"At least one `variant` block is required. A PostHog experiment needs an explicit "+
-				"multivariate split; the API enforces the 2–20 variant range.",
-		)
 	}
 	if plan.Status == nil || plan.Status.State.IsNull() || plan.Status.State.IsUnknown() || plan.Status.State.ValueString() == "" {
 		resp.Diagnostics.AddError(
@@ -611,42 +598,6 @@ func buildFeatureFlagConfig(variants []ExperimentVariantModel) json.RawMessage {
 		return nil
 	}
 	return raw
-}
-
-// readVariants reads the variant split back from parameters.feature_flag_variants.
-func readVariants(parameters json.RawMessage) []ExperimentVariantModel {
-	if len(parameters) == 0 {
-		return nil
-	}
-	var params struct {
-		FeatureFlagVariants []struct {
-			Key               string   `json:"key"`
-			Name              *string  `json:"name"`
-			RolloutPercentage *float64 `json:"rollout_percentage"`
-		} `json:"feature_flag_variants"`
-	}
-	if err := json.Unmarshal(parameters, &params); err != nil {
-		return nil
-	}
-	if len(params.FeatureFlagVariants) == 0 {
-		return nil
-	}
-	variants := make([]ExperimentVariantModel, 0, len(params.FeatureFlagVariants))
-	for _, v := range params.FeatureFlagVariants {
-		entry := ExperimentVariantModel{Key: types.StringValue(v.Key)}
-		if v.Name != nil && *v.Name != "" {
-			entry.Name = types.StringValue(*v.Name)
-		} else {
-			entry.Name = types.StringNull()
-		}
-		if v.RolloutPercentage != nil {
-			entry.RolloutPercentage = types.Int64Value(int64(*v.RolloutPercentage))
-		} else {
-			entry.RolloutPercentage = types.Int64Null()
-		}
-		variants = append(variants, entry)
-	}
-	return variants
 }
 
 // variantsChanged reports whether the desired variant split differs from the prior state.
