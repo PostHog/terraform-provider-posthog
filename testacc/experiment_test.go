@@ -600,3 +600,67 @@ func TestExperiment_OutOfBandEditDrift(t *testing.T) {
 		},
 	})
 }
+
+// TestExperiment_AllowUnknownEventsBypass is the complement to TestExperiment_UnknownEventRejected:
+// with allow_unknown_events = true, a metric on a not-yet-ingested event is accepted.
+func TestExperiment_AllowUnknownEventsBypass(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-allowunknown")
+	metricsAttr := fmt.Sprintf(`  allow_unknown_events = true
+  metrics = jsonencode([{
+    kind        = "ExperimentMetric"
+    metric_type = "mean"
+    name        = "m"
+    source      = { kind = "EventsNode", event = %q, math = "total" }
+  }])`, "tf_acc_missing_"+name)
+	cfg := testAccExperimentConfigWith(name, metricsAttr, `status { state = "draft" }`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "id"),
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "metrics"),
+				),
+			},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
+
+// TestExperiment_ShipReleaseToEveryone ships a winner with release_to_everyone = true, which
+// prepends a catch-all release group to the flag (a distinct path from the default distribution-only
+// ship). The backing flag's lifecycle.ignore_changes keeps it drift-free.
+func TestExperiment_ShipReleaseToEveryone(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-shipall")
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{Config: testAccExperimentConfig(name, `status { state = "running" }`)},
+			{
+				Config: testAccExperimentConfig(name, `status {
+    state = "stopped"
+    stopped {
+      ship_variant        = "test"
+      release_to_everyone = true
+      conclusion          = "won"
+    }
+  }`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "stopped"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.ship_variant", "test"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.release_to_everyone", "true"),
+				),
+			},
+		},
+	})
+}
