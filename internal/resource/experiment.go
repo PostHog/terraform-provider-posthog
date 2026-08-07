@@ -9,26 +9,47 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
-// Experiment lifecycle states as reported by the API's derived `status` field and used in the
-// `status.state` config attribute. `exposure_frozen` is a server state that is out of scope
-// for v1; it is passed through on read but has no forward transition.
+// Experiment lifecycle states. draft/running/paused/stopped are settable via `status.state`;
+// exposure_frozen is a server-only state (enrollment frozen) that is out of scope for v1 — it is
+// passed through on read but has no forward transition, so it can't be driven from config.
 const (
-	stateDraft   = "draft"
-	stateRunning = "running"
-	statePaused  = "paused"
-	stateStopped = "stopped"
+	stateDraft          = "draft"
+	stateRunning        = "running"
+	statePaused         = "paused"
+	stateStopped        = "stopped"
+	stateExposureFrozen = "exposure_frozen"
+)
+
+// experimentStates are the values accepted for status.state (exposure_frozen is server-only).
+var experimentStates = []string{stateDraft, stateRunning, statePaused, stateStopped}
+
+// experimentConclusions mirrors the PostHog API's conclusion enum.
+var experimentConclusions = []string{"won", "lost", "inconclusive", "stopped_early", "invalid"}
+
+// lifecycleAction is one API sub-action in a status transition; the typed constants keep
+// computeTransition (which builds them) and runTransition (which dispatches them) from drifting.
+type lifecycleAction string
+
+const (
+	actionLaunch lifecycleAction = "launch"
+	actionPause  lifecycleAction = "pause"
+	actionResume lifecycleAction = "resume"
+	actionEnd    lifecycleAction = "end"
+	actionShip   lifecycleAction = "ship"
 )
 
 func NewExperiment() resource.Resource {
@@ -62,8 +83,9 @@ type ExperimentStatusModel struct {
 	Stopped *ExperimentStoppedModel `tfsdk:"stopped"`
 }
 
-// ExperimentStoppedModel is the metadata applied when stopping an experiment. All fields are
-// config-only: the API does not echo them back off the experiment object.
+// ExperimentStoppedModel is the metadata applied when stopping an experiment. conclusion and
+// conclusion_comment are fully managed (sent on stop/update and read back). ship_variant and
+// release_to_everyone are config-only ship instructions the API does not echo back.
 type ExperimentStoppedModel struct {
 	ShipVariant       types.String `tfsdk:"ship_variant"`
 	ReleaseToEveryone types.Bool   `tfsdk:"release_to_everyone"`
@@ -82,7 +104,7 @@ type experimentAPIRequest struct {
 // statusTransition is the ordered list of lifecycle sub-actions to run after the definition
 // write, plus the payload the terminal action (end/ship) carries.
 type statusTransition struct {
-	actions           []string // ordered subset of: launch, pause, resume, end, ship
+	actions           []lifecycleAction
 	conclusion        *string
 	conclusionComment *string
 	shipVariant       string
@@ -162,18 +184,23 @@ func (o ExperimentOps) Schema() schema.Schema {
 		},
 		Blocks: map[string]schema.Block{
 			"status": schema.SingleNestedBlock{
-				MarkdownDescription: "Desired lifecycle state (required). Declare this block to drive the experiment " +
-					"through `draft` → `running` → `paused` → `stopped`. The provider maps the desired `state` (vs. the " +
-					"current state) to the matching launch/pause/resume/end/ship sub-action. Backward transitions have no " +
-					"API call and return an error. Note: a transition spanning two sub-actions in one apply (e.g. creating " +
-					"directly as `paused` = launch+pause, or `stopped` = launch+end) is not atomic — if the second action " +
-					"fails the experiment may be left mid-transition; re-apply to reconcile, or advance one state at a time.",
+				MarkdownDescription: "Desired lifecycle state. The `status` block and its `state` are **required** " +
+					"(the block is schema-optional only because Terraform has no required-block modifier; a plan without " +
+					"it errors). Declare it to drive the experiment through `draft` → `running` → `paused` → `stopped`; the " +
+					"provider maps the desired `state` (vs. the current state) to the matching launch/pause/resume/end/ship " +
+					"sub-action. The lifecycle is forward-only — backward transitions error. Note: a transition spanning two " +
+					"sub-actions in one apply (e.g. creating directly as `paused` = launch+pause, or `stopped` = launch+end) " +
+					"is not atomic — if the second action fails the experiment is left mid-transition; the error names its " +
+					"live state so you can reconcile. The server-only `exposure_frozen` state cannot be managed here; " +
+					"resume or end such an experiment in the PostHog UI first.",
 				Attributes: map[string]schema.Attribute{
 					"state": schema.StringAttribute{
 						Optional: true,
 						MarkdownDescription: "Desired lifecycle state — one of `draft`, `running`, `paused`, or " +
-							"`stopped`. Required (the `status` block and its `state` must be declared explicitly); " +
-							"use `draft` for a not-yet-launched experiment. The lifecycle is forward-only.",
+							"`stopped` (required; use `draft` for a not-yet-launched experiment). The lifecycle is forward-only.",
+						Validators: []validator.String{
+							stringvalidator.OneOf(experimentStates...),
+						},
 					},
 				},
 				Blocks: map[string]schema.Block{
@@ -196,13 +223,17 @@ func (o ExperimentOps) Schema() schema.Schema {
 							},
 							"conclusion": schema.StringAttribute{
 								Optional: true,
-								MarkdownDescription: "Conclusion recorded when the experiment is stopped (e.g. `won`, `lost`, " +
-									"`inconclusive`). Write-once: applied by the stop/ship action and not read back or " +
-									"updated afterward (editing it on an already-stopped experiment is a no-op).",
+								MarkdownDescription: "Conclusion recorded when the experiment is stopped — one of `won`, " +
+									"`lost`, `inconclusive`, `stopped_early`, `invalid`. Fully managed: applied at stop time and " +
+									"editable afterwards (an edit on an already-stopped experiment is PATCHed and read back).",
+								Validators: []validator.String{
+									stringvalidator.OneOf(experimentConclusions...),
+								},
 							},
 							"conclusion_comment": schema.StringAttribute{
-								Optional:            true,
-								MarkdownDescription: "Free-text note recorded alongside the conclusion. Config-only.",
+								Optional: true,
+								MarkdownDescription: "Free-text note recorded alongside the conclusion. Fully managed " +
+									"(sent on stop/update and read back).",
 							},
 						},
 					},
@@ -259,6 +290,13 @@ func (o ExperimentOps) BuildUpdateRequest(_ context.Context, plan, state Experim
 		priorShipVariant = shipVariantOf(state.Status)
 	}
 
+	// When the experiment is already stopped there is no lifecycle action to carry a conclusion
+	// edit, so send conclusion/comment in the PATCH body (they are applied and read back — two-way).
+	if from == stateStopped && plan.Status != nil && plan.Status.Stopped != nil {
+		body.Conclusion = util.StringPtrFromValue(plan.Status.Stopped.Conclusion)
+		body.ConclusionComment = util.StringPtrFromValue(plan.Status.Stopped.ConclusionComment)
+	}
+
 	transition, err := computeTransition(from, plan.Status, priorShipVariant)
 	if err != nil {
 		diags.AddError("Invalid experiment status transition", err.Error())
@@ -292,10 +330,12 @@ func (o ExperimentOps) MapResponseToModel(_ context.Context, resp httpclient.Exp
 	}
 	model.Status.State = types.StringValue(normalizeState(resp.Status))
 
-	// The whole stopped block, plus allow_unknown_events, is config-only: left as passed in, never
-	// read back. conclusion/conclusion_comment are sent at stop time by the end/ship action; reading
-	// conclusion back would perpetual-diff a post-stop edit (there is no PATCH path for such an edit,
-	// so it is a documented no-op).
+	// conclusion/conclusion_comment are two-way (read back so out-of-band and post-stop edits
+	// round-trip). ship_variant/release_to_everyone/allow_unknown_events are config-only, so unmapped.
+	if model.Status.Stopped != nil {
+		model.Status.Stopped.Conclusion = core.PtrToStringNullIfEmptyTrimmed(resp.Conclusion)
+		model.Status.Stopped.ConclusionComment = core.PtrToStringNullIfEmptyTrimmed(resp.ConclusionComment)
+	}
 
 	return nil
 }
@@ -315,9 +355,14 @@ func (o ExperimentOps) Create(ctx context.Context, client httpclient.PosthogClie
 		return exp, nil
 	}
 	id := strconv.FormatInt(exp.ID, 10)
-	final, _, err := runTransition(ctx, client, projectID, id, req.transition)
+	final, _, err := runTransition(ctx, &client, projectID, id, req.transition)
 	if err != nil {
-		return exp, err
+		// The experiment was created and partially transitioned, but Terraform won't record it in
+		// state (create failed). Name it and its live state so the user can import or delete it
+		// rather than have a re-apply create a second, orphaned live experiment.
+		return exp, fmt.Errorf("experiment %s was created (now %s) but a lifecycle action failed; import it "+
+			"(terraform import <resource> %s/%s) or delete it in the PostHog UI before retrying: %w",
+			id, liveState(ctx, client, projectID, id), projectID, id, err)
 	}
 	return final, nil
 }
@@ -351,11 +396,24 @@ func (o ExperimentOps) Update(ctx context.Context, client httpclient.PosthogClie
 
 	// The lifecycle sub-actions return the full, authoritative experiment, so use the last
 	// action's response directly rather than issuing a redundant GET.
-	final, c, err := runTransition(ctx, client, projectID, id, req.transition)
+	final, c, err := runTransition(ctx, &client, projectID, id, req.transition)
 	if err != nil {
-		return exp, c, err
+		// Multi-step transitions aren't atomic; name the live state so a mid-sequence failure is
+		// recoverable (re-apply reconciles from the real state).
+		return exp, c, fmt.Errorf("experiment %s is now %s after a partial transition: %w",
+			id, liveState(ctx, client, projectID, id), err)
 	}
 	return final, c, nil
+}
+
+// liveState fetches the experiment's current server state for error messages; returns a placeholder
+// if the fetch fails so diagnostics never mask the original error.
+func liveState(ctx context.Context, client httpclient.PosthogClient, projectID, id string) string {
+	got, _, err := client.GetExperiment(ctx, projectID, id)
+	if err != nil {
+		return "in an unknown state"
+	}
+	return fmt.Sprintf("in state %q", normalizeState(got.Status))
 }
 
 func (o ExperimentOps) Delete(ctx context.Context, client httpclient.PosthogClient, model ExperimentTFModel) (httpclient.HTTPStatusCode, error) {
@@ -410,28 +468,32 @@ func computeTransition(from string, to *ExperimentStatusModel, priorShipVariant 
 	case stateDraft:
 		switch toState {
 		case stateRunning:
-			return statusTransition{actions: []string{"launch"}}, nil
+			return statusTransition{actions: []lifecycleAction{actionLaunch}}, nil
 		case statePaused:
-			return statusTransition{actions: []string{"launch", "pause"}}, nil
+			return statusTransition{actions: []lifecycleAction{actionLaunch, actionPause}}, nil
 		case stateStopped:
 			t := terminalTransition(to)
-			t.actions = append([]string{"launch"}, t.actions...)
+			t.actions = append([]lifecycleAction{actionLaunch}, t.actions...)
 			return t, nil
 		}
 	case stateRunning:
 		switch toState {
 		case statePaused:
-			return statusTransition{actions: []string{"pause"}}, nil
+			return statusTransition{actions: []lifecycleAction{actionPause}}, nil
 		case stateStopped:
 			return terminalTransition(to), nil
 		}
 	case statePaused:
 		switch toState {
 		case stateRunning:
-			return statusTransition{actions: []string{"resume"}}, nil
+			return statusTransition{actions: []lifecycleAction{actionResume}}, nil
 		case stateStopped:
 			return terminalTransition(to), nil
 		}
+	case stateExposureFrozen:
+		return statusTransition{}, fmt.Errorf(
+			"experiment is in the server-only state %q (enrollment frozen), which Terraform cannot drive; "+
+				"resume or end it in the PostHog UI, then re-apply", stateExposureFrozen)
 	}
 
 	return statusTransition{}, fmt.Errorf(
@@ -453,10 +515,10 @@ func terminalTransition(to *ExperimentStatusModel) statusTransition {
 	if ship := shipVariantOf(to); ship != "" {
 		t.shipVariant = ship
 		t.releaseToEveryone = to.Stopped.ReleaseToEveryone.ValueBool()
-		t.actions = []string{"ship"}
+		t.actions = []lifecycleAction{actionShip}
 		return t
 	}
-	t.actions = []string{"end"}
+	t.actions = []lifecycleAction{actionEnd}
 	return t
 }
 
@@ -474,9 +536,19 @@ func normalizeState(s string) string {
 	return s
 }
 
+// experimentLifecycleClient is the subset of the PostHog client that runTransition drives; taking
+// an interface lets the transition sequencer be unit-tested with a stub.
+type experimentLifecycleClient interface {
+	LaunchExperiment(ctx context.Context, projectID, id string) (httpclient.Experiment, httpclient.HTTPStatusCode, error)
+	PauseExperiment(ctx context.Context, projectID, id string) (httpclient.Experiment, httpclient.HTTPStatusCode, error)
+	ResumeExperiment(ctx context.Context, projectID, id string) (httpclient.Experiment, httpclient.HTTPStatusCode, error)
+	EndExperiment(ctx context.Context, projectID, id string, input httpclient.ExperimentEndRequest) (httpclient.Experiment, httpclient.HTTPStatusCode, error)
+	ShipVariant(ctx context.Context, projectID, id string, input httpclient.ExperimentShipVariantRequest) (httpclient.Experiment, httpclient.HTTPStatusCode, error)
+}
+
 // runTransition runs the encoded sub-actions in order and returns the experiment from the last
 // action performed.
-func runTransition(ctx context.Context, client httpclient.PosthogClient, projectID, id string, t statusTransition) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+func runTransition(ctx context.Context, client experimentLifecycleClient, projectID, id string, t statusTransition) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
 	var (
 		last httpclient.Experiment
 		code httpclient.HTTPStatusCode = http.StatusOK
@@ -484,18 +556,18 @@ func runTransition(ctx context.Context, client httpclient.PosthogClient, project
 	)
 	for _, action := range t.actions {
 		switch action {
-		case "launch":
+		case actionLaunch:
 			last, code, err = client.LaunchExperiment(ctx, projectID, id)
-		case "pause":
+		case actionPause:
 			last, code, err = client.PauseExperiment(ctx, projectID, id)
-		case "resume":
+		case actionResume:
 			last, code, err = client.ResumeExperiment(ctx, projectID, id)
-		case "end":
+		case actionEnd:
 			last, code, err = client.EndExperiment(ctx, projectID, id, httpclient.ExperimentEndRequest{
 				Conclusion:        t.conclusion,
 				ConclusionComment: t.conclusionComment,
 			})
-		case "ship":
+		case actionShip:
 			last, code, err = client.ShipVariant(ctx, projectID, id, httpclient.ExperimentShipVariantRequest{
 				VariantKey:        t.shipVariant,
 				ReleaseToEveryone: t.releaseToEveryone,
@@ -503,14 +575,13 @@ func runTransition(ctx context.Context, client httpclient.PosthogClient, project
 				ConclusionComment: t.conclusionComment,
 			})
 		default:
-			// Guards against a future action-name mismatch between computeTransition/
-			// terminalTransition and this dispatcher silently no-opping.
+			// Unreachable with the typed constants; defensive guard.
 			return last, code, fmt.Errorf("unknown lifecycle action %q", action)
 		}
 		if err != nil {
 			// Name the failed action so a partial multi-step transition (e.g. launch succeeded,
 			// pause failed) is diagnosable from the error alone.
-			return last, code, fmt.Errorf("%q action failed: %w", action, err)
+			return last, code, fmt.Errorf("%q action failed: %w", string(action), err)
 		}
 	}
 	return last, code, err
@@ -529,10 +600,8 @@ func rawFromNormalized(n jsontypes.Normalized) json.RawMessage {
 	return json.RawMessage(trimmed)
 }
 
-// normalizeRawForState normalizes an API JSON blob against the configured value so that
-// reordered keys and server-computed fields do not surface as a perpetual diff. Reuses the
-// shared whitelist normalizer (keep only user-declared fields), the same family used by
-// survey/insight/hog_function.
+// normalizeRawForState normalizes an API JSON blob against the configured value so reordered keys
+// and server-computed fields do not surface as a perpetual diff (whitelist to user-declared fields).
 func normalizeRawForState(raw json.RawMessage, current jsontypes.Normalized) jsontypes.Normalized {
 	if len(raw) == 0 || string(raw) == "null" {
 		return jsontypes.NewNormalizedNull()

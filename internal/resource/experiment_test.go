@@ -3,11 +3,14 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,15 +79,15 @@ func TestExperimentBuildUpdateRequest_TransitionTable(t *testing.T) {
 		name        string
 		fromState   *ExperimentStatusModel
 		toState     *ExperimentStatusModel
-		wantActions []string
+		wantActions []lifecycleAction
 		wantErr     bool
 		wantShipKey string
 		wantRelease bool
 		wantConcl   string
 	}{
-		{name: "draft->running", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(stateRunning, nil), wantActions: []string{"launch"}},
-		{name: "draft->paused", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(statePaused, nil), wantActions: []string{"launch", "pause"}},
-		{name: "draft->stopped(end)", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(stateStopped, nil), wantActions: []string{"launch", "end"}},
+		{name: "draft->running", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(stateRunning, nil), wantActions: []lifecycleAction{actionLaunch}},
+		{name: "draft->paused", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(statePaused, nil), wantActions: []lifecycleAction{actionLaunch, actionPause}},
+		{name: "draft->stopped(end)", fromState: stoppedStatus(stateDraft, nil), toState: stoppedStatus(stateStopped, nil), wantActions: []lifecycleAction{actionLaunch, actionEnd}},
 		{
 			name:      "draft->stopped(ship)",
 			fromState: stoppedStatus(stateDraft, nil),
@@ -93,17 +96,17 @@ func TestExperimentBuildUpdateRequest_TransitionTable(t *testing.T) {
 				ReleaseToEveryone: types.BoolValue(true),
 				Conclusion:        types.StringValue("won"),
 			}),
-			wantActions: []string{"launch", "ship"}, wantShipKey: "test", wantRelease: true, wantConcl: "won",
+			wantActions: []lifecycleAction{actionLaunch, actionShip}, wantShipKey: "test", wantRelease: true, wantConcl: "won",
 		},
-		{name: "running->paused", fromState: stoppedStatus(stateRunning, nil), toState: stoppedStatus(statePaused, nil), wantActions: []string{"pause"}},
-		{name: "paused->running", fromState: stoppedStatus(statePaused, nil), toState: stoppedStatus(stateRunning, nil), wantActions: []string{"resume"}},
+		{name: "running->paused", fromState: stoppedStatus(stateRunning, nil), toState: stoppedStatus(statePaused, nil), wantActions: []lifecycleAction{actionPause}},
+		{name: "paused->running", fromState: stoppedStatus(statePaused, nil), toState: stoppedStatus(stateRunning, nil), wantActions: []lifecycleAction{actionResume}},
 		{
 			name:      "running->stopped(end w/ conclusion)",
 			fromState: stoppedStatus(stateRunning, nil),
 			toState: stoppedStatus(stateStopped, &ExperimentStoppedModel{
 				Conclusion: types.StringValue("inconclusive"),
 			}),
-			wantActions: []string{"end"}, wantConcl: "inconclusive",
+			wantActions: []lifecycleAction{actionEnd}, wantConcl: "inconclusive",
 		},
 		{
 			name:      "paused->stopped(ship)",
@@ -111,7 +114,7 @@ func TestExperimentBuildUpdateRequest_TransitionTable(t *testing.T) {
 			toState: stoppedStatus(stateStopped, &ExperimentStoppedModel{
 				ShipVariant: types.StringValue("winner"),
 			}),
-			wantActions: []string{"ship"}, wantShipKey: "winner",
+			wantActions: []lifecycleAction{actionShip}, wantShipKey: "winner",
 		},
 		{name: "running->running(noop)", fromState: stoppedStatus(stateRunning, nil), toState: stoppedStatus(stateRunning, nil), wantActions: nil},
 		{name: "stopped->stopped(no ship change)", fromState: stoppedStatus(stateStopped, nil), toState: stoppedStatus(stateStopped, nil), wantActions: nil},
@@ -162,7 +165,7 @@ func TestExperimentBuildUpdateRequest_ShipLater(t *testing.T) {
 
 	req, diags := ops.BuildUpdateRequest(context.Background(), plan, state)
 	require.False(t, diags.HasError(), diags.Errors())
-	assert.Equal(t, []string{"ship"}, req.transition.actions)
+	assert.Equal(t, []lifecycleAction{actionShip}, req.transition.actions)
 	assert.Equal(t, "test", req.transition.shipVariant)
 
 	// ship idempotency: same ship_variant already recorded -> no action.
@@ -204,7 +207,7 @@ func TestExperimentMapResponseToModel_MetricsNoPerpetualDiff(t *testing.T) {
 
 // The whole stopped block is config-only: MapResponseToModel must not clobber it from the API,
 // including conclusion (write-once, not read back).
-func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
+func TestExperimentMapResponseToModel_StoppedFields(t *testing.T) {
 	ops := ExperimentOps{}
 	model := ExperimentTFModel{
 		Status: stoppedStatus(stateStopped, &ExperimentStoppedModel{
@@ -215,17 +218,21 @@ func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 		}),
 	}
 
-	// The stopped block's fields are not part of the API response struct at all, so they can only
-	// ever come from config — MapResponseToModel must leave them intact.
-	resp := httpclient.Experiment{ID: 9, Name: "exp", Status: stateStopped}
+	// conclusion/conclusion_comment are two-way: the API values win (here differing from config, as
+	// an out-of-band edit would). ship_variant/release_to_everyone are config-only and left intact.
+	resp := httpclient.Experiment{
+		ID: 9, Name: "exp", Status: stateStopped,
+		Conclusion:        util.StringPtr("lost"),
+		ConclusionComment: util.StringPtr("server comment"),
+	}
 
 	diags := ops.MapResponseToModel(context.Background(), resp, &model)
 	require.False(t, diags.HasError(), diags.Errors())
 
 	assert.Equal(t, "test", model.Status.Stopped.ShipVariant.ValueString(), "ship_variant is config-only")
 	assert.True(t, model.Status.Stopped.ReleaseToEveryone.ValueBool(), "release_to_everyone is config-only")
-	assert.Equal(t, "configured comment", model.Status.Stopped.ConclusionComment.ValueString(), "conclusion_comment is config-only")
-	assert.Equal(t, "won", model.Status.Stopped.Conclusion.ValueString(), "conclusion is config-only (not read back)")
+	assert.Equal(t, "lost", model.Status.Stopped.Conclusion.ValueString(), "conclusion is read back")
+	assert.Equal(t, "server comment", model.Status.Stopped.ConclusionComment.ValueString(), "conclusion_comment is read back")
 	assert.Equal(t, stateStopped, model.Status.State.ValueString())
 }
 
@@ -242,4 +249,57 @@ func TestExperimentMapResponseToModel_ImportPopulatesStatus(t *testing.T) {
 	assert.Equal(t, statePaused, model.Status.State.ValueString())
 	assert.Nil(t, model.Status.Stopped)
 	assert.Equal(t, "exp-flag", model.FeatureFlagKey.ValueString())
+}
+
+// --- runTransition ----------------------------------------------------------
+
+// stubLifecycleClient records the sub-actions called and can fail a chosen one, so the transition
+// sequencer's ordering and mid-sequence failure handling are testable without a live API.
+type stubLifecycleClient struct {
+	calls  []lifecycleAction
+	failOn lifecycleAction // action to return an error on ("" = never fail)
+}
+
+func (s *stubLifecycleClient) record(a lifecycleAction) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	s.calls = append(s.calls, a)
+	if a == s.failOn {
+		return httpclient.Experiment{}, http.StatusBadRequest, fmt.Errorf("boom")
+	}
+	return httpclient.Experiment{Status: string(a)}, http.StatusOK, nil
+}
+
+func (s *stubLifecycleClient) LaunchExperiment(_ context.Context, _, _ string) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	return s.record(actionLaunch)
+}
+func (s *stubLifecycleClient) PauseExperiment(_ context.Context, _, _ string) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	return s.record(actionPause)
+}
+func (s *stubLifecycleClient) ResumeExperiment(_ context.Context, _, _ string) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	return s.record(actionResume)
+}
+func (s *stubLifecycleClient) EndExperiment(_ context.Context, _, _ string, _ httpclient.ExperimentEndRequest) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	return s.record(actionEnd)
+}
+func (s *stubLifecycleClient) ShipVariant(_ context.Context, _, _ string, _ httpclient.ExperimentShipVariantRequest) (httpclient.Experiment, httpclient.HTTPStatusCode, error) {
+	return s.record(actionShip)
+}
+
+func TestRunTransition_RunsActionsInOrder(t *testing.T) {
+	stub := &stubLifecycleClient{}
+	t2 := statusTransition{actions: []lifecycleAction{actionLaunch, actionPause}}
+
+	exp, _, err := runTransition(context.Background(), stub, "proj", "1", t2)
+	require.NoError(t, err)
+	assert.Equal(t, []lifecycleAction{actionLaunch, actionPause}, stub.calls)
+	assert.Equal(t, string(actionPause), exp.Status, "returns the last action's experiment")
+}
+
+func TestRunTransition_StopsAndNamesFailedAction(t *testing.T) {
+	stub := &stubLifecycleClient{failOn: actionPause}
+	t2 := statusTransition{actions: []lifecycleAction{actionLaunch, actionPause, actionEnd}}
+
+	_, _, err := runTransition(context.Background(), stub, "proj", "1", t2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"pause" action failed`)
+	assert.Equal(t, []lifecycleAction{actionLaunch, actionPause}, stub.calls, "does not run actions after the failure")
 }

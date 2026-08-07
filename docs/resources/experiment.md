@@ -98,7 +98,7 @@ resource "posthog_experiment" "onboarding" {
 - `metrics` (String) Primary metrics as a JSON array. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Only fields you declare are tracked; server-computed fields (e.g. metric fingerprints) are ignored.
 - `metrics_secondary` (String) Secondary metrics as a JSON array. Same semantic-compare handling as `metrics`.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
-- `status` (Block, Optional) Desired lifecycle state (required). Declare this block to drive the experiment through `draft` → `running` → `paused` → `stopped`. The provider maps the desired `state` (vs. the current state) to the matching launch/pause/resume/end/ship sub-action. Backward transitions have no API call and return an error. Note: a transition spanning two sub-actions in one apply (e.g. creating directly as `paused` = launch+pause, or `stopped` = launch+end) is not atomic — if the second action fails the experiment may be left mid-transition; re-apply to reconcile, or advance one state at a time. (see [below for nested schema](#nestedblock--status))
+- `status` (Block, Optional) Desired lifecycle state. The `status` block and its `state` are **required** (the block is schema-optional only because Terraform has no required-block modifier; a plan without it errors). Declare it to drive the experiment through `draft` → `running` → `paused` → `stopped`; the provider maps the desired `state` (vs. the current state) to the matching launch/pause/resume/end/ship sub-action. The lifecycle is forward-only — backward transitions error. Note: a transition spanning two sub-actions in one apply (e.g. creating directly as `paused` = launch+pause, or `stopped` = launch+end) is not atomic — if the second action fails the experiment is left mid-transition; the error names its live state so you can reconcile. The server-only `exposure_frozen` state cannot be managed here; resume or end such an experiment in the PostHog UI first. (see [below for nested schema](#nestedblock--status))
 
 ### Read-Only
 
@@ -109,7 +109,7 @@ resource "posthog_experiment" "onboarding" {
 
 Optional:
 
-- `state` (String) Desired lifecycle state — one of `draft`, `running`, `paused`, or `stopped`. Required (the `status` block and its `state` must be declared explicitly); use `draft` for a not-yet-launched experiment. The lifecycle is forward-only.
+- `state` (String) Desired lifecycle state — one of `draft`, `running`, `paused`, or `stopped` (required; use `draft` for a not-yet-launched experiment). The lifecycle is forward-only.
 - `stopped` (Block, Optional) Metadata applied when stopping the experiment (read only when `state = "stopped"`, ignored otherwise). (see [below for nested schema](#nestedblock--status--stopped))
 
 <a id="nestedblock--status--stopped"></a>
@@ -117,8 +117,8 @@ Optional:
 
 Optional:
 
-- `conclusion` (String) Conclusion recorded when the experiment is stopped (e.g. `won`, `lost`, `inconclusive`). Write-once: applied by the stop/ship action and not read back or updated afterward (editing it on an already-stopped experiment is a no-op).
-- `conclusion_comment` (String) Free-text note recorded alongside the conclusion. Config-only.
+- `conclusion` (String) Conclusion recorded when the experiment is stopped — one of `won`, `lost`, `inconclusive`, `stopped_early`, `invalid`. Fully managed: applied at stop time and editable afterwards (an edit on an already-stopped experiment is PATCHed and read back).
+- `conclusion_comment` (String) Free-text note recorded alongside the conclusion. Fully managed (sent on stop/update and read back).
 - `release_to_everyone` (Boolean) When shipping, prepend a catch-all release condition (roll out to everyone) instead of only flipping the variant distribution. Defaults to `false`. Config-only.
 - `ship_variant` (String) Key of the winning variant to ship. Rewrites the linked flag's distribution so this variant gets 100% and ends the experiment. If the flag is managed by a `posthog_feature_flag` resource, set `lifecycle { ignore_changes = [filters] }` on it so it does not revert the shipped distribution. Config-only; re-ships only when this value changes; clearing it does not un-ship.
 

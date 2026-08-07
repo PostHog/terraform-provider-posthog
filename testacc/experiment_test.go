@@ -155,6 +155,9 @@ func TestExperiment_ShipVariant(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "stopped"),
 					resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.ship_variant", "test"),
+					// prove the ship rewrote the live flag: shipped variant to 100%, control to 0%
+					checkFlagVariantRollout("posthog_feature_flag.backing", "test", 100),
+					checkFlagVariantRollout("posthog_feature_flag.backing", "control", 0),
 				),
 			},
 		},
@@ -415,6 +418,46 @@ func TestExperiment_ShipLater(t *testing.T) {
 	})
 }
 
+// TestExperiment_ConclusionEditOnStopped edits conclusion/conclusion_comment on an
+// already-stopped experiment. Those fields are two-way (no lifecycle action carries them post-stop,
+// so the update PATCHes them and reads them back), and a re-plan must be empty.
+func TestExperiment_ConclusionEditOnStopped(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-concl")
+	stopped := func(concl, comment string) string {
+		return fmt.Sprintf(`status {
+    state = "stopped"
+    stopped {
+      conclusion         = %q
+      conclusion_comment = %q
+    }
+  }`, concl, comment)
+	}
+	step2 := testAccExperimentConfig(name, stopped("lost", "second look"))
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{Config: testAccExperimentConfig(name, `status { state = "running" }`)},
+			{ // stop with an initial conclusion
+				Config: testAccExperimentConfig(name, stopped("won", "first call")),
+				Check:  resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.conclusion", "won"),
+			},
+			{ // edit conclusion + comment on the already-stopped experiment
+				Config: step2,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.conclusion", "lost"),
+					resource.TestCheckResourceAttr(testExperimentResourceName, "status.stopped.conclusion_comment", "second look"),
+				),
+			},
+			{Config: step2, PlanOnly: true}, // two-way read-back → no perpetual diff
+		},
+	})
+}
+
 // TestExperiment_IllegalBackwardTransition asserts a forward-only violation (running -> draft)
 // fails with the provider's structural error rather than an invalid API call.
 func TestExperiment_IllegalBackwardTransition(t *testing.T) {
@@ -521,6 +564,43 @@ func TestExperiment_UnknownEventRejected(t *testing.T) {
 
 func testAccExperimentClient() httpclient.PosthogClient {
 	return httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "acceptance-test")
+}
+
+// checkFlagVariantRollout fetches the backing flag from the raw API and asserts a variant's
+// rollout_percentage, proving a ship actually rewrote the live distribution (rather than the
+// resource just echoing ship_variant back into state).
+func checkFlagVariantRollout(flagResource, variantKey string, want int) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[flagResource]
+		if !ok {
+			return fmt.Errorf("flag resource not found in state: %s", flagResource)
+		}
+		client := testAccExperimentClient()
+		flag, _, err := client.GetFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("fetching flag %s: %w", rs.Primary.ID, err)
+		}
+		mv, ok := flag.Filters["multivariate"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("flag %s has no multivariate filters", rs.Primary.ID)
+		}
+		variants, ok := mv["variants"].([]interface{})
+		if !ok {
+			return fmt.Errorf("flag %s multivariate has no variants array", rs.Primary.ID)
+		}
+		for _, v := range variants {
+			vm, ok := v.(map[string]interface{})
+			if !ok || vm["key"] != variantKey {
+				continue
+			}
+			got, _ := vm["rollout_percentage"].(float64)
+			if int(got) != want {
+				return fmt.Errorf("variant %q rollout = %d, want %d", variantKey, int(got), want)
+			}
+			return nil
+		}
+		return fmt.Errorf("variant %q not found on flag %s", variantKey, rs.Primary.ID)
+	}
 }
 
 // TestExperiment_SoftDeleteDrift soft-deletes the experiment out-of-band (raw API), then asserts a

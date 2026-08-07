@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-- **New Resource:** `posthog_experiment` - Manage experiments (A/B tests) as code: reference an existing multivariate feature flag via `feature_flag_key` (e.g. `feature_flag_key = posthog_feature_flag.foo.key`), attach JSON-normalized `metrics`/`metrics_secondary`/`exposure_criteria`, and drive the full draft → running → paused → stopped lifecycle (including shipping a winning variant on stop) via a `status` block
-
 ## 1.0.0
 
 ### Features

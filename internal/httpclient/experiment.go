@@ -10,15 +10,17 @@ import (
 // (metrics, metrics_secondary, exposure_criteria) are kept as raw JSON so the resource layer
 // can normalize them for state (semantic compare); scalar/lifecycle fields are typed.
 type Experiment struct {
-	ID               int64           `json:"id"`
-	Name             string          `json:"name"`
-	Description      *string         `json:"description,omitempty"`
-	FeatureFlagKey   string          `json:"feature_flag_key,omitempty"`
-	Metrics          json.RawMessage `json:"metrics,omitempty"`
-	MetricsSecondary json.RawMessage `json:"metrics_secondary,omitempty"`
-	ExposureCriteria json.RawMessage `json:"exposure_criteria,omitempty"`
-	HoldoutID        *int64          `json:"holdout_id,omitempty"`
-	Deleted          *bool           `json:"deleted,omitempty"`
+	ID                int64           `json:"id"`
+	Name              string          `json:"name"`
+	Description       *string         `json:"description,omitempty"`
+	FeatureFlagKey    string          `json:"feature_flag_key,omitempty"`
+	Metrics           json.RawMessage `json:"metrics,omitempty"`
+	MetricsSecondary  json.RawMessage `json:"metrics_secondary,omitempty"`
+	ExposureCriteria  json.RawMessage `json:"exposure_criteria,omitempty"`
+	HoldoutID         *int64          `json:"holdout_id,omitempty"`
+	Deleted           *bool           `json:"deleted,omitempty"`
+	Conclusion        *string         `json:"conclusion,omitempty"`
+	ConclusionComment *string         `json:"conclusion_comment,omitempty"`
 	// Status is the server-derived lifecycle state: draft | running | paused |
 	// exposure_frozen | stopped. Read-only.
 	Status string `json:"status,omitempty"`
@@ -37,6 +39,8 @@ type ExperimentRequest struct {
 	HoldoutID          *int64          `json:"holdout_id,omitempty"`
 	Deleted            *bool           `json:"deleted,omitempty"`
 	AllowUnknownEvents *bool           `json:"allow_unknown_events,omitempty"`
+	Conclusion         *string         `json:"conclusion,omitempty"`
+	ConclusionComment  *string         `json:"conclusion_comment,omitempty"`
 }
 
 // ExperimentEndRequest is the body for the end sub-action.
