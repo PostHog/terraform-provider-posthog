@@ -381,7 +381,6 @@ func TestExperiment_DefinitionUpdate(t *testing.T) {
 	})
 }
 
-
 // TestExperiment_ShipLater stops an experiment with a plain end, then ships a winner on the
 // already-stopped experiment in a second apply — exercising computeTransition's same-state ship
 // branch and the ship-idempotency guard (a re-plan after shipping must be empty).
@@ -489,6 +488,115 @@ resource "posthog_experiment" "test" {
 				),
 			},
 			{Config: cfg, PlanOnly: true}, // no perpetual diff even though PostHog created the flag
+		},
+	})
+}
+
+// TestExperiment_UnknownEventRejected asserts that a metric referencing a not-yet-ingested event
+// is rejected by the API when allow_unknown_events is not set.
+func TestExperiment_UnknownEventRejected(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-unknownevt")
+	metricsAttr := fmt.Sprintf(`  metrics = jsonencode([{
+    kind        = "ExperimentMetric"
+    metric_type = "mean"
+    name        = "m"
+    source      = { kind = "EventsNode", event = %q, math = "total" }
+  }])`, "tf_acc_missing_"+name)
+	cfg := testAccExperimentConfigWith(name, metricsAttr, `status { state = "draft" }`) // no allow_unknown_events
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config:      cfg,
+				ExpectError: regexp.MustCompile(`(?i)allow_unknown_events`),
+			},
+		},
+	})
+}
+
+func testAccExperimentClient() httpclient.PosthogClient {
+	return httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "acceptance-test")
+}
+
+// TestExperiment_SoftDeleteDrift soft-deletes the experiment out-of-band (raw API), then asserts a
+// refresh detects it as gone (our Read maps deleted=true -> not-found) and plans to recreate it.
+func TestExperiment_SoftDeleteDrift(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-sddrift")
+	cfg := testAccExperimentConfig(name, `status { state = "running" }`)
+	var id string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: func(s *terraform.State) error {
+					rs, ok := s.RootModule().Resources[testExperimentResourceName]
+					if !ok {
+						return fmt.Errorf("resource not found in state")
+					}
+					id = rs.Primary.ID
+					return nil
+				},
+			},
+			{
+				PreConfig: func() {
+					c := testAccExperimentClient()
+					_, _ = c.DeleteExperiment(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), id)
+				},
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true, // experiment is gone upstream -> plan wants to recreate
+			},
+		},
+	})
+}
+
+// TestExperiment_OutOfBandEditDrift changes a tracked field (description) out-of-band via the raw
+// API, then asserts a refresh surfaces the drift as a non-empty plan (revert to config).
+func TestExperiment_OutOfBandEditDrift(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := acctest.RandomWithPrefix("tf-acc-exp-editdrift")
+	cfg := testAccExperimentConfigWith(name, `  description = "managed by terraform"`, `status { state = "draft" }`)
+	var id string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckExperimentDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: func(s *terraform.State) error {
+					rs, ok := s.RootModule().Resources[testExperimentResourceName]
+					if !ok {
+						return fmt.Errorf("resource not found in state")
+					}
+					id = rs.Primary.ID
+					return nil
+				},
+			},
+			{
+				PreConfig: func() {
+					c := testAccExperimentClient()
+					changed := "changed out of band"
+					_, _, _ = c.UpdateExperiment(
+						context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), id,
+						httpclient.ExperimentRequest{Description: &changed},
+					)
+				},
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true, // config description differs from the drifted server value
+			},
 		},
 	})
 }
