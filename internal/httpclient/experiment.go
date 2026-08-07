@@ -36,18 +36,16 @@ type Experiment struct {
 // send only what changed (PATCH is a partial update) and soft-delete can send just
 // {deleted: true} without blanking other fields.
 type ExperimentRequest struct {
-	Name                    *string         `json:"name,omitempty"`
-	Description             *string         `json:"description,omitempty"`
-	FeatureFlagKey          *string         `json:"feature_flag_key,omitempty"`
-	FeatureFlag             json.RawMessage `json:"feature_flag,omitempty"`
-	Metrics                 json.RawMessage `json:"metrics,omitempty"`
-	MetricsSecondary        json.RawMessage `json:"metrics_secondary,omitempty"`
-	ExposureCriteria        json.RawMessage `json:"exposure_criteria,omitempty"`
-	HoldoutID               *int64          `json:"holdout_id,omitempty"`
-	Archived                *bool           `json:"archived,omitempty"`
-	Deleted                 *bool           `json:"deleted,omitempty"`
-	AllowUnknownEvents      *bool           `json:"allow_unknown_events,omitempty"`
-	UpdateFeatureFlagParams *bool           `json:"update_feature_flag_params,omitempty"`
+	Name               *string         `json:"name,omitempty"`
+	Description        *string         `json:"description,omitempty"`
+	FeatureFlagKey     *string         `json:"feature_flag_key,omitempty"`
+	Metrics            json.RawMessage `json:"metrics,omitempty"`
+	MetricsSecondary   json.RawMessage `json:"metrics_secondary,omitempty"`
+	ExposureCriteria   json.RawMessage `json:"exposure_criteria,omitempty"`
+	HoldoutID          *int64          `json:"holdout_id,omitempty"`
+	Archived           *bool           `json:"archived,omitempty"`
+	Deleted            *bool           `json:"deleted,omitempty"`
+	AllowUnknownEvents *bool           `json:"allow_unknown_events,omitempty"`
 }
 
 // ExperimentEndRequest is the body for the end sub-action.

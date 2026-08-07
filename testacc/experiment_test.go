@@ -34,7 +34,7 @@ func TestExperiment_Lifecycle(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testExperimentResourceName, "name", name),
 					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "draft"),
-					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.#", "2"),
+					resource.TestCheckResourceAttrSet(testExperimentResourceName, "feature_flag_key"),
 					resource.TestCheckResourceAttrSet(testExperimentResourceName, "id"),
 				),
 			},
@@ -68,25 +68,32 @@ func testAccExperimentConfig(name, statusBlock string) string {
 	return testAccExperimentConfigWith(name, "", statusBlock)
 }
 
-// testAccExperimentConfigWith is the shared scaffold (provider + two variants); extraAttrs are
-// injected before the status block so tests can add attributes like exposure_criteria or metrics.
+// testAccExperimentConfigWith is the shared scaffold: a multivariate posthog_feature_flag plus an
+// experiment linking it by key. The flag ignores the filter fields ship_variant rewrites, so the
+// ship tests don't fight the flag resource. extraAttrs are injected before the experiment's status
+// block so tests can add attributes like exposure_criteria or metrics.
 func testAccExperimentConfigWith(name, extraAttrs, statusBlock string) string {
 	return fmt.Sprintf(`
 provider "posthog" {}
 
+resource "posthog_feature_flag" "backing" {
+  key = %q
+  filters = jsonencode({
+    multivariate = { variants = [
+      { key = "control", rollout_percentage = 50 },
+      { key = "test", rollout_percentage = 50 },
+    ] }
+    groups = [{ properties = [], rollout_percentage = 100 }]
+  })
+  # the experiment owns the live distribution once it ships — don't revert it
+  lifecycle {
+    ignore_changes = [filters]
+  }
+}
+
 resource "posthog_experiment" "test" {
   name             = %q
-  feature_flag_key = %q
-
-  variant {
-    key                = "control"
-    name               = "Control"
-    rollout_percentage = 50
-  }
-  variant {
-    key                = "test"
-    rollout_percentage = 50
-  }
+  feature_flag_key = posthog_feature_flag.backing.key
 %s
   %s
 }
@@ -173,7 +180,7 @@ func TestExperiment_Import(t *testing.T) {
 				ResourceName:            testExperimentResourceName,
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"allow_unknown_events", "update_feature_flag_params", "status.stopped", "variant"},
+				ImportStateVerifyIgnore: []string{"allow_unknown_events", "status.stopped"},
 				ImportStateIdFunc: func(s *terraform.State) (string, error) {
 					rs, ok := s.RootModule().Resources[testExperimentResourceName]
 					if !ok {
@@ -253,7 +260,7 @@ resource "posthog_experiment" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet(testExperimentResourceName, "id"),
 					resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "draft"),
-					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.#", "0"),
+					resource.TestCheckResourceAttrPair(testExperimentResourceName, "feature_flag_key", "posthog_feature_flag.backing", "key"),
 				),
 			},
 			{Config: cfg, PlanOnly: true}, // no perpetual diff — variants belong to the linked flag
@@ -374,54 +381,6 @@ func TestExperiment_DefinitionUpdate(t *testing.T) {
 	})
 }
 
-// testAccExperimentVariantConfig builds a config with a specific control/test split (draft).
-func testAccExperimentVariantConfig(name string, controlPct, testPct int) string {
-	return fmt.Sprintf(`
-provider "posthog" {}
-
-resource "posthog_experiment" "test" {
-  name             = %q
-  feature_flag_key = %q
-
-  variant {
-    key                = "control"
-    rollout_percentage = %d
-  }
-  variant {
-    key                = "test"
-    rollout_percentage = %d
-  }
-
-  status { state = "draft" }
-}
-`, name, name, controlPct, testPct)
-}
-
-// TestExperiment_VariantUpdate changes the variant split on a draft — the only exerciser of the
-// variantsChanged -> buildFeatureFlagConfig-on-update path.
-func TestExperiment_VariantUpdate(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	name := acctest.RandomWithPrefix("tf-acc-exp-varupd")
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckExperimentDestroy,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccExperimentVariantConfig(name, 50, 50),
-				Check:  resource.TestCheckResourceAttr(testExperimentResourceName, "variant.0.rollout_percentage", "50"),
-			},
-			{
-				Config: testAccExperimentVariantConfig(name, 70, 30),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.0.rollout_percentage", "70"),
-					resource.TestCheckResourceAttr(testExperimentResourceName, "variant.1.rollout_percentage", "30"),
-				),
-			},
-		},
-	})
-}
 
 // TestExperiment_ShipLater stops an experiment with a plain end, then ships a winner on the
 // already-stopped experiment in a second apply — exercising computeTransition's same-state ship

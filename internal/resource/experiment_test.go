@@ -18,17 +18,13 @@ func stoppedStatus(state string, stopped *ExperimentStoppedModel) *ExperimentSta
 
 // --- BuildCreateRequest -----------------------------------------------------
 
-func TestExperimentBuildCreateRequest_VariantsAndMetrics(t *testing.T) {
+func TestExperimentBuildCreateRequest_Fields(t *testing.T) {
 	ops := ExperimentOps{}
 	model := ExperimentTFModel{
-		Name:           types.StringValue("Pricing test"),
-		Description:    types.StringValue("Does the redesign convert?"),
-		FeatureFlagKey: types.StringValue("pricing-test"),
-		Variant: []ExperimentVariantModel{
-			{Key: types.StringValue("control"), Name: types.StringValue("Original"), RolloutPercentage: types.Int64Value(50)},
-			{Key: types.StringValue("test"), Name: types.StringValue("Redesign"), RolloutPercentage: types.Int64Value(50)},
-		},
-		Metrics:            jsontypes.NewNormalizedValue(`[{"kind":"ExperimentFunnelsQuery","name":"Signup"}]`),
+		Name:               types.StringValue("Pricing test"),
+		Description:        types.StringValue("Does the redesign convert?"),
+		FeatureFlagKey:     types.StringValue("pricing-test"),
+		Metrics:            jsontypes.NewNormalizedValue(`[{"kind":"ExperimentMetric","metric_type":"mean","name":"Rev"}]`),
 		HoldoutID:          types.Int64Value(42),
 		AllowUnknownEvents: types.BoolValue(true),
 		Status:             stoppedStatus(stateDraft, nil),
@@ -44,22 +40,13 @@ func TestExperimentBuildCreateRequest_VariantsAndMetrics(t *testing.T) {
 	assert.Equal(t, int64(42), *req.body.HoldoutID)
 	require.NotNil(t, req.body.AllowUnknownEvents)
 	assert.True(t, *req.body.AllowUnknownEvents)
-
 	// metrics pass through verbatim as raw JSON
-	assert.JSONEq(t, `[{"kind":"ExperimentFunnelsQuery","name":"Signup"}]`, string(req.body.Metrics))
-
-	// variants serialize into feature_flag.filters.multivariate.variants
-	var ff map[string]interface{}
-	require.NoError(t, json.Unmarshal(req.body.FeatureFlag, &ff))
-	variants := ff["filters"].(map[string]interface{})["multivariate"].(map[string]interface{})["variants"].([]interface{})
-	require.Len(t, variants, 2)
-	first := variants[0].(map[string]interface{})
-	assert.Equal(t, "control", first["key"])
-	assert.Equal(t, "Original", first["name"])
-	assert.Equal(t, float64(50), first["rollout_percentage"])
+	assert.JSONEq(t, `[{"kind":"ExperimentMetric","metric_type":"mean","name":"Rev"}]`, string(req.body.Metrics))
+	// draft create runs no lifecycle actions
+	assert.Empty(t, req.transition.actions)
 }
 
-func TestExperimentBuildCreateRequest_NoVariants_OmitsFeatureFlag(t *testing.T) {
+func TestExperimentBuildCreateRequest_OmitsEmptyJSON(t *testing.T) {
 	ops := ExperimentOps{}
 	model := ExperimentTFModel{
 		Name:           types.StringValue("x"),
@@ -69,7 +56,6 @@ func TestExperimentBuildCreateRequest_NoVariants_OmitsFeatureFlag(t *testing.T) 
 	}
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 	require.False(t, diags.HasError())
-	assert.Nil(t, req.body.FeatureFlag)
 	assert.Nil(t, req.body.Metrics)
 }
 
@@ -192,27 +178,6 @@ func TestExperimentBuildUpdateRequest_ShipLater(t *testing.T) {
 	assert.Empty(t, req2.transition.actions)
 }
 
-// variant edits are only sent when changed, and carry update_feature_flag_params opt-in.
-func TestExperimentBuildUpdateRequest_VariantEdits(t *testing.T) {
-	ops := ExperimentOps{}
-	variants := func(pct int64) []ExperimentVariantModel {
-		return []ExperimentVariantModel{
-			{Key: types.StringValue("control"), RolloutPercentage: types.Int64Value(100 - pct)},
-			{Key: types.StringValue("test"), RolloutPercentage: types.Int64Value(pct)},
-		}
-	}
-
-	unchanged := ExperimentTFModel{Name: types.StringValue("e"), FeatureFlagKey: types.StringValue("f"), Variant: variants(50), Status: stoppedStatus(stateRunning, nil)}
-	reqSame, _ := ops.BuildUpdateRequest(context.Background(), unchanged, unchanged)
-	assert.Nil(t, reqSame.body.FeatureFlag, "unchanged variants should not resend flag config")
-
-	planChanged := ExperimentTFModel{Name: types.StringValue("e"), FeatureFlagKey: types.StringValue("f"), Variant: variants(60), UpdateFeatureFlagParams: types.BoolValue(true), Status: stoppedStatus(stateRunning, nil)}
-	reqChanged, _ := ops.BuildUpdateRequest(context.Background(), planChanged, unchanged)
-	require.NotNil(t, reqChanged.body.FeatureFlag)
-	require.NotNil(t, reqChanged.body.UpdateFeatureFlagParams)
-	assert.True(t, *reqChanged.body.UpdateFeatureFlagParams)
-}
-
 // --- MapResponseToModel -----------------------------------------------------
 
 // Normalization: reordered + extra API keys in metrics must not produce a diff.
@@ -237,8 +202,8 @@ func TestExperimentMapResponseToModel_MetricsNoPerpetualDiff(t *testing.T) {
 	assert.True(t, eq, "metrics state should semantically equal config; got %s", model.Metrics.ValueString())
 }
 
-// Config-only: ship_variant / release_to_everyone / conclusion_comment must not be
-// clobbered from the API; conclusion is refreshed from the API.
+// The whole stopped block is config-only: MapResponseToModel must not clobber it from the API,
+// including conclusion (write-once, not read back).
 func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 	ops := ExperimentOps{}
 	model := ExperimentTFModel{
@@ -250,13 +215,14 @@ func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 		}),
 	}
 
-	conclusion := "won"
+	// The API returns different values; state must keep the configured ones.
+	apiConclusion := "lost"
 	respComment := "server comment that must be ignored"
 	resp := httpclient.Experiment{
 		ID:                9,
 		Name:              "exp",
 		Status:            stateStopped,
-		Conclusion:        &conclusion,
+		Conclusion:        &apiConclusion,
 		ConclusionComment: &respComment,
 	}
 
@@ -266,35 +232,8 @@ func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 	assert.Equal(t, "test", model.Status.Stopped.ShipVariant.ValueString(), "ship_variant is config-only")
 	assert.True(t, model.Status.Stopped.ReleaseToEveryone.ValueBool(), "release_to_everyone is config-only")
 	assert.Equal(t, "configured comment", model.Status.Stopped.ConclusionComment.ValueString(), "conclusion_comment is config-only")
-	assert.Equal(t, "won", model.Status.Stopped.Conclusion.ValueString(), "conclusion is readable")
+	assert.Equal(t, "won", model.Status.Stopped.Conclusion.ValueString(), "conclusion is config-only (not read back)")
 	assert.Equal(t, stateStopped, model.Status.State.ValueString())
-}
-
-// Variants are config-only: MapResponseToModel never reads them back from the API — declared
-// variants (create mode) are kept as-is, and omitted variants (link mode) stay empty.
-func TestExperimentMapResponseToModel_VariantsConfigOnly(t *testing.T) {
-	ops := ExperimentOps{}
-	resp := httpclient.Experiment{
-		ID: 3, Name: "exp", Status: stateRunning,
-		Parameters: json.RawMessage(`{"feature_flag_variants":[` +
-			`{"key":"control","rollout_percentage":50},{"key":"test","rollout_percentage":50}]}`),
-	}
-
-	// Declared variants are kept, not overwritten by the API's parameters.
-	declared := ExperimentTFModel{Variant: []ExperimentVariantModel{
-		{Key: types.StringValue("control"), RolloutPercentage: types.Int64Value(60)},
-		{Key: types.StringValue("test"), RolloutPercentage: types.Int64Value(40)},
-	}}
-	diags := ops.MapResponseToModel(context.Background(), resp, &declared)
-	require.False(t, diags.HasError(), diags.Errors())
-	require.Len(t, declared.Variant, 2)
-	assert.Equal(t, int64(60), declared.Variant[0].RolloutPercentage.ValueInt64(), "declared variants kept, not overwritten by the API")
-
-	// Link mode (variants omitted): the API's variants are NOT populated into state.
-	linked := ExperimentTFModel{}
-	diags = ops.MapResponseToModel(context.Background(), resp, &linked)
-	require.False(t, diags.HasError(), diags.Errors())
-	assert.Empty(t, linked.Variant, "link mode: variants not read back from the API")
 }
 
 // Import starts from an empty model (nil status block): status must be populated without panic.

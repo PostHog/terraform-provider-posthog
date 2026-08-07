@@ -3,33 +3,33 @@
 page_title: "posthog_experiment Resource - posthog"
 subcategory: ""
 description: |-
-  Manage PostHog experiments (A/B tests) — definition, variants, metrics, and the draft → running → paused → stopped lifecycle. Provide variant blocks to auto-create a backing feature flag from feature_flag_key (owned by the experiment), or omit them to link an existing multivariate flag with that key (e.g. a posthog_feature_flag resource). Business rules (rollout sums, variant counts, transition legality, metric schema) are enforced by the PostHog API at apply time, not by the provider.
+  Manage PostHog experiments (A/B tests) — definition, metrics, and the draft → running → paused → stopped lifecycle. The backing feature flag is a separate posthog_feature_flag resource referenced by feature_flag_key; the experiment attaches metrics and drives the lifecycle (including shipping a winning variant on stop). Business rules (transition legality, metric schema) are enforced by the PostHog API at apply time, not by the provider.
 ---
 
 # posthog_experiment (Resource)
 
-Manage PostHog experiments (A/B tests) — definition, variants, metrics, and the draft → running → paused → stopped lifecycle. Provide `variant` blocks to auto-create a backing feature flag from `feature_flag_key` (owned by the experiment), or omit them to link an existing multivariate flag with that key (e.g. a `posthog_feature_flag` resource). Business rules (rollout sums, variant counts, transition legality, metric schema) are enforced by the PostHog API at apply time, not by the provider.
+Manage PostHog experiments (A/B tests) — definition, metrics, and the draft → running → paused → stopped lifecycle. The backing feature flag is a separate `posthog_feature_flag` resource referenced by `feature_flag_key`; the experiment attaches metrics and drives the lifecycle (including shipping a winning variant on stop). Business rules (transition legality, metric schema) are enforced by the PostHog API at apply time, not by the provider.
 
 ## Example Usage
 
 ```terraform
-# A running two-variant experiment with a metric.
-# The backing feature flag "pricing-page-test" is auto-created and owned by the experiment.
+# The backing flag is a separate posthog_feature_flag resource; the experiment references it by key.
+resource "posthog_feature_flag" "pricing" {
+  key = "pricing-page-test"
+  filters = jsonencode({
+    multivariate = { variants = [
+      { key = "control", name = "Original", rollout_percentage = 50 },
+      { key = "test", name = "Redesign", rollout_percentage = 50 },
+    ] }
+    groups = [{ properties = [], rollout_percentage = 100 }]
+  })
+}
+
+# A running experiment with a metric, linked to the flag above.
 resource "posthog_experiment" "pricing" {
   name             = "Pricing page test"
   description      = "Does the new pricing layout lift conversion?"
-  feature_flag_key = "pricing-page-test"
-
-  variant {
-    key                = "control"
-    name               = "Original"
-    rollout_percentage = 50
-  }
-  variant {
-    key                = "test"
-    name               = "Redesign"
-    rollout_percentage = 50
-  }
+  feature_flag_key = posthog_feature_flag.pricing.key
 
   # Metrics and exposure are JSON-normalized: compared semantically, so key ordering and
   # server-computed fields (metric uuid/fingerprint) do not produce a diff.
@@ -38,55 +38,22 @@ resource "posthog_experiment" "pricing" {
       kind        = "ExperimentMetric"
       metric_type = "mean"
       name        = "Revenue per user"
-      source = {
-        kind  = "EventsNode"
-        event = "purchase"
-        math  = "sum"
-      }
+      source      = { kind = "EventsNode", event = "purchase", math = "sum" }
     }
   ])
 
-  # filter_test_accounts lives inside the exposure_criteria blob as filterTestAccounts (camelCase),
-  # not a top-level field.
-  exposure_criteria = jsonencode({
-    filterTestAccounts = true
-  })
+  # filter_test_accounts lives inside exposure_criteria as filterTestAccounts (camelCase).
+  exposure_criteria = jsonencode({ filterTestAccounts = true })
 
   status {
     state = "running"
   }
 }
 
-# A stopped experiment shipping the winning variant to everyone.
-resource "posthog_experiment" "onboarding" {
-  name             = "Onboarding checklist"
-  feature_flag_key = "onboarding-checklist"
-
-  variant {
-    key                = "control"
-    rollout_percentage = 50
-  }
-  variant {
-    key                = "test"
-    rollout_percentage = 50
-  }
-
-  status {
-    state = "stopped"
-    stopped {
-      ship_variant        = "test"
-      release_to_everyone = false # distribution-only: preserves the flag's release conditions
-      conclusion          = "won"
-      conclusion_comment  = "New checklist lifted activation 8%"
-    }
-  }
-}
-
-# Linking an existing feature flag instead of auto-creating one: omit the variant blocks and
-# point feature_flag_key at a flag managed by a posthog_feature_flag resource. The variant split
-# is owned by that flag.
-resource "posthog_feature_flag" "checkout" {
-  key = "checkout-flow"
+# Shipping a winning variant. ship_variant rewrites the flag's distribution to the winner, so tell
+# the flag resource not to revert it with lifecycle.ignore_changes on filters.
+resource "posthog_feature_flag" "onboarding" {
+  key = "onboarding-checklist"
   filters = jsonencode({
     multivariate = { variants = [
       { key = "control", rollout_percentage = 50 },
@@ -94,12 +61,23 @@ resource "posthog_feature_flag" "checkout" {
     ] }
     groups = [{ properties = [], rollout_percentage = 100 }]
   })
+  lifecycle {
+    ignore_changes = [filters] # the experiment owns the live distribution once it ships
+  }
 }
 
-resource "posthog_experiment" "checkout" {
-  name             = "Checkout flow test"
-  feature_flag_key = posthog_feature_flag.checkout.key # link the existing flag
-  status { state = "draft" }
+resource "posthog_experiment" "onboarding" {
+  name             = "Onboarding checklist"
+  feature_flag_key = posthog_feature_flag.onboarding.key
+
+  status {
+    state = "stopped"
+    stopped {
+      ship_variant       = "test"
+      conclusion         = "won"
+      conclusion_comment = "New checklist lifted activation 8%"
+    }
+  }
 }
 ```
 
@@ -108,7 +86,7 @@ resource "posthog_experiment" "checkout" {
 
 ### Required
 
-- `feature_flag_key` (String) Key of the backing feature flag. With `variant` blocks this creates a new flag with this key (the key must be unused). Omit `variant` blocks to instead link an existing multivariate flag with this key (e.g. `posthog_feature_flag.<name>.key`). Changing this forces a new experiment (a linked flag cannot be re-keyed in place).
+- `feature_flag_key` (String) Key of the multivariate feature flag this experiment runs on. Reference a `posthog_feature_flag` resource — e.g. `feature_flag_key = posthog_feature_flag.<name>.key`. The flag must already exist and be multivariate (2–20 variants, one keyed `control`). Changing this forces a new experiment (a linked flag cannot be re-keyed in place).
 - `name` (String) Experiment name.
 
 ### Optional
@@ -121,8 +99,6 @@ resource "posthog_experiment" "checkout" {
 - `metrics_secondary` (String) Secondary metrics as a JSON array. Same semantic-compare handling as `metrics`.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `status` (Block, Optional) Desired lifecycle state (required). Declare this block to drive the experiment through `draft` → `running` → `paused` → `stopped`. The provider maps the desired `state` (vs. the current state) to the matching launch/pause/resume/end/ship sub-action. Backward transitions have no API call and return an error. Note: a transition spanning two sub-actions in one apply (e.g. creating directly as `paused` = launch+pause, or `stopped` = launch+end) is not atomic — if the second action fails the experiment may be left mid-transition; re-apply to reconcile, or advance one state at a time. (see [below for nested schema](#nestedblock--status))
-- `update_feature_flag_params` (Boolean) Set to `true` to allow editing the variant split (`variant` blocks) on a launched experiment. The API rejects flag-config edits on a running experiment unless this is set. Not read back from the API.
-- `variant` (Block List) Multivariate split for the backing feature flag (create mode). Provide at least two; rollout percentages must sum to 100 and the API enforces the 2–20 variant range. Omit these blocks entirely to link an existing multivariate flag referenced by `feature_flag_key`. Config-only, not re-read, so an out-of-band edit (or the 100/0 split left by shipping a winner) is not tracked as drift. (see [below for nested schema](#nestedblock--variant))
 
 ### Read-Only
 
@@ -143,22 +119,8 @@ Optional:
 
 - `conclusion` (String) Conclusion recorded when the experiment is stopped (e.g. `won`, `lost`, `inconclusive`). Write-once: applied by the stop/ship action and not read back or updated afterward (editing it on an already-stopped experiment is a no-op).
 - `conclusion_comment` (String) Free-text note recorded alongside the conclusion. Config-only.
-- `release_to_everyone` (Boolean) When shipping, release to everyone (catch-all) instead of preserving the flag's release conditions. Defaults to `false`. Config-only.
-- `ship_variant` (String) Key of the winning variant to ship. Rewrites the flag so this variant gets 100% and ends the experiment. Destructive and irreversible via the API. Config-only (not read back); re-ships only when this value changes. Clearing it does not un-ship.
-
-
-
-<a id="nestedblock--variant"></a>
-### Nested Schema for `variant`
-
-Required:
-
-- `key` (String) Variant key (e.g. `control`, `test`).
-- `rollout_percentage` (Number) Percentage of traffic assigned to this variant (0-100).
-
-Optional:
-
-- `name` (String) Human-readable variant name.
+- `release_to_everyone` (Boolean) When shipping, prepend a catch-all release condition (roll out to everyone) instead of only flipping the variant distribution. Defaults to `false`. Config-only.
+- `ship_variant` (String) Key of the winning variant to ship. Rewrites the linked flag's distribution so this variant gets 100% and ends the experiment. If the flag is managed by a `posthog_feature_flag` resource, set `lifecycle { ignore_changes = [filters] }` on it so it does not revert the shipped distribution. Config-only; re-ships only when this value changes; clearing it does not un-ship.
 
 ## Import
 
