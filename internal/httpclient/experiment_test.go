@@ -153,7 +153,7 @@ func TestEndExperiment(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "won", body["conclusion"])
 
-		writeJSONResponse(t, w, Experiment{ID: 42, Status: "stopped", Conclusion: util.StringPtr("won")})
+		writeJSONResponse(t, w, Experiment{ID: 42, Status: "stopped"})
 	}))
 	defer server.Close()
 

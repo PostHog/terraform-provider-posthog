@@ -215,16 +215,9 @@ func TestExperimentMapResponseToModel_ConfigOnlyShipFields(t *testing.T) {
 		}),
 	}
 
-	// The API returns different values; state must keep the configured ones.
-	apiConclusion := "lost"
-	respComment := "server comment that must be ignored"
-	resp := httpclient.Experiment{
-		ID:                9,
-		Name:              "exp",
-		Status:            stateStopped,
-		Conclusion:        &apiConclusion,
-		ConclusionComment: &respComment,
-	}
+	// The stopped block's fields are not part of the API response struct at all, so they can only
+	// ever come from config — MapResponseToModel must leave them intact.
+	resp := httpclient.Experiment{ID: 9, Name: "exp", Status: stateStopped}
 
 	diags := ops.MapResponseToModel(context.Background(), resp, &model)
 	require.False(t, diags.HasError(), diags.Errors())
