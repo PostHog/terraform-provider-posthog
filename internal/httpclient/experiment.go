@@ -6,17 +6,14 @@ import (
 	"fmt"
 )
 
-// Experiment is the API representation of a PostHog experiment. JSON-blob fields
-// (parameters, feature_flag, metrics, metrics_secondary, exposure_criteria) are kept as
-// raw JSON so the resource layer can normalize them for state (semantic compare), the same
-// way feature_flag filters are handled. Scalar/lifecycle fields are typed.
+// Experiment is the API representation of a PostHog experiment. The JSON-blob fields
+// (metrics, metrics_secondary, exposure_criteria) are kept as raw JSON so the resource layer
+// can normalize them for state (semantic compare); scalar/lifecycle fields are typed.
 type Experiment struct {
 	ID                int64           `json:"id"`
 	Name              string          `json:"name"`
 	Description       *string         `json:"description,omitempty"`
 	FeatureFlagKey    string          `json:"feature_flag_key,omitempty"`
-	FeatureFlag       json.RawMessage `json:"feature_flag,omitempty"`
-	Parameters        json.RawMessage `json:"parameters,omitempty"`
 	Metrics           json.RawMessage `json:"metrics,omitempty"`
 	MetricsSecondary  json.RawMessage `json:"metrics_secondary,omitempty"`
 	ExposureCriteria  json.RawMessage `json:"exposure_criteria,omitempty"`
