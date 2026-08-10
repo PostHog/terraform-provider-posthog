@@ -62,6 +62,27 @@ func TestExperimentBuildCreateRequest_OmitsEmptyJSON(t *testing.T) {
 	assert.Nil(t, req.body.Metrics)
 }
 
+// TestExperimentBuildUpdateRequest_SendsAllowUnknownEvents guards that the unknown-event bypass
+// rides along on updates (not just create): the API re-validates metrics on the definition PATCH,
+// so a draft launched with a not-yet-ingested-event metric would otherwise be rejected.
+func TestExperimentBuildUpdateRequest_SendsAllowUnknownEvents(t *testing.T) {
+	ops := ExperimentOps{}
+	base := func(state string) ExperimentTFModel {
+		return ExperimentTFModel{
+			Name:               types.StringValue("exp"),
+			FeatureFlagKey:     types.StringValue("exp-flag"),
+			AllowUnknownEvents: types.BoolValue(true),
+			Status:             stoppedStatus(state, nil),
+		}
+	}
+
+	req, diags := ops.BuildUpdateRequest(context.Background(), base(stateRunning), base(stateDraft))
+	require.False(t, diags.HasError(), diags.Errors())
+	require.NotNil(t, req.body.AllowUnknownEvents)
+	assert.True(t, *req.body.AllowUnknownEvents)
+	assert.Equal(t, []lifecycleAction{actionLaunch}, req.transition.actions)
+}
+
 // --- BuildUpdateRequest: status transition dispatch table -------------------
 
 func TestExperimentBuildUpdateRequest_TransitionTable(t *testing.T) {

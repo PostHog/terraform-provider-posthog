@@ -695,6 +695,9 @@ func TestExperiment_AllowUnknownEventsBypass(t *testing.T) {
     source      = { kind = "EventsNode", event = %q, math = "total" }
   }])`, "tf_acc_missing_"+name)
 	cfg := testAccExperimentConfigWith(name, metricsAttr, `status { state = "draft" }`)
+	// Launching re-PATCHes the definition, which re-validates the metric — so the bypass must ride
+	// along on the update too, not just create (regression guard for allow_unknown_events on update).
+	cfgRunning := testAccExperimentConfigWith(name, metricsAttr, `status { state = "running" }`)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -709,6 +712,10 @@ func TestExperiment_AllowUnknownEventsBypass(t *testing.T) {
 				),
 			},
 			{Config: cfg, PlanOnly: true},
+			{ // launch with the unknown-event metric still set — the update PATCH must not re-reject it
+				Config: cfgRunning,
+				Check:  resource.TestCheckResourceAttr(testExperimentResourceName, "status.state", "running"),
+			},
 		},
 	})
 }

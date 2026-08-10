@@ -179,7 +179,8 @@ func (o ExperimentOps) Schema() schema.Schema {
 			"allow_unknown_events": schema.BoolAttribute{
 				Optional: true,
 				MarkdownDescription: "Opt-in bypass of the API validation that rejects metrics referencing not-yet-ingested " +
-					"events. Create-time only and not read back from the API.",
+					"events. Sent on every write (so a draft with such a metric can still be launched/edited); config-only, " +
+					"not read back from the API.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -251,6 +252,10 @@ func applyCommonExperimentFields(body *httpclient.ExperimentRequest, model Exper
 	body.MetricsSecondary = rawFromNormalized(model.MetricsSecondary)
 	body.ExposureCriteria = rawFromNormalized(model.ExposureCriteria)
 	body.HoldoutID = util.Int64PtrFromValue(model.HoldoutID)
+	// The API re-validates metrics on every write, so the unknown-event bypass must ride along on
+	// updates too — otherwise an experiment whose metric references a not-yet-ingested event could be
+	// created but never edited or launched (the definition PATCH would re-trip the validation).
+	body.AllowUnknownEvents = util.BoolPtrFromValue(model.AllowUnknownEvents)
 }
 
 func (o ExperimentOps) BuildCreateRequest(_ context.Context, model ExperimentTFModel) (experimentAPIRequest, diag.Diagnostics) {
@@ -259,7 +264,6 @@ func (o ExperimentOps) BuildCreateRequest(_ context.Context, model ExperimentTFM
 	body := httpclient.ExperimentRequest{}
 	applyCommonExperimentFields(&body, model)
 	body.FeatureFlagKey = util.StringPtrFromValue(model.FeatureFlagKey)
-	body.AllowUnknownEvents = util.BoolPtrFromValue(model.AllowUnknownEvents)
 	// No feature_flag config is sent: the experiment links the existing flag named by
 	// feature_flag_key as-is (the flag is owned by a posthog_feature_flag resource).
 

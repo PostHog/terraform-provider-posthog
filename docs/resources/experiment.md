@@ -91,7 +91,7 @@ resource "posthog_experiment" "onboarding" {
 
 ### Optional
 
-- `allow_unknown_events` (Boolean) Opt-in bypass of the API validation that rejects metrics referencing not-yet-ingested events. Create-time only and not read back from the API.
+- `allow_unknown_events` (Boolean) Opt-in bypass of the API validation that rejects metrics referencing not-yet-ingested events. Sent on every write (so a draft with such a metric can still be launched/edited); config-only, not read back from the API.
 - `description` (String) Experiment description.
 - `exposure_criteria` (String) Exposure criteria as a JSON object (this is where `filterTestAccounts` lives). Same semantic-compare handling as `metrics`.
 - `holdout_id` (Number) ID of an existing holdout group to reference. Holdout management itself is out of scope.
