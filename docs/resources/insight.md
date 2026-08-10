@@ -71,6 +71,7 @@ resource "posthog_insight" "pageviews_trend" {
 ### Read-Only
 
 - `id` (Number) Numeric ID of the insight.
+- `short_id` (String) Short ID of the insight (the value shown in the insight's URL). Use this with the `posthog_insight` data source to look up the insight.
 
 ## Import
 

@@ -29,16 +29,6 @@ const (
 	hogQLDataVizKind = "DataVisualizationNode"
 	hogQLQueryKind   = "HogQLQuery"
 )
-
-// insightQueryServerFields are query-internal fields that PostHog injects on
-// response and would otherwise produce drift after import.
-var insightQueryServerFields = map[string]struct{}{
-	"version":   {},
-	"result":    {},
-	"hogql":     {},
-	"is_cached": {},
-}
-
 func NewInsight() resource.Resource {
 	return core.NewGenericResource[InsightResourceTFModel, httpclient.InsightRequest, httpclient.Insight](
 		InsightOps{},
@@ -49,6 +39,7 @@ func NewInsight() resource.Resource {
 type InsightResourceTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
+	ShortID        types.String `tfsdk:"short_id"`
 	Name           types.String `tfsdk:"name"`
 	DerivedName    types.String `tfsdk:"derived_name"`
 	Description    types.String `tfsdk:"description"`
@@ -78,6 +69,13 @@ func (o InsightOps) Schema() schema.Schema {
 				},
 			},
 			"project_id": core.ProjectIDSchemaAttribute(),
+			"short_id": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "Short ID of the insight (the value shown in the insight's URL). Use this with the `posthog_insight` data source to look up the insight.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"name": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Insight name.",
@@ -237,6 +235,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	var diags diag.Diagnostics
 
 	model.ID = types.Int64Value(resp.ID)
+	model.ShortID = core.PtrToStringNullIfEmptyTrimmed(resp.ShortID)
 	model.Deleted = core.PtrToBool(resp.Deleted)
 
 	// String fields - convert empty/whitespace to null
@@ -350,7 +349,7 @@ func normalizeQueryForState(apiQuery map[string]interface{}, userQueryJSON strin
 		return "", nil
 	}
 
-	cleanedQuery := util.StripFields(apiQuery, insightQueryServerFields)
+	cleanedQuery := util.StripFields(apiQuery, httpclient.InsightQueryServerFields)
 
 	userQueryJSON = strings.TrimSpace(userQueryJSON)
 	if userQueryJSON == "" {
