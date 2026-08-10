@@ -58,6 +58,29 @@ resource "posthog_feature_flag" "onboarding_checklist" {
   }
 }
 
+# -----------------------------------------------------------------------------
+# Alternative: link a flag by bare key (no posthog_feature_flag resource)
+#
+# feature_flag_key is just a string, so you can point at a flag you don't manage
+# in Terraform — one you created in the PostHog UI, or a brand-new key that
+# PostHog auto-creates a default control/test flag for. Then you drop the flag
+# resource above entirely and reference the key directly:
+#
+#   resource "posthog_experiment" "onboarding_checklist" {
+#     name             = "Onboarding checklist"
+#     feature_flag_key = "onboarding-checklist-test"  # bare key, not a resource ref
+#     status { state = "draft" }
+#   }
+#
+# Trade-offs vs. the managed flag above:
+#   + Simpler to ship: since Terraform doesn't own the flag, nothing reverts the
+#     shipped distribution — no lifecycle.ignore_changes needed.
+#   - The flag must already be multivariate with a "control" variant (or you
+#     accept PostHog's auto-created default split — you don't control the keys).
+#   - On `terraform destroy` the experiment is removed but the flag is left in
+#     place (correct for a UI-managed flag; an orphan for an auto-created one).
+# -----------------------------------------------------------------------------
+
 # =============================================================================
 # The experiment
 #
