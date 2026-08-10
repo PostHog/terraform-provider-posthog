@@ -155,6 +155,34 @@ func TestInsightVariable_ClearValues(t *testing.T) {
 	})
 }
 
+// TestInsightVariable_BooleanAndDate covers the Boolean and Date types, whose
+// defaults are bare JSON scalars: a JSON boolean and an ISO date string, both of
+// which PostHog stores verbatim.
+func TestInsightVariable_BooleanAndDate(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInsightVariableDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightVariableBooleanAndDate(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight_variable.boolean", "type", "Boolean"),
+					resource.TestCheckResourceAttr("posthog_insight_variable.boolean", "default_value_json", "true"),
+					resource.TestCheckResourceAttrSet("posthog_insight_variable.boolean", "code_name"),
+					resource.TestCheckResourceAttr("posthog_insight_variable.date", "type", "Date"),
+					resource.TestCheckResourceAttr("posthog_insight_variable.date", "default_value_json", `"2026-01-01"`),
+					resource.TestCheckResourceAttrSet("posthog_insight_variable.date", "code_name"),
+				),
+			},
+		},
+	})
+}
+
 func TestInsightVariable_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -219,6 +247,24 @@ resource "posthog_insight_variable" "test" {
   default_value_json = jsonencode("prod")
 }
 `, name)
+}
+
+func testAccInsightVariableBooleanAndDate(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight_variable" "boolean" {
+  name               = %[1]q
+  type               = "Boolean"
+  default_value_json = jsonencode(true)
+}
+
+resource "posthog_insight_variable" "date" {
+  name               = %[2]q
+  type               = "Date"
+  default_value_json = jsonencode("2026-01-01")
+}
+`, name+"-bool", name+"-date")
 }
 
 func testAccInsightVariableListCleared(name string) string {
