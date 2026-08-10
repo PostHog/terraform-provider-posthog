@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/internal/httpclient"
@@ -204,6 +205,117 @@ func TestProjectSettings_NetworkPayloadCapture(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestProjectSettings_TestAccountFilters exercises the test_account_filters JSON
+// array end-to-end, including the cohort_name drift proof. It creates a
+// posthog_cohort, references its id from a test_account_filters cohort filter, and
+// applies. PostHog injects a server-computed cohort_name into that filter object;
+// the final PlanOnly step asserts NO perpetual diff, proving the provider strips it.
+// The CheckDestroy resets test_account_filters to an empty array so the shared
+// project is not left with the test's filters.
+func TestProjectSettings_TestAccountFilters(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	projectID := getProjectID()
+	cohortName := acctest.RandomWithPrefix("tf-acc-taf")
+	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+
+	// Capture the project's current test_account_filters so we can restore it after
+	// the test rather than leaving the shared project's internal-users definition
+	// altered for other consumers.
+	before, _, err := client.GetEnvironment(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("reading environment before test: %v", err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(*terraform.State) error {
+			// Two-stage teardown: the step-3 "cleared" config drops the cohort
+			// reference so the cohort can be deleted, while this CheckDestroy restores
+			// the project's ORIGINAL filters (captured in `before`) for other consumers.
+			// Restore the original filters. If the project had none, reset to an
+			// empty array (we cannot express "unset" via PATCH, and empty is the
+			// neutral no-filters state).
+			restore := before.TestAccountFilters
+			if restore == nil {
+				restore = &[]interface{}{}
+			}
+			// Same for the sibling toggle: with omitempty a nil pointer is dropped from
+			// the PATCH, leaving the test's value in place, so reset to false (the neutral
+			// default) when the project originally had it unset.
+			restoreDefaultChecked := before.TestAccountFiltersDefaultChecked
+			if restoreDefaultChecked == nil {
+				f := false
+				restoreDefaultChecked = &f
+			}
+			if _, _, err := client.UpdateEnvironment(context.Background(), projectID, httpclient.EnvironmentSettingsRequest{
+				TestAccountFilters:               restore,
+				TestAccountFiltersDefaultChecked: restoreDefaultChecked,
+			}); err != nil {
+				return fmt.Errorf("restoring test_account_filters after test: %w", err)
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectSettingsConfigTestAccountFilters(cohortName, cohortFilterExpr, true),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_project_settings.test", "test_account_filters"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "test_account_filters_default_checked", "true"),
+					resource.TestCheckResourceAttrSet("posthog_cohort.test", "id"),
+				),
+			},
+			{
+				// The key proof: PostHog injected cohort_name into the cohort filter,
+				// but the provider strips it, so re-planning the same config yields no diff.
+				Config:   testAccProjectSettingsConfigTestAccountFilters(cohortName, cohortFilterExpr, true),
+				PlanOnly: true,
+			},
+			{
+				// Clear the cohort reference before teardown: project_settings destroy
+				// is a no-op (it does not reset filters), so without this the cohort
+				// delete would fail — PostHog refuses to delete a cohort still
+				// referenced by a project's test account filters.
+				Config: testAccProjectSettingsConfigTestAccountFilters(cohortName, "jsonencode([])", false),
+				Check: resource.TestCheckResourceAttr(
+					"posthog_project_settings.test", "test_account_filters", "[]",
+				),
+			},
+		},
+	})
+}
+
+// cohortFilterExpr is the jsonencode expression referencing the cohort resource's id
+// from a test_account_filters cohort filter.
+const cohortFilterExpr = `jsonencode([
+    {
+      key      = "id"
+      type     = "cohort"
+      value    = posthog_cohort.test.id
+      operator = "in"
+    }
+  ])`
+
+// testAccProjectSettingsConfigTestAccountFilters builds a project_settings config that
+// references a posthog_cohort. filtersExpr is the HCL expression for
+// test_account_filters (e.g. cohortFilterExpr or `jsonencode([])` to clear it, keeping
+// the cohort resource so it can be destroyed cleanly).
+func testAccProjectSettingsConfigTestAccountFilters(cohortName, filtersExpr string, defaultChecked bool) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_cohort" "test" {
+  name = %q
+}
+
+resource "posthog_project_settings" "test" {
+  test_account_filters                 = %s
+  test_account_filters_default_checked = %t
+}
+`, cohortName, filtersExpr, defaultChecked)
 }
 
 func testAccProjectSettingsConfig(heatmaps, sessionRecording, surveys bool) string {

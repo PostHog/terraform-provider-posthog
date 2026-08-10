@@ -28,6 +28,11 @@ These settings live on the PostHog environment object (`/api/environments/{id}/`
 ## Example Usage
 
 ```terraform
+# A cohort referenced by the test_account_filters below (internal/test users).
+resource "posthog_cohort" "internal" {
+  name = "Internal users"
+}
+
 # Manage environment-level settings for a project.
 # Any omitted attribute is left at PostHog's current value.
 resource "posthog_project_settings" "example" {
@@ -54,6 +59,21 @@ resource "posthog_project_settings" "example" {
     record_headers = true
     record_body    = false
   }
+
+  # The "internal and test users" filter list every managed insight/hog function
+  # references via filter_test_accounts. Managing it here makes that shared
+  # definition owned by Terraform. A filter object may reference a cohort; PostHog
+  # injects a read-only cohort_name which the provider strips, so no perpetual diff.
+  test_account_filters = jsonencode([
+    {
+      key      = "id"
+      type     = "cohort"
+      value    = posthog_cohort.internal.id
+      operator = "in"
+    }
+  ])
+  # Apply the filters above by default across the project.
+  test_account_filters_default_checked = true
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
@@ -78,6 +98,8 @@ resource "posthog_project_settings" "minimal" {
 - `session_recording_network_payload_capture_config` (Attributes) Controls whether session replay records the headers and bodies of captured network requests. Only takes effect when `capture_performance_opt_in` is `true`. **Security:** recorded headers and bodies can contain sensitive data such as `Authorization` tokens, cookies, and PII from request/response payloads — enable these deliberately and review PostHog's network-capture redaction options in your SDK configuration. PostHog replaces this JSON object wholesale on update, so both `record_headers` and `record_body` must be set when the block is configured; omitting the whole block leaves the current PostHog value untouched. (see [below for nested schema](#nestedatt--session_recording_network_payload_capture_config))
 - `session_recording_opt_in` (Boolean) Whether session recording (recording user sessions) is enabled.
 - `surveys_opt_in` (Boolean) Whether surveys are enabled.
+- `test_account_filters` (String) The **internal and test users** filter list as a JSON array of filter objects — the definition every managed insight and hog function references through `filter_test_accounts`. Managing it here makes that shared definition owned by Terraform, so a UI edit surfaces as drift instead of silently changing what all filtered insights measure. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. A filter object may reference a cohort (`{"key":"id","type":"cohort","value":<cohort_id>,"operator":"in"}`); PostHog injects a read-only `cohort_name` into such objects, which this provider strips from state so the filter round-trips without a perpetual diff.
+- `test_account_filters_default_checked` (Boolean) Whether the **internal and test users** filters (`test_account_filters`) are applied by default across the project. PostHog may report this as null until it is first set.
 
 ### Read-Only
 

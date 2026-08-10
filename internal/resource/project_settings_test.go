@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -17,6 +18,10 @@ import (
 )
 
 const testProjectSettingsProjectID = "123"
+
+// cohortFilterJSON is a single cohort-referencing test_account_filters entry, reused
+// across the parse and cohort_name-stripping tests.
+const cohortFilterJSON = `[{"key":"id","type":"cohort","value":2,"operator":"in"}]`
 
 func newProjectSettingsModel() ProjectSettingsModel {
 	m := ProjectSettingsModel{}
@@ -422,6 +427,119 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 
 		assert.Equal(t, 0, diags.WarningsCount())
 	})
+}
+
+func TestProjectSettingsBuildCreateRequest_TestAccountFilters(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	model := newProjectSettingsModel()
+	model.TestAccountFilters = jsontypes.NewNormalizedValue(cohortFilterJSON)
+	model.TestAccountFiltersDefaultChecked = types.BoolValue(true)
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+
+	assert.False(t, diags.HasError())
+	require.NotNil(t, req.TestAccountFilters)
+	require.Len(t, *req.TestAccountFilters, 1)
+	filter, ok := (*req.TestAccountFilters)[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "cohort", filter["type"])
+	assert.Equal(t, float64(2), filter["value"]) // JSON numbers decode to float64
+	require.NotNil(t, req.TestAccountFiltersDefaultChecked)
+	assert.True(t, *req.TestAccountFiltersDefaultChecked)
+}
+
+// TestProjectSettingsBuildCreateRequest_TestAccountFiltersEmptyClears guards the
+// clearing path: an explicit empty array must serialize to a non-nil pointer to an
+// empty slice so the filters can be cleared server-side rather than left untouched.
+func TestProjectSettingsBuildCreateRequest_TestAccountFiltersEmptyClears(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	model := newProjectSettingsModel()
+	model.TestAccountFilters = jsontypes.NewNormalizedValue(`[]`)
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+
+	assert.False(t, diags.HasError())
+	require.NotNil(t, req.TestAccountFilters, "explicit empty array must be a non-nil pointer to clear the value")
+	assert.Empty(t, *req.TestAccountFilters)
+}
+
+func TestProjectSettingsBuildCreateRequest_TestAccountFiltersUnset(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	model := newProjectSettingsModel()
+	model.HeatmapsOptIn = types.BoolValue(true)
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+
+	assert.False(t, diags.HasError())
+	assert.Nil(t, req.TestAccountFilters)
+	assert.Nil(t, req.TestAccountFiltersDefaultChecked)
+
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "test_account_filters")
+}
+
+func TestProjectSettingsBuildCreateRequest_TestAccountFiltersInvalidJSON(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	model := newProjectSettingsModel()
+	model.TestAccountFilters = jsontypes.NewNormalizedValue(`{not valid`)
+
+	_, diags := ops.BuildCreateRequest(context.Background(), model)
+
+	require.True(t, diags.HasError())
+	assert.Contains(t, diags.Errors()[0].Summary(), "test_account_filters")
+}
+
+// TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName is the
+// key drift proof: PostHog injects a server-computed cohort_name into a
+// cohort-referencing filter object, and it must be stripped from state so the
+// configured filter round-trips without a perpetual diff (same class as #136).
+func TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	resp := httpclient.Environment{
+		ID: 123,
+		TestAccountFilters: &[]interface{}{
+			map[string]interface{}{
+				"key":         "id",
+				"type":        "cohort",
+				"value":       float64(2),
+				"operator":    "in",
+				"cohort_name": "Internal users", // server-injected enrichment
+			},
+		},
+		TestAccountFiltersDefaultChecked: util.BoolPtr(true),
+	}
+
+	model := newProjectSettingsModel()
+	// The user configured the filter WITHOUT cohort_name.
+	model.TestAccountFilters = jsontypes.NewNormalizedValue(cohortFilterJSON)
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+
+	assert.False(t, diags.HasError())
+	require.False(t, model.TestAccountFilters.IsNull())
+
+	// State must match the user config semantically (cohort_name stripped): no drift.
+	stateEqualsConfig, d := model.TestAccountFilters.StringSemanticEquals(
+		context.Background(),
+		jsontypes.NewNormalizedValue(cohortFilterJSON),
+	)
+	assert.False(t, d.HasError())
+	assert.True(t, stateEqualsConfig, "cohort_name must be stripped so the filter round-trips without drift")
+	assert.NotContains(t, model.TestAccountFilters.ValueString(), "cohort_name")
+
+	assert.True(t, model.TestAccountFiltersDefaultChecked.ValueBool())
+}
+
+func TestProjectSettingsMapResponseToModel_TestAccountFiltersNil(t *testing.T) {
+	ops := ProjectSettingsOps{}
+	resp := httpclient.Environment{ID: 123}
+
+	model := newProjectSettingsModel()
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+
+	assert.False(t, diags.HasError())
+	assert.True(t, model.TestAccountFilters.IsNull())
+	assert.True(t, model.TestAccountFiltersDefaultChecked.IsNull())
 }
 
 func TestProjectSettingsDeleteIsNoOp(t *testing.T) {

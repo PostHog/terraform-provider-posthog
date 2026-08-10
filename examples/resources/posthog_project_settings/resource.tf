@@ -1,3 +1,8 @@
+# A cohort referenced by the test_account_filters below (internal/test users).
+resource "posthog_cohort" "internal" {
+  name = "Internal users"
+}
+
 # Manage environment-level settings for a project.
 # Any omitted attribute is left at PostHog's current value.
 resource "posthog_project_settings" "example" {
@@ -24,6 +29,21 @@ resource "posthog_project_settings" "example" {
     record_headers = true
     record_body    = false
   }
+
+  # The "internal and test users" filter list every managed insight/hog function
+  # references via filter_test_accounts. Managing it here makes that shared
+  # definition owned by Terraform. A filter object may reference a cohort; PostHog
+  # injects a read-only cohort_name which the provider strips, so no perpetual diff.
+  test_account_filters = jsonencode([
+    {
+      key      = "id"
+      type     = "cohort"
+      value    = posthog_cohort.internal.id
+      operator = "in"
+    }
+  ])
+  # Apply the filters above by default across the project.
+  test_account_filters_default_checked = true
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
