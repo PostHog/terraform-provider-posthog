@@ -19,8 +19,6 @@ func stoppedStatus(state string, stopped *ExperimentStoppedModel) *ExperimentSta
 	return &ExperimentStatusModel{State: types.StringValue(state), Stopped: stopped}
 }
 
-// --- BuildCreateRequest -----------------------------------------------------
-
 func TestExperimentBuildCreateRequest_Fields(t *testing.T) {
 	ops := ExperimentOps{}
 	model := ExperimentTFModel{
@@ -82,8 +80,6 @@ func TestExperimentBuildUpdateRequest_SendsAllowUnknownEvents(t *testing.T) {
 	assert.True(t, *req.body.AllowUnknownEvents)
 	assert.Equal(t, []lifecycleAction{actionLaunch}, req.transition.actions)
 }
-
-// --- BuildUpdateRequest: status transition dispatch table -------------------
 
 func TestExperimentBuildUpdateRequest_TransitionTable(t *testing.T) {
 	ops := ExperimentOps{}
@@ -202,8 +198,6 @@ func TestExperimentBuildUpdateRequest_ShipLater(t *testing.T) {
 	assert.Empty(t, req2.transition.actions)
 }
 
-// --- MapResponseToModel -----------------------------------------------------
-
 // Normalization: reordered + extra API keys in metrics must not produce a diff.
 func TestExperimentMapResponseToModel_MetricsNoPerpetualDiff(t *testing.T) {
 	ops := ExperimentOps{}
@@ -271,8 +265,6 @@ func TestExperimentMapResponseToModel_ImportPopulatesStatus(t *testing.T) {
 	assert.Nil(t, model.Status.Stopped)
 	assert.Equal(t, "exp-flag", model.FeatureFlagKey.ValueString())
 }
-
-// --- runTransition ----------------------------------------------------------
 
 // stubLifecycleClient records the sub-actions called and can fail a chosen one, so the transition
 // sequencer's ordering and mid-sequence failure handling are testable without a live API.
