@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -254,6 +255,91 @@ func TestHogFunction_AlertWebhookIntegration(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestHogFunction_ErrorTrackingAlert proves that PostHog error-tracking alerts
+// (issue #131) can be managed today with the existing posthog_hog_function
+// resource - no new resource required. An error-tracking alert is simply a Hog
+// function of type "internal_destination" whose filters subscribe to one of the
+// internal error-tracking events ($error_tracking_issue_created / _reopened /
+// _spiking) and which forwards to a destination (here: the hermetic webhook
+// template, which only needs a URL).
+//
+// The second step is PlanOnly and asserts an empty plan, proving there is no
+// perpetual diff after apply (the server enriches filters with `source` and
+// `bytecode`, which the provider strips/normalizes away).
+func TestHogFunction_ErrorTrackingAlert(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			// Create the internal_destination alert.
+			{
+				Config: testAccHogFunctionErrorTrackingAlert(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "type", "internal_destination"),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "enabled", "true"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "filters_json"),
+					// The subscription event is what makes this an error-tracking alert.
+					resource.TestMatchResourceAttr("posthog_hog_function.test", "filters_json",
+						regexp.MustCompile(`\$error_tracking_issue_created`)),
+				),
+			},
+			// Re-plan with the same config: must be a no-op (no perpetual diff).
+			{
+				Config:   testAccHogFunctionErrorTrackingAlert(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+func testAccHogFunctionErrorTrackingAlert(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+# Error-tracking alert: an internal_destination Hog function subscribing to the
+# internal $error_tracking_issue_created event and forwarding to a webhook.
+resource "posthog_hog_function" "test" {
+  name        = %q
+  description = "Alert on newly created error-tracking issues"
+  type        = "internal_destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  filters_json = jsonencode({
+    events = [{
+      id   = "$error_tracking_issue_created"
+      type = "events"
+    }]
+  })
+
+  inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/hooks/posthog-error-tracking"
+      templating = "hog"
+    }
+    method = {
+      value = "POST"
+    }
+    body = {
+      value = {
+        issue_id = "{event.properties.issue_id}"
+        name     = "{event.properties.name}"
+        event    = "{event.event}"
+      }
+      templating = "hog"
+    }
+  })
+}
+`, name)
 }
 
 // TestHogFunction_SensitiveInputs tests creating a hog function with both
