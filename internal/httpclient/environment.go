@@ -23,6 +23,12 @@ type Environment struct {
 	SessionRecordingNetworkPayloadCaptureConfig *NetworkPayloadCaptureConfig `json:"session_recording_network_payload_capture_config,omitempty"`
 	AppURLs                                     *[]string                    `json:"app_urls,omitempty"`
 	RecordingDomains                            *[]string                    `json:"recording_domains,omitempty"`
+	// TestAccountFilters is the "internal and test users" filter list, a JSON array of
+	// filter objects; server-injected cohort_name is stripped in MapResponseToModel.
+	TestAccountFilters *[]interface{} `json:"test_account_filters,omitempty"`
+	// TestAccountFiltersDefaultChecked is the "apply these filters by default" toggle.
+	// PostHog may return null when it has never been set.
+	TestAccountFiltersDefaultChecked *bool `json:"test_account_filters_default_checked,omitempty"`
 }
 
 // NetworkPayloadCaptureConfig mirrors the nullable JSON blob PostHog stores in
@@ -51,6 +57,8 @@ type EnvironmentSettingsRequest struct {
 	SessionRecordingNetworkPayloadCaptureConfig *NetworkPayloadCaptureConfig `json:"session_recording_network_payload_capture_config,omitempty"`
 	AppURLs                                     *[]string                    `json:"app_urls,omitempty"`
 	RecordingDomains                            *[]string                    `json:"recording_domains,omitempty"`
+	TestAccountFilters                          *[]interface{}               `json:"test_account_filters,omitempty"`
+	TestAccountFiltersDefaultChecked            *bool                        `json:"test_account_filters_default_checked,omitempty"`
 }
 
 func (c *PosthogClient) GetEnvironment(ctx context.Context, projectID string) (Environment, HTTPStatusCode, error) {

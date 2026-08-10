@@ -2,9 +2,11 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -49,6 +51,10 @@ type ProjectSettingsModel struct {
 	NetworkPayloadCapture types.Object `tfsdk:"session_recording_network_payload_capture_config"`
 	AppURLs               types.List   `tfsdk:"app_urls"`
 	RecordingDomains      types.List   `tfsdk:"recording_domains"`
+	// TestAccountFilters is the "internal and test users" filter list as a normalized
+	// JSON array; server-injected cohort_name is stripped in MapResponseToModel.
+	TestAccountFilters               jsontypes.Normalized `tfsdk:"test_account_filters"`
+	TestAccountFiltersDefaultChecked types.Bool           `tfsdk:"test_account_filters_default_checked"`
 }
 
 // NetworkPayloadCaptureModel is the Terraform shape of the
@@ -196,6 +202,26 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 					listplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"test_account_filters": schema.StringAttribute{
+				CustomType: jsontypes.NormalizedType{},
+				Optional:   true,
+				Computed:   true,
+				MarkdownDescription: "The **internal and test users** filter list as a JSON array of filter objects — the definition every managed insight and hog function references through `filter_test_accounts`. " +
+					"Managing it here makes that shared definition owned by Terraform, so a UI edit surfaces as drift instead of silently changing what all filtered insights measure. " +
+					"Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. " +
+					"A filter object may reference a cohort (`{\"key\":\"id\",\"type\":\"cohort\",\"value\":<cohort_id>,\"operator\":\"in\"}`); PostHog injects a read-only `cohort_name` into such objects, which this provider strips from state so the filter round-trips without a perpetual diff.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"test_account_filters_default_checked": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the **internal and test users** filters (`test_account_filters`) are applied by default across the project. PostHog may report this as null until it is first set.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
 		},
 	}
 }
@@ -246,6 +272,21 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 	recordingDomains, d := util.StringListToSlicePtr(ctx, model.RecordingDomains)
 	diags.Append(d...)
 	req.RecordingDomains = recordingDomains
+
+	// Only send test_account_filters when the user configured it, so an unset
+	// attribute leaves PostHog's current value untouched. A pointer to the parsed
+	// slice is used (rather than a bare slice) so an explicit empty array "[]" is
+	// sent to clear the filters instead of being dropped by omitempty.
+	if !model.TestAccountFilters.IsNull() && !model.TestAccountFilters.IsUnknown() {
+		var filters []interface{}
+		if err := json.Unmarshal([]byte(model.TestAccountFilters.ValueString()), &filters); err != nil {
+			diags.AddError("Invalid test_account_filters JSON", fmt.Sprintf("Could not parse test_account_filters: %s", err.Error()))
+		} else {
+			req.TestAccountFilters = &filters
+		}
+	}
+
+	req.TestAccountFiltersDefaultChecked = util.BoolPtrFromValue(model.TestAccountFiltersDefaultChecked)
 
 	return req, diags
 }
@@ -328,6 +369,22 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	recordingDomains, d := util.StringSlicePtrToList(ctx, resp.RecordingDomains)
 	diags.Append(d...)
 	model.RecordingDomains = recordingDomains
+
+	if resp.TestAccountFilters == nil {
+		model.TestAccountFilters = jsontypes.NewNormalizedNull()
+	} else {
+		// PostHog injects a server-computed cohort_name into cohort-referencing filter
+		// objects; strip it so the filter round-trips without a perpetual diff.
+		stripped := util.StripFields(*resp.TestAccountFilters, serverComputedFilterKeys)
+		jsonStr, err := marshalJSON(stripped)
+		if err != nil {
+			diags.AddError("Failed to normalize test_account_filters", err.Error())
+			return diags
+		}
+		model.TestAccountFilters = jsontypes.NewNormalizedValue(jsonStr)
+	}
+
+	model.TestAccountFiltersDefaultChecked = core.PtrToBool(resp.TestAccountFiltersDefaultChecked)
 
 	return diags
 }
