@@ -81,6 +81,43 @@ resource "posthog_feature_flag" "onboarding_checklist" {
 #     place (correct for a UI-managed flag; an orphan for an auto-created one).
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Variation: multi-arm test (3+ variants)
+#
+# The flag can hold more than two arms — the rollout_percentages just have to sum
+# to 100, and one variant must be keyed "control". You then ship whichever arm
+# won by its key; the winner goes to 100% and the rest to 0%.
+#
+#   filters = jsonencode({
+#     multivariate = { variants = [
+#       { key = "control",   name = "Sign up free",     rollout_percentage = 34 },
+#       { key = "variant-a", name = "Start free trial", rollout_percentage = 33 },
+#       { key = "variant-b", name = "Get started",      rollout_percentage = 33 },
+#     ] }
+#     groups = [{ properties = [], rollout_percentage = 100 }]
+#   })
+#   # ...then complete with: stopped { ship_variant = "variant-a" ... }
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Variation: target a subset of users
+#
+# The experiment's population IS the flag's audience, so scope who's enrolled with
+# the flag's release conditions (`groups`) — e.g. premium users only. Shipping a
+# winner rewrites just the variant split; the targeting stays intact.
+#
+#   filters = jsonencode({
+#     multivariate = { variants = [
+#       { key = "control", rollout_percentage = 50 },
+#       { key = "test",    rollout_percentage = 50 },
+#     ] }
+#     groups = [{
+#       properties = [{ key = "plan", type = "person", value = ["premium"], operator = "exact" }]
+#       rollout_percentage = 100
+#     }]
+#   })
+# -----------------------------------------------------------------------------
+
 # =============================================================================
 # The experiment
 #
@@ -135,6 +172,10 @@ resource "posthog_experiment" "onboarding_checklist" {
     state = "running"
   }
 
+  # Pause / resume: while running, set state = "paused" to halt enrollment (e.g. to
+  # investigate an anomaly), then back to "running" to resume — no data is lost.
+  #   status { state = "paused" }
+
   # Stage 3 — Complete and ship the winner. Swap the block above for this once you
   # have a result. `ship_variant` rolls the winning variant out to 100% on the flag
   # (which is why the flag ignores `filters` changes above):
@@ -152,6 +193,17 @@ resource "posthog_experiment" "onboarding_checklist" {
   #     state = "stopped"
   #     stopped {
   #       conclusion = "inconclusive"
+  #     }
+  #   }
+  #
+  # To roll the winner out to EVERYONE (not just flip the variant split), add
+  # release_to_everyone — it prepends a catch-all release condition to the flag:
+  #   status {
+  #     state = "stopped"
+  #     stopped {
+  #       ship_variant        = "test"
+  #       release_to_everyone = true
+  #       conclusion          = "won"
   #     }
   #   }
 }
