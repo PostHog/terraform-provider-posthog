@@ -257,6 +257,62 @@ func TestHogFunction_AlertWebhookIntegration(t *testing.T) {
 	})
 }
 
+// TestHogFunction_InsightAlertNotification proves that insight-alert Slack/webhook
+// notifications (issue #130) can be managed today with the existing resources - no
+// new resource and no schema change required. When a posthog_alert fires, PostHog
+// emits the internal event $insight_alert_firing; routing it to a destination is a
+// Hog function of type "internal_destination" that subscribes to that event and is
+// filtered to the firing alert's id. This test wires the full chain:
+// posthog_insight -> posthog_alert -> posthog_hog_function (hermetic webhook, which
+// only needs a URL).
+//
+// The second step is PlanOnly and asserts an empty plan, proving there is no
+// perpetual diff after apply (the server enriches filters with `source` and
+// `bytecode`, which the provider strips/normalizes away).
+func TestHogFunction_InsightAlertNotification(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			// Create the insight -> alert -> internal_destination chain.
+			{
+				Config: testAccHogFunctionInsightAlertNotification(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// Verify insight
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName+"-insight"),
+					resource.TestCheckResourceAttrSet("posthog_insight.test", "id"),
+					// Verify alert
+					resource.TestCheckResourceAttr("posthog_alert.test", "name", rName+"-alert"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_type", "absolute"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_upper", "1000"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "calculation_interval", "daily"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "skip_weekend", "false"),
+					resource.TestCheckResourceAttrSet("posthog_alert.test", "id"),
+					// Verify hog function
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "name", rName+"-webhook"),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "type", "internal_destination"),
+					resource.TestCheckResourceAttr("posthog_hog_function.test", "enabled", "true"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "id"),
+					resource.TestCheckResourceAttrSet("posthog_hog_function.test", "filters_json"),
+					// The subscription event is what makes this an alert notification.
+					resource.TestMatchResourceAttr("posthog_hog_function.test", "filters_json",
+						regexp.MustCompile(`\$insight_alert_firing`)),
+				),
+			},
+			// Re-plan with the same config: must be a no-op (no perpetual diff).
+			{
+				Config:   testAccHogFunctionInsightAlertNotification(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestHogFunction_ErrorTrackingAlert proves that PostHog error-tracking alerts
 // (issue #131) can be managed today with the existing posthog_hog_function
 // resource - no new resource required. An error-tracking alert is simply a Hog
@@ -963,6 +1019,88 @@ resource "posthog_hog_function" "test" {
     }
     debug = {
       value      = false
+      templating = "hog"
+    }
+  })
+
+  filters_json = jsonencode({
+    source = "events"
+    events = [{
+      id   = "$insight_alert_firing"
+      type = "events"
+    }]
+    properties = [{
+      key      = "alert_id"
+      type     = "event"
+      value    = posthog_alert.test.id
+      operator = "exact"
+    }]
+  })
+
+  depends_on = [posthog_alert.test]
+}
+`, name)
+}
+
+func testAccHogFunctionInsightAlertNotification(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+# Step 1: Create an insight to monitor
+resource "posthog_insight" "test" {
+  name = "%[1]s-insight"
+
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        name  = "$pageview"
+        event = "$pageview"
+        math  = "total"
+      }]
+    }
+  })
+}
+
+# Step 2: Create an alert on the insight
+resource "posthog_alert" "test" {
+  name                 = "%[1]s-alert"
+  insight              = posthog_insight.test.id
+  subscribed_users     = []
+  threshold_type       = "absolute"
+  threshold_upper      = 1000
+  condition_type       = "absolute_value"
+  series_index         = 0
+  calculation_interval = "daily"
+  skip_weekend         = false
+
+  depends_on = [posthog_insight.test]
+}
+
+# Step 3: Create a webhook that fires when the alert triggers
+resource "posthog_hog_function" "test" {
+  name        = "%[1]s-webhook"
+  description = "Webhook notification when alert fires"
+  type        = "internal_destination"
+  enabled     = true
+  template_id = "template-webhook"
+
+  inputs_json = jsonencode({
+    url = {
+      value      = "https://example.com/alert-webhook"
+      templating = "hog"
+    }
+    method = {
+      value = "POST"
+    }
+    body = {
+      value = {
+        alert_name = "{event.properties.alert_name}"
+        alert_id   = "{event.properties.alert_id}"
+        value      = "{event.properties.alert_calculated_value}"
+      }
       templating = "hog"
     }
   })
