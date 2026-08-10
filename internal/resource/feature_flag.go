@@ -37,6 +37,7 @@ type FeatureFlagTFModel struct {
 	Tags                       types.Set            `tfsdk:"tags"`
 	Deleted                    types.Bool           `tfsdk:"deleted"`
 	EnsureExperienceContinuity types.Bool           `tfsdk:"ensure_experience_continuity"`
+	CreateUsageDashboard       types.Bool           `tfsdk:"create_usage_dashboard"`
 }
 
 type FeatureFlagOps struct{}
@@ -120,6 +121,14 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 					core.DefaultBoolFalse{},
 				},
 			},
+			"create_usage_dashboard": schema.BoolAttribute{
+				Optional: true,
+				MarkdownDescription: "Whether PostHog should auto-create a \"Generated Dashboard: <key> Usage\" dashboard when the flag is created. " +
+					"Defaults to `false`: PostHog's API defaults this to `true`, which silently creates one usage dashboard per flag — " +
+					"for Terraform-managed flag fleets that quickly clutters the dashboard list. Set to `true` to keep the API's " +
+					"auto-generation. Create-time only; changing it later has no effect and a usage dashboard can always be generated " +
+					"on demand from the flag's Usage tab.",
+			},
 		},
 	}
 }
@@ -192,6 +201,11 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	// Always set deleted to false on create
 	deleted := false
 	req.Deleted = &deleted
+
+	// Suppress PostHog's auto-generated per-flag usage dashboard unless
+	// explicitly requested (the API's own default is true). Create-time only.
+	createUsageDashboard := model.CreateUsageDashboard.ValueBool()
+	req.ShouldCreateUsageDashboard = &createUsageDashboard
 
 	return req, diags
 }
