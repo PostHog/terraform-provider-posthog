@@ -3,7 +3,9 @@ package tests
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -11,6 +13,84 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
+
+func testAccCheckInsightDestroy(s *terraform.State) error {
+	client := httpclient.NewDefaultClient(
+		os.Getenv("POSTHOG_HOST"),
+		os.Getenv("POSTHOG_API_KEY"),
+		"test",
+	)
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "posthog_insight" {
+			continue
+		}
+
+		insight, status, err := client.GetInsight(context.Background(), projectID, rs.Primary.ID)
+		if err != nil {
+			if status == httpclient.HTTPStatusCode(http.StatusNotFound) {
+				continue
+			}
+			return fmt.Errorf("unexpected error checking insight %s: %w", rs.Primary.ID, err)
+		}
+		if insight.Deleted == nil || !*insight.Deleted {
+			return fmt.Errorf("insight %s still exists and is not soft-deleted", rs.Primary.ID)
+		}
+	}
+
+	return nil
+}
+
+// TestInsight_QuerySQL tests creating an insight from raw HogQL SQL via
+// query_sql, asserting it applies, stores a HogQLQuery, and re-plans clean.
+func TestInsight_QuerySQL(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInsightDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightQuerySQL(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_insight.test", "id"),
+					// Heredoc keeps a trailing newline; the SQL round-trips verbatim.
+					resource.TestCheckResourceAttr("posthog_insight.test", "query_sql", "SELECT count() FROM events\n"),
+					resource.TestCheckNoResourceAttr("posthog_insight.test", "query_json"),
+				),
+			},
+			{
+				// No-drift: re-planning the same config must produce no changes.
+				Config:   testAccInsightQuerySQL(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestInsight_QuerySQLAndJSONConflict asserts the mutually-exclusive validator
+// rejects a config that sets both query_sql and query_json.
+func TestInsight_QuerySQLAndJSONConflict(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccInsightQuerySQLAndJSON(rName),
+				ExpectError: regexp.MustCompile(`(?i)invalid attribute combination`),
+			},
+		},
+	})
+}
 
 // TestInsight_Basic tests creating an insight with minimal query_json.
 func TestInsight_Basic(t *testing.T) {
@@ -1224,6 +1304,44 @@ resource "posthog_insight" "test" {
       pathsFilter = {
         includeEventTypes = ["$pageview"]
       }
+    }
+  })
+}
+`, name)
+}
+
+func testAccInsightQuerySQL(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  name = %q
+
+  query_sql = <<SQL
+SELECT count() FROM events
+SQL
+}
+`, name)
+}
+
+func testAccInsightQuerySQLAndJSON(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  name = %q
+
+  query_sql = "SELECT count() FROM events"
+
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        event = "$pageview"
+        math  = "total"
+      }]
     }
   })
 }
