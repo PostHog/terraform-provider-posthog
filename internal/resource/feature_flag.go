@@ -376,10 +376,16 @@ func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJS
 	return marshalJSON(normalized)
 }
 
-// normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping only
-// unconfigured empty defaults. It mirrors the recursive shape of insight.go's
-// filterToOnlyIncludeUserFields but inverts the intent (keep-all vs whitelist) and drives
-// off the API rather than user config; kept separate deliberately.
+// serverComputedFilterKeys are read-only fields the API injects into filter property objects
+// at any depth (never authored by the user). Unlike defaultIgnoredFilterKeys (top-level keys),
+// these must be stripped recursively. Add future server-only enrichments here.
+var serverComputedFilterKeys = map[string]struct{}{
+	"cohort_name": {}, // API attaches this next to a cohort property's numeric value id
+}
+
+// normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping unconfigured
+// empty defaults and server-computed keys. It mirrors insight.go's filterToOnlyIncludeUserFields
+// but inverts the intent (keep-all vs whitelist) and drives off the API; kept separate deliberately.
 func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{} {
 	switch apiValue := apiData.(type) {
 	case map[string]interface{}:
@@ -387,6 +393,10 @@ func normalizeFeatureFlagFilterValue(stateData, apiData interface{}) interface{}
 		result := make(map[string]interface{})
 		for key, apiFieldValue := range apiValue {
 			stateFieldValue, configured := stateMap[key]
+			// Drop unconfigured server enrichment keys (e.g. cohort_name) even when non-empty.
+			if _, isServerKey := serverComputedFilterKeys[key]; !configured && isServerKey {
+				continue
+			}
 			normalized := normalizeFeatureFlagFilterValue(stateFieldValue, apiFieldValue)
 			if !configured && isEmptyFeatureFlagFilterValue(normalized) {
 				continue

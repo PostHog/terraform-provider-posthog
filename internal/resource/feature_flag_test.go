@@ -196,6 +196,100 @@ func TestNormalizeFeatureFlagFiltersForState_ConfiguredKeyBeatsIgnore(t *testing
 	}`, got)
 }
 
+// Server-injected cohort_name (absent from config) is stripped; type/key/value kept.
+func TestNormalizeFeatureFlagFiltersForState_DropsServerInjectedCohortName(t *testing.T) {
+	apiData := map[string]interface{}{
+		"groups": []interface{}{
+			map[string]interface{}{
+				"properties": []interface{}{
+					map[string]interface{}{
+						"type":        "cohort",
+						"key":         "id",
+						"value":       float64(81),
+						"cohort_name": "Beta testers",
+					},
+				},
+				"rollout_percentage": float64(100),
+			},
+		},
+	}
+	stateJSON := `{"groups":[{"properties":[{"type":"cohort","key":"id","value":81}],"rollout_percentage":100}]}`
+
+	got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON, defaultIgnoredFilterKeys)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"groups": [{
+			"properties": [{"type": "cohort", "key": "id", "value": 81}],
+			"rollout_percentage": 100
+		}]
+	}`, got)
+}
+
+// Keep-all still holds: a genuine remote-added field (not a server key) surfaces as drift.
+func TestNormalizeFeatureFlagFiltersForState_KeepsRemoteAddedPropertyField(t *testing.T) {
+	apiData := map[string]interface{}{
+		"groups": []interface{}{
+			map[string]interface{}{
+				"properties": []interface{}{
+					map[string]interface{}{
+						"type":     "person",
+						"key":      "email",
+						"operator": "exact",
+						"value":    []interface{}{"a@example.com"},
+						"negation": true, // genuine remote-added field, not a server key
+					},
+				},
+				"rollout_percentage": float64(100),
+			},
+		},
+	}
+	stateJSON := `{"groups":[{"properties":[{"type":"person","key":"email","operator":"exact","value":["a@example.com"]}],"rollout_percentage":100}]}`
+
+	got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON, defaultIgnoredFilterKeys)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"groups": [{
+			"properties": [{
+				"type": "person",
+				"key": "email",
+				"operator": "exact",
+				"value": ["a@example.com"],
+				"negation": true
+			}],
+			"rollout_percentage": 100
+		}]
+	}`, got)
+}
+
+// Explicitly configured cohort_name is kept (the `configured` guard wins).
+func TestNormalizeFeatureFlagFiltersForState_KeepsExplicitlyConfiguredCohortName(t *testing.T) {
+	apiData := map[string]interface{}{
+		"groups": []interface{}{
+			map[string]interface{}{
+				"properties": []interface{}{
+					map[string]interface{}{
+						"type":        "cohort",
+						"key":         "id",
+						"value":       float64(81),
+						"cohort_name": "Beta testers",
+					},
+				},
+				"rollout_percentage": float64(100),
+			},
+		},
+	}
+	stateJSON := `{"groups":[{"properties":[{"type":"cohort","key":"id","value":81,"cohort_name":"Beta testers"}],"rollout_percentage":100}]}`
+
+	got, err := normalizeFeatureFlagFiltersForState(apiData, stateJSON, defaultIgnoredFilterKeys)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"groups": [{
+			"properties": [{"type": "cohort", "key": "id", "value": 81, "cohort_name": "Beta testers"}],
+			"rollout_percentage": 100
+		}]
+	}`, got)
+}
+
 func TestResolveIgnoredFilterKeys(t *testing.T) {
 	ctx := context.Background()
 

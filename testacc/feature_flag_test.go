@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -797,6 +799,132 @@ resource "posthog_feature_flag" "test" {
   })
 }
 `, key)
+}
+
+// TestFeatureFlag_CohortTargeting is the regression test for the cohort-targeting
+// inconsistent-result bug: when a flag references a cohort, the API injects a server-computed
+// "cohort_name" into the cohort property, which the keep-all normalizer used to store — absent
+// from config, so create failed and re-plans drifted. The fix strips it recursively.
+//
+// The cohort is created via raw HTTP (no posthog_cohort resource on main) and soft-deleted in
+// cleanup. It's created before the steps because TestStep.Config is an eager string (no lazy
+// config func), so the id must be known when the config is rendered.
+func TestFeatureFlag_CohortTargeting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	host := os.Getenv("POSTHOG_HOST")
+	apiKey := os.Getenv("POSTHOG_API_KEY")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+
+	cohortID, err := createCohortRaw(host, apiKey, projectID, acctest.RandomWithPrefix("tf-acc-cohort"))
+	if err != nil {
+		t.Fatalf("Failed to create cohort externally: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := softDeleteCohortRaw(host, apiKey, projectID, cohortID); err != nil {
+			t.Logf("Warning: failed to soft-delete cohort %d: %v", cohortID, err)
+		}
+	})
+
+	config := testAccFeatureFlagCohortTargeting(rKey, cohortID)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Apply must succeed (previously errored with inconsistent-result).
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", rKey),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "filters"),
+				),
+			},
+			// Re-plan must be empty (no cohort_name drift).
+			{
+				Config:   config,
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// createCohortRaw POSTs a minimal cohort via raw HTTP (no posthog_cohort resource on main).
+func createCohortRaw(host, apiKey, projectID, name string) (int64, error) {
+	body, _ := json.Marshal(map[string]interface{}{"name": name})
+	url := fmt.Sprintf("%s/api/projects/%s/cohorts/", strings.TrimRight(host, "/"), projectID)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("create cohort returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var parsed struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return 0, fmt.Errorf("parse cohort response: %w (body: %s)", err, string(respBody))
+	}
+	if parsed.ID == 0 {
+		return 0, fmt.Errorf("cohort response had no id: %s", string(respBody))
+	}
+	return parsed.ID, nil
+}
+
+func softDeleteCohortRaw(host, apiKey, projectID string, cohortID int64) error {
+	body, _ := json.Marshal(map[string]interface{}{"deleted": true})
+	url := fmt.Sprintf("%s/api/projects/%s/cohorts/%d/", strings.TrimRight(host, "/"), projectID, cohortID)
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("soft-delete cohort returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func testAccFeatureFlagCohortTargeting(key string, cohortID int64) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = "Cohort Targeting"
+  active = true
+
+  filters = jsonencode({
+    groups = [{
+      properties = [{
+        type  = "cohort"
+        key   = "id"
+        value = %d
+      }]
+      rollout_percentage = 100
+    }]
+  })
+}
+`, key, cohortID)
 }
 
 // TestFeatureFlag_ExternalDeletion tests that Terraform detects when a feature flag
