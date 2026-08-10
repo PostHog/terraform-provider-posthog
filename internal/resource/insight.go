@@ -6,17 +6,28 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 	"github.com/posthog/terraform-provider/internal/util"
+)
+
+// HogQL SQL insights are stored as a DataVisualizationNode wrapping a
+// HogQLQuery. The query_sql attribute is sugar over this envelope: on write we
+// wrap the raw SQL, on read we extract source.query back out.
+const (
+	hogQLDataVizKind = "DataVisualizationNode"
+	hogQLQueryKind   = "HogQLQuery"
 )
 
 // insightQueryServerFields are query-internal fields that PostHog injects on
@@ -42,6 +53,7 @@ type InsightResourceTFModel struct {
 	DerivedName    types.String `tfsdk:"derived_name"`
 	Description    types.String `tfsdk:"description"`
 	QueryJSON      types.String `tfsdk:"query_json"`
+	QuerySQL       types.String `tfsdk:"query_sql"`
 	Tags           types.Set    `tfsdk:"tags"`
 	CreateInFolder types.String `tfsdk:"create_in_folder"`
 	DashboardIDs   types.Set    `tfsdk:"dashboard_ids"`
@@ -83,8 +95,21 @@ func (o InsightOps) Schema() schema.Schema {
 				MarkdownDescription: "Insight description.",
 			},
 			"query_json": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Raw JSON serialized query payload accepted by PostHog (for example an `InsightVizNode` with a `TrendsQuery`).",
+				Optional:            true,
+				MarkdownDescription: "Raw JSON serialized query payload accepted by PostHog (for example an `InsightVizNode` with a `TrendsQuery`). Mutually exclusive with `query_sql`; exactly one must be set.",
+				Validators: []validator.String{
+					stringvalidator.ExactlyOneOf(path.Expressions{
+						path.MatchRoot("query_sql"),
+					}...),
+				},
+			},
+			"query_sql": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "Raw HogQL SQL for the insight (for example `SELECT count() FROM events`). " +
+					"The provider wraps it in a `DataVisualizationNode`/`HogQLQuery` query. " +
+					"Use `file(\"queries/x.sql\")` to load from a `.sql` file. " +
+					"Mutually exclusive with `query_json`; exactly one must be set. " +
+					"For chart or column display options, use `query_json` instead.",
 			},
 			"tags": schema.SetAttribute{
 				Optional:            true,
@@ -117,8 +142,21 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 
 	input := httpclient.InsightRequest{}
 
-	// Parse query JSON
-	if !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown() {
+	// Build the query from either the raw HogQL SQL (query_sql) or the raw JSON
+	// payload (query_json). The schema enforces exactly one is set.
+	switch {
+	case !model.QuerySQL.IsNull() && !model.QuerySQL.IsUnknown():
+		// Send the SQL verbatim: PostHog stores and echoes it byte-for-byte
+		// (including trailing newlines from file()/heredoc), so any trimming
+		// here would make the stored value diverge from config and produce an
+		// inconsistent-result error. Only the empty check ignores whitespace.
+		sql := model.QuerySQL.ValueString()
+		if strings.TrimSpace(sql) == "" {
+			diags.AddError("Invalid query_sql", "query_sql cannot be empty")
+			return input, diags
+		}
+		input.Query = buildHogQLQuery(sql)
+	case !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown():
 		raw := strings.TrimSpace(model.QueryJSON.ValueString())
 		if raw == "" {
 			diags.AddError("Invalid query_json", "query_json cannot be empty")
@@ -217,19 +255,37 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	diags.Append(d...)
 	model.DashboardIDs = dashSet
 
-	// Query - filter API response to only include fields from user's config
-	// This enables drift detection for user-specified fields while ignoring server-added fields
+	// Query - map the API response back into whichever attribute the config uses.
 	if resp.Query != nil {
-		userQueryJSON := ""
-		if !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown() {
-			userQueryJSON = model.QueryJSON.ValueString()
+		if !model.QuerySQL.IsNull() && !model.QuerySQL.IsUnknown() {
+			// query_sql round-trips verbatim, so no normalization is needed.
+			sql, ok := extractHogQLSourceQuery(resp.Query)
+			if !ok {
+				kind, _ := resp.Query["kind"].(string)
+				diags.AddError(
+					"Failed to read query_sql",
+					fmt.Sprintf("the insight query is not a HogQL DataVisualizationNode (kind %q); use query_json for this insight instead", kind),
+				)
+				return diags
+			}
+			model.QuerySQL = types.StringValue(sql)
+			model.QueryJSON = types.StringNull()
+		} else {
+			// query_json-managed insight: filter API response to only include
+			// fields from user's config. This enables drift detection for
+			// user-specified fields while ignoring server-added fields.
+			userQueryJSON := ""
+			if !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown() {
+				userQueryJSON = model.QueryJSON.ValueString()
+			}
+			normalizedQuery, err := normalizeQueryForState(resp.Query, userQueryJSON)
+			if err != nil {
+				diags.AddError("Failed to normalize query", err.Error())
+				return diags
+			}
+			model.QueryJSON = types.StringValue(normalizedQuery)
+			model.QuerySQL = types.StringNull()
 		}
-		normalizedQuery, err := normalizeQueryForState(resp.Query, userQueryJSON)
-		if err != nil {
-			diags.AddError("Failed to normalize query", err.Error())
-			return diags
-		}
-		model.QueryJSON = types.StringValue(normalizedQuery)
 	}
 
 	return diags
@@ -249,6 +305,40 @@ func (o InsightOps) Update(ctx context.Context, client httpclient.PosthogClient,
 
 func (o InsightOps) Delete(ctx context.Context, client httpclient.PosthogClient, model InsightResourceTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteInsight(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+// buildHogQLQuery wraps raw HogQL SQL into the DataVisualizationNode/HogQLQuery
+// envelope PostHog stores for HogQL SQL insights.
+func buildHogQLQuery(sql string) map[string]interface{} {
+	return map[string]interface{}{
+		"kind": hogQLDataVizKind,
+		"source": map[string]interface{}{
+			"kind":  hogQLQueryKind,
+			"query": sql,
+		},
+	}
+}
+
+// extractHogQLSourceQuery pulls source.query back out of a DataVisualizationNode
+// wrapping a HogQLQuery. It returns the SQL and true only when the query has that
+// exact shape (kind DataVisualizationNode → source kind HogQLQuery) with a string
+// source.query.
+func extractHogQLSourceQuery(query map[string]interface{}) (string, bool) {
+	if kind, _ := query["kind"].(string); kind != hogQLDataVizKind {
+		return "", false
+	}
+	source, ok := query["source"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	if kind, _ := source["kind"].(string); kind != hogQLQueryKind {
+		return "", false
+	}
+	sql, ok := source["query"].(string)
+	if !ok {
+		return "", false
+	}
+	return sql, true
 }
 
 // normalizeQueryForState takes the API response query and the user's configured query,

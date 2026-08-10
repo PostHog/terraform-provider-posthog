@@ -226,6 +226,148 @@ func TestNormalizeQueryForState(t *testing.T) {
 	}
 }
 
+func TestBuildHogQLQuery(t *testing.T) {
+	q := buildHogQLQuery("SELECT count() FROM events")
+	assert.Equal(t, map[string]interface{}{
+		"kind": "DataVisualizationNode",
+		"source": map[string]interface{}{
+			"kind":  "HogQLQuery",
+			"query": "SELECT count() FROM events",
+		},
+	}, q)
+}
+
+func TestExtractHogQLSourceQuery(t *testing.T) {
+	tests := map[string]struct {
+		query   map[string]interface{}
+		wantSQL string
+		wantOK  bool
+	}{
+		"extracts SQL from HogQL envelope": {
+			query: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind":  "HogQLQuery",
+					"query": "SELECT count() FROM events",
+				},
+			},
+			wantSQL: "SELECT count() FROM events",
+			wantOK:  true,
+		},
+		"ignores server-added fields alongside the SQL": {
+			query: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind":  "HogQLQuery",
+					"query": "SELECT 1",
+					"hogql": "SELECT 1",
+				},
+				"result":    []interface{}{1},
+				"is_cached": true,
+			},
+			wantSQL: "SELECT 1",
+			wantOK:  true,
+		},
+		"returns false when source is missing": {
+			query:  map[string]interface{}{"kind": "InsightVizNode"},
+			wantOK: false,
+		},
+		"returns false when source kind is not HogQLQuery": {
+			query: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind":  "TrendsQuery",
+					"query": "SELECT 1",
+				},
+			},
+			wantOK: false,
+		},
+		"returns false when source.query is not a string": {
+			query: map[string]interface{}{
+				"kind": "DataVisualizationNode",
+				"source": map[string]interface{}{
+					"kind":  "HogQLQuery",
+					"query": 42,
+				},
+			},
+			wantOK: false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			sql, ok := extractHogQLSourceQuery(tt.query)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantSQL, sql)
+		})
+	}
+}
+
+func TestInsightBuildCreateRequest_QuerySQLWrapsSQLVerbatim(t *testing.T) {
+	ops := InsightOps{}
+	// The trailing newline is intentional (file()/heredoc produce it) and must
+	// survive verbatim, so the wrapped query keeps it too.
+	sql := "SELECT count() FROM events\n"
+	model := InsightResourceTFModel{
+		QueryJSON: types.StringNull(),
+		QuerySQL:  types.StringValue(sql),
+	}
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, buildHogQLQuery(sql), req.Query)
+}
+
+func TestInsightBuildCreateRequest_EmptyQuerySQLErrors(t *testing.T) {
+	ops := InsightOps{}
+	model := InsightResourceTFModel{
+		QueryJSON: types.StringNull(),
+		QuerySQL:  types.StringValue("   "),
+	}
+
+	_, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.True(t, diags.HasError())
+}
+
+func TestInsightBuildCreateRequest_QueryJSONUnchanged(t *testing.T) {
+	ops := InsightOps{}
+	model := InsightResourceTFModel{
+		QuerySQL:  types.StringNull(),
+		QueryJSON: types.StringValue(`{"kind":"InsightVizNode","source":{"kind":"TrendsQuery"}}`),
+	}
+
+	req, diags := ops.BuildCreateRequest(context.Background(), model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, map[string]interface{}{
+		"kind": "InsightVizNode",
+		"source": map[string]interface{}{
+			"kind": "TrendsQuery",
+		},
+	}, req.Query)
+}
+
+func TestInsightMapResponseToModel_QuerySQLExtractsSourceQuery(t *testing.T) {
+	ops := InsightOps{}
+	model := InsightResourceTFModel{
+		QuerySQL:  types.StringValue("SELECT count() FROM events"),
+		QueryJSON: types.StringNull(),
+	}
+
+	// A canonical HogQL envelope with server-added fields (result/is_cached)
+	// layered on top, which extraction must ignore.
+	resp := httpclient.Insight{
+		ID:    7,
+		Query: buildHogQLQuery("SELECT count() FROM events"),
+	}
+	resp.Query["result"] = []interface{}{42}
+	resp.Query["is_cached"] = true
+
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.Equal(t, "SELECT count() FROM events", model.QuerySQL.ValueString())
+	assert.True(t, model.QueryJSON.IsNull())
+}
+
 func TestInsightMapResponseToModel_StripsServerQueryFieldsWithoutUserConfig(t *testing.T) {
 	ops := InsightOps{}
 	model := InsightResourceTFModel{
