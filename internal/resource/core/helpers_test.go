@@ -368,6 +368,106 @@ func TestInt32SetPreserveEmpty(t *testing.T) {
 	}
 }
 
+func TestInt64SetPreserveEmpty(t *testing.T) {
+	ctx := context.Background()
+	nullSet := types.SetNull(types.Int64Type)
+	emptySet, _ := types.SetValueFrom(ctx, types.Int64Type, []int64{})
+	nonEmptySet, _ := types.SetValueFrom(ctx, types.Int64Type, []int64{123})
+
+	tests := map[string]struct {
+		values       []int64
+		currentModel types.Set
+		wantNull     bool
+		wantEmpty    bool
+		wantLen      int
+	}{
+		"values present, null model - returns set with values": {
+			values:       []int64{1, 2, 3},
+			currentModel: nullSet,
+			wantLen:      3,
+		},
+		"empty values, null model - returns null": {
+			values:       []int64{},
+			currentModel: nullSet,
+			wantNull:     true,
+		},
+		"nil values, null model - returns null": {
+			values:       nil,
+			currentModel: nullSet,
+			wantNull:     true,
+		},
+		"empty values, non-null model - returns empty set (preserves intent)": {
+			values:       []int64{},
+			currentModel: nonEmptySet,
+			wantEmpty:    true,
+		},
+		"empty values, empty model - returns empty set (preserves intent)": {
+			values:       []int64{},
+			currentModel: emptySet,
+			wantEmpty:    true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, diags := Int64SetPreserveEmpty(ctx, tc.values, tc.currentModel)
+			require.False(t, diags.HasError(), "unexpected error: %v", diags)
+			if tc.wantNull {
+				assert.True(t, got.IsNull(), "expected null")
+				return
+			}
+			require.False(t, got.IsNull(), "expected non-null")
+			if tc.wantEmpty {
+				assert.Empty(t, got.Elements(), "expected empty set")
+				return
+			}
+			assert.Len(t, got.Elements(), tc.wantLen)
+		})
+	}
+}
+
+func TestNormalizeRFC3339(t *testing.T) {
+	tests := map[string]struct {
+		input     string
+		want      string
+		wantError bool
+	}{
+		"already canonical Z form is unchanged": {
+			input: "2026-08-17T07:00:00Z",
+			want:  "2026-08-17T07:00:00Z",
+		},
+		"numeric UTC offset normalizes to Z": {
+			input: "2026-08-17T07:00:00+00:00",
+			want:  "2026-08-17T07:00:00Z",
+		},
+		"fractional seconds are dropped": {
+			input: "2026-08-17T07:00:00.000000+00:00",
+			want:  "2026-08-17T07:00:00Z",
+		},
+		"non-UTC offset is converted to UTC": {
+			input: "2026-08-17T09:00:00+02:00",
+			want:  "2026-08-17T07:00:00Z",
+		},
+		"unparseable value returns error and original": {
+			input:     "not-a-date",
+			want:      "not-a-date",
+			wantError: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := NormalizeRFC3339(tc.input)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestShouldClearString(t *testing.T) {
 	tests := map[string]struct {
 		plan  types.String

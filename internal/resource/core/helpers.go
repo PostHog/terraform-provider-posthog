@@ -4,6 +4,7 @@ package core
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -102,6 +103,34 @@ func Int32SetPreserveEmpty(ctx context.Context, values []int32, currentModel typ
 		return result, diags
 	}
 	return types.SetNull(types.Int32Type), diags
+}
+
+// Int64SetPreserveEmpty converts []int64 to types.Set.
+// If values is empty but currentModel is not null, returns an empty set (preserving the user's intent).
+// If values is empty and currentModel is null, returns null set.
+func Int64SetPreserveEmpty(ctx context.Context, values []int64, currentModel types.Set) (types.Set, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if len(values) > 0 {
+		result, d := types.SetValueFrom(ctx, types.Int64Type, values)
+		diags.Append(d...)
+		return result, diags
+	}
+	if !currentModel.IsNull() {
+		result, d := types.SetValueFrom(ctx, types.Int64Type, []int64{})
+		diags.Append(d...)
+		return result, diags
+	}
+	return types.SetNull(types.Int64Type), diags
+}
+
+// NormalizeRFC3339 re-emits an RFC3339 datetime in canonical UTC "Z" form so the API's
+// re-normalized echo does not perpetually diff. On a parse error it returns v unchanged.
+func NormalizeRFC3339(v string) (string, error) {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return v, err
+	}
+	return t.UTC().Format(time.RFC3339), nil
 }
 
 // ShouldClearString returns true if the plan value is null but state has a value,
