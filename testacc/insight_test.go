@@ -1347,3 +1347,77 @@ resource "posthog_insight" "test" {
 }
 `, name)
 }
+
+// TestInsightDataSource_ByShortID creates an insight via the posthog_insight
+// resource, then looks it up with the posthog_insight data source by its
+// short_id and asserts the data source resolves the same id, name and query.
+func TestInsightDataSource_ByShortID(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightDataSourceByShortID(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					// The data source resolves the same insight the resource created.
+					resource.TestCheckResourceAttrPair(
+						"data.posthog_insight.by_short_id", "id",
+						"posthog_insight.test", "id"),
+					resource.TestCheckResourceAttrPair(
+						"data.posthog_insight.by_short_id", "short_id",
+						"posthog_insight.test", "short_id"),
+					resource.TestCheckResourceAttrPair(
+						"data.posthog_insight.by_short_id", "name",
+						"posthog_insight.test", "name"),
+					resource.TestCheckResourceAttr(
+						"data.posthog_insight.by_short_id", "name", rName),
+					resource.TestCheckResourceAttrSet(
+						"data.posthog_insight.by_short_id", "id"),
+					// The data source exposes the insight's query as normalized JSON.
+					resource.TestMatchResourceAttr(
+						"data.posthog_insight.by_short_id", "query_json",
+						regexp.MustCompile(`"kind":"InsightVizNode"`)),
+					// The data source resolves the insight's tags.
+					resource.TestCheckResourceAttr(
+						"data.posthog_insight.by_short_id", "tags.#", "2"),
+					resource.TestCheckTypeSetElemAttr(
+						"data.posthog_insight.by_short_id", "tags.*", "tf-acc"),
+					resource.TestCheckTypeSetElemAttr(
+						"data.posthog_insight.by_short_id", "tags.*", "datasource"),
+				),
+			},
+		},
+	})
+}
+
+func testAccInsightDataSourceByShortID(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  name = %q
+  tags = ["tf-acc", "datasource"]
+
+  query_json = jsonencode({
+    kind = "InsightVizNode"
+    source = {
+      kind = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        name  = "$pageview"
+        event = "$pageview"
+        math  = "total"
+      }]
+    }
+  })
+}
+
+data "posthog_insight" "by_short_id" {
+  short_id = posthog_insight.test.short_id
+}
+`, name)
+}
