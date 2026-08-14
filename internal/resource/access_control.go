@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 )
@@ -223,11 +224,39 @@ func (o AccessControlOps) Read(ctx context.Context, client httpclient.PosthogCli
 	targetID := model.buildExpectedID(projectID)
 	for _, ac := range result.AccessControls {
 		if ac.BuildCompositeID(projectID) == targetID {
+			claimAccessControl(ctx, client, projectID, model)
 			return ac, status, nil
 		}
 	}
 
 	return httpclient.AccessControl{}, http.StatusNotFound, fmt.Errorf("access control not found for %s", targetID)
+}
+
+func claimAccessControl(ctx context.Context, client httpclient.PosthogClient, projectID string, model AccessControlTFModel) {
+	req := buildAccessControlRequest(model)
+	ClaimRuleForTerraform(ctx, client, projectID, httpclient.AccessControlClaimRequest{
+		Resource:           req.Resource,
+		ResourceID:         req.ResourceID,
+		Role:               req.Role,
+		OrganizationMember: req.OrganizationMember,
+	})
+}
+
+// ClaimRuleForTerraform records that this provider owns the rule, so PostHog can refuse edits
+// made anywhere else. Refresh runs on every plan and covers rules that never diff, which the
+// writes do not.
+//
+// Failure is logged and ignored on purpose. The endpoint only exists on newer PostHog versions,
+// and self-hosted instances upgrade on their own schedule; a plan must keep working against an
+// instance that has never heard of it.
+func ClaimRuleForTerraform(ctx context.Context, client httpclient.PosthogClient, projectID string, claim httpclient.AccessControlClaimRequest) {
+	if _, status, err := client.ClaimAccessControl(ctx, projectID, claim); err != nil {
+		tflog.Debug(ctx, "could not claim access control rule for Terraform", map[string]any{
+			"resource": claim.Resource,
+			"status":   status,
+			"error":    err.Error(),
+		})
+	}
 }
 
 func (o AccessControlOps) Update(ctx context.Context, client httpclient.PosthogClient, model AccessControlTFModel, req httpclient.AccessControlRequest) (httpclient.AccessControl, httpclient.HTTPStatusCode, error) {

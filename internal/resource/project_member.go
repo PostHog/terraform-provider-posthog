@@ -179,6 +179,11 @@ func (o ProjectMemberOps) Read(ctx context.Context, client httpclient.PosthogCli
 	expectedID := model.buildCompositeID(projectID)
 	for _, ac := range result.AccessControls {
 		if ac.BuildCompositeID(projectID) == expectedID {
+			ClaimRuleForTerraform(ctx, client, projectID, httpclient.AccessControlClaimRequest{
+				Resource:           "project",
+				Role:               ac.Role,
+				OrganizationMember: ac.OrganizationMember,
+			})
 			return ac, status, nil
 		}
 	}
