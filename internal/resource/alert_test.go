@@ -117,18 +117,22 @@ func TestMapResponseToModelScheduleRestriction(t *testing.T) {
 	})
 }
 
-func TestBlockedWindowsNoOverlap(t *testing.T) {
+func TestBlockedWindowsValidator(t *testing.T) {
 	tests := map[string]struct {
 		windows   [][2]string
 		wantError bool
 	}{
-		"separate windows":                {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
-		"touching windows are not merged": {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}},
-		"wrapped window plus daytime":     {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}},
-		"overlapping windows":             {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantError: true},
-		"contained window":                {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantError: true},
-		"wrapped window overlaps morning": {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantError: true},
-		"malformed times are ignored":     {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
+		"separate windows":                           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
+		"touching windows are not merged":            {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}},
+		"wrapped window plus daytime":                {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}},
+		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantError: true},
+		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantError: true},
+		"wrapped window overlaps morning":            {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantError: true},
+		"malformed times are ignored":                {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
+		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
+		"shorter than thirty minutes":                {windows: [][2]string{{"02:00", "02:15"}}, wantError: true},
+		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
+		"wrapped window shorter than thirty minutes": {windows: [][2]string{{"23:50", "00:10"}}, wantError: true},
 	}
 
 	for name, test := range tests {
@@ -139,7 +143,7 @@ func TestBlockedWindowsNoOverlap(t *testing.T) {
 			}
 			resp := &validator.SetResponse{}
 
-			blockedWindowsNoOverlap{}.ValidateSet(context.Background(), req, resp)
+			blockedWindowsValidator{}.ValidateSet(context.Background(), req, resp)
 
 			assert.Equal(t, test.wantError, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 		})

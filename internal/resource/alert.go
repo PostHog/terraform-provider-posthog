@@ -72,20 +72,21 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	"must be a 24-hour time in HH:MM format",
 )
 
-// blockedWindowsNoOverlap rejects overlapping quiet-hour windows at plan time. PostHog
-// merges overlapping windows when saving, so the alert it returns would not match the
-// planned config and the apply would fail with an inconsistent-result error instead.
-type blockedWindowsNoOverlap struct{}
+// blockedWindowsValidator enforces the quiet-hour rules PostHog applies server-side, so a
+// bad config fails during plan. Overlapping windows matter most: PostHog merges them when
+// saving, so the alert it returns would not match the planned config and the apply would
+// fail with an inconsistent-result error instead.
+type blockedWindowsValidator struct{}
 
-func (v blockedWindowsNoOverlap) Description(context.Context) string {
-	return "blocked windows must not overlap"
+func (v blockedWindowsValidator) Description(context.Context) string {
+	return "blocked windows must not overlap and must each span at least 30 minutes"
 }
 
-func (v blockedWindowsNoOverlap) MarkdownDescription(ctx context.Context) string {
+func (v blockedWindowsValidator) MarkdownDescription(ctx context.Context) string {
 	return v.Description(ctx)
 }
 
-func (v blockedWindowsNoOverlap) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
+func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
@@ -96,12 +97,12 @@ func (v blockedWindowsNoOverlap) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	type span struct {
+	type interval struct {
 		label      string
 		start, end int
 	}
 
-	var spans []span
+	var spans []interval
 	for _, window := range windows {
 		start, startOK := alertMinutesSinceMidnight(window.Start)
 		end, endOK := alertMinutesSinceMidnight(window.End)
@@ -110,12 +111,24 @@ func (v blockedWindowsNoOverlap) ValidateSet(ctx context.Context, req validator.
 			continue
 		}
 		label := window.Start.ValueString() + "-" + window.End.ValueString()
+		length := end - start
+		if length < 0 {
+			length += 24 * 60
+		}
+		if length < 30 {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Blocked window is too short",
+				fmt.Sprintf("Window %s spans %d minutes. PostHog requires each blocked window to span at least 30 minutes.", label, length),
+			)
+			return
+		}
 		if end < start {
 			// Wraps midnight, as the overnight 22:00-07:00 preset does.
-			spans = append(spans, span{label, start, 24 * 60}, span{label, 0, end})
+			spans = append(spans, interval{label, start, 24 * 60}, interval{label, 0, end})
 			continue
 		}
-		spans = append(spans, span{label, start, end})
+		spans = append(spans, interval{label, start, end})
 	}
 
 	for i := range spans {
@@ -252,7 +265,7 @@ func (o AlertOps) Schema() schema.Schema {
 						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. A window whose `end` is before its `start` wraps midnight. Maximum 5.",
 						Validators: []validator.Set{
 							setvalidator.SizeAtMost(5),
-							blockedWindowsNoOverlap{},
+							blockedWindowsValidator{},
 						},
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
