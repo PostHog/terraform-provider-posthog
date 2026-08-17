@@ -292,6 +292,53 @@ resource "posthog_logs_alert" "test" {
 	})
 }
 
+// TestLogsAlert_UpdateOmittingComputedAttribute removes an Optional+Computed attribute from
+// a config that keeps a dependent one. The attribute retains its last applied value, so the
+// apply must succeed — validating it against the server default instead would reject a valid
+// config with "Alert can never fire: datapoints_to_alarm (5) must not exceed
+// evaluation_periods (1)".
+func TestLogsAlert_UpdateOmittingComputedAttribute(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name                = %[1]q
+  severity_levels     = ["error"]
+  evaluation_periods  = 10
+  datapoints_to_alarm = 5
+}
+`, rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "evaluation_periods", "10"),
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "datapoints_to_alarm", "5"),
+				),
+			},
+			{
+				// evaluation_periods dropped from config; it keeps the applied value of 10.
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name                = %[1]q
+  severity_levels     = ["error"]
+  datapoints_to_alarm = 5
+}
+`, rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "evaluation_periods", "10"),
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "datapoints_to_alarm", "5"),
+				),
+			},
+		},
+	})
+}
+
 // TestLogsAlert_RejectsInvalidOperator verifies schema validation runs before any API call.
 func TestLogsAlert_RejectsInvalidOperator(t *testing.T) {
 	skipIfNotAcceptance(t)
