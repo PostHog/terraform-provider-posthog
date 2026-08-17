@@ -494,7 +494,26 @@ func TestValidateBlockedWindows(t *testing.T) {
 				{types.StringValue("00:00"), types.StringValue("06:00")},
 				{types.StringValue("22:00"), types.StringValue("00:00")},
 			},
-			expectErr: "must be the only window",
+			expectErr: "meeting at midnight",
+		},
+		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
+		// window anywhere in the day leaves all of them stored exactly as written.
+		{
+			name: "midnight pair with a third window",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("22:00"), types.StringValue("00:00")},
+				{types.StringValue("00:00"), types.StringValue("07:00")},
+				{types.StringValue("12:00"), types.StringValue("13:00")},
+			},
+		},
+		{
+			name: "midnight pair with two other windows",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("00:00"), types.StringValue("06:00")},
+				{types.StringValue("08:00"), types.StringValue("09:00")},
+				{types.StringValue("12:00"), types.StringValue("13:00")},
+				{types.StringValue("19:00"), types.StringValue("00:00")},
+			},
 		},
 		// Ending at 23:59 stops short of midnight, so nothing is recombined.
 		{

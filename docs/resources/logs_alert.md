@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   Manage PostHog log alerts https://posthog.com/docs/logs/alerts. A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
   At least one of severity_levels, service_names, or filter_group_json is required unless the alert is disabled (enabled = false). A project may hold at most 20 log alerts.
+  ~> Log alerts are gated behind a feature flag. The API returns 403 with This action requires feature flag 'logs-alerting' to be enabled for your organization until PostHog enables it for you. A 403 on the first apply means the flag is off, not that the credentials or configuration are wrong.
   ~> Notification destinations are not managed by this resource. PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing project_id — creates a new alert with no destinations attached, which you must re-attach manually.
   ~> An alert whose state is broken or snoozed has stopped notifying. Terraform does not manage either condition, so terraform plan stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
   Removing severity_levels, service_names, filter_group_json, or blocked_windows from your configuration clears them server-side. The remaining optional attributes are computed, so removing one retains its last applied value rather than restoring the documented default — set it explicitly to change it back.
@@ -15,6 +16,8 @@ description: |-
 Manage PostHog [log alerts](https://posthog.com/docs/logs/alerts). A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
 
 At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.
+
+~> **Log alerts are gated behind a feature flag.** The API returns `403` with `This action requires feature flag 'logs-alerting' to be enabled for your organization` until PostHog enables it for you. A `403` on the first apply means the flag is off, not that the credentials or configuration are wrong.
 
 ~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing `project_id` — creates a new alert with no destinations attached, which you must re-attach manually.
 

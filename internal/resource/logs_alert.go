@@ -98,6 +98,10 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"count crosses the threshold.\n\n" +
 			"At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the " +
 			"alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
+			"~> **Log alerts are gated behind a feature flag.** The API returns `403` with " +
+			"`This action requires feature flag 'logs-alerting' to be enabled for your organization` until " +
+			"PostHog enables it for you. A `403` on the first apply means the flag is off, not that the " +
+			"credentials or configuration are wrong.\n\n" +
 			"~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, " +
 			"and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, " +
 			"so Terraform cannot track them without reporting permanent drift. Attach destinations from the " +
@@ -361,6 +365,25 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	model.Enabled = core.PtrToBool(resp.Enabled)
 	model.State = core.PtrToStringNullIfEmptyTrimmed(resp.State)
 
+	// Terraform does not manage state, so a broken or snoozed alert leaves plans clean
+	// while notifying nobody. Warn on refresh rather than leaving the docs as the only
+	// signal. It fires only in the degraded state, so it does not nag in steady state.
+	switch strings.TrimSpace(util.PtrToString(resp.State)) {
+	case "broken":
+		diags.AddWarning(
+			"Log alert is not notifying",
+			"PostHog marked this alert broken after repeated failed checks, so it has stopped evaluating and "+
+				"notifies nobody. Reset it from the PostHog UI. Terraform does not manage this state, so plans "+
+				"stay clean until you do.",
+		)
+	case "snoozed":
+		diags.AddWarning(
+			"Log alert is snoozed",
+			"This alert is snoozed and notifies nobody until the snooze expires or is cleared from the PostHog "+
+				"UI. Terraform does not manage snoozing, so plans stay clean meanwhile.",
+		)
+	}
+
 	// The API echoes back only the filter keys that are set, so an absent key maps
 	// to null rather than an empty collection.
 	var severityLevels, serviceNames []string
@@ -389,7 +412,10 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	// {key,type,operator,value} reads back with "label":null), so project the response
 	// onto the fields the user actually declared. Without this the state written after
 	// apply differs from the config and Terraform reports an inconsistent result.
-	if filterGroup != nil {
+	// Length, not nil: an empty object means no filter group. Storing "{}" would put a
+	// value in state that no config can express, since the validator rejects an empty
+	// object, leaving drift that cannot be resolved from configuration.
+	if len(filterGroup) > 0 {
 		encoded, err := normalizeJSONForState(filterGroup, model.FilterGroupJSON.ValueString())
 		if err != nil {
 			diags.AddError("Invalid filter group in response", fmt.Sprintf("Could not encode filterGroup returned by PostHog: %s", err.Error()))
@@ -622,16 +648,19 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 		return diags
 	}
 
-	// The label travels with the interval so the two halves of one midnight-crossing
-	// window can be told apart from two genuinely different windows.
+	// source is the index of the configured window an interval came from. Two intervals of
+	// the same window are the two halves of one midnight crossing, not a conflict. The
+	// label is only message text, so it must not be used to decide identity.
 	type interval struct {
 		start, end int
+		source     int
 		label      string
 	}
 	var intervals []interval
 	windowCount := 0
+	wrappingWindows := 0
 
-	for _, w := range parsed {
+	for i, w := range parsed {
 		if w.Start.IsUnknown() || w.End.IsUnknown() {
 			return diags
 		}
@@ -680,11 +709,15 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 		// midnight in the check below.
 		switch {
 		case end > start:
-			intervals = append(intervals, interval{start, end, label})
+			intervals = append(intervals, interval{start: start, end: end, source: i, label: label})
 		case end == 0:
-			intervals = append(intervals, interval{start, minutesPerDay, label})
+			intervals = append(intervals, interval{start: start, end: minutesPerDay, source: i, label: label})
 		default:
-			intervals = append(intervals, interval{start, minutesPerDay, label}, interval{0, end, label})
+			wrappingWindows++
+			intervals = append(intervals,
+				interval{start: start, end: minutesPerDay, source: i, label: label},
+				interval{start: 0, end: end, source: i, label: label},
+			)
 		}
 	}
 
@@ -692,7 +725,7 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 	// prev.end`, so 01:00-02:00 and 02:00-03:00 are saved as a single 01:00-03:00 window.
 	for i := 0; i < len(intervals); i++ {
 		for j := i + 1; j < len(intervals); j++ {
-			if intervals[i].label == intervals[j].label {
+			if intervals[i].source == intervals[j].source {
 				continue
 			}
 			if intervals[i].start <= intervals[j].end && intervals[j].start <= intervals[i].end {
@@ -711,26 +744,37 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 		}
 	}
 
-	// Quiet time running across midnight is stored as one wrapping window only when it is
-	// the entire configuration. Alongside any other window PostHog stores it as two, so the
-	// alert reads back with one more window than was configured.
-	if windowCount > 1 {
-		var touchesDayStart, touchesDayEnd bool
-		for _, iv := range intervals {
-			touchesDayStart = touchesDayStart || iv.start == 0
-			touchesDayEnd = touchesDayEnd || iv.end == minutesPerDay
-		}
-		if touchesDayStart && touchesDayEnd {
-			diags.AddAttributeError(
-				path.Root("blocked_windows"),
-				"Quiet hours crossing midnight must be the only window",
-				"This configuration blocks time on both sides of midnight while also configuring another "+
-					"window. PostHog stores that as one window per side rather than as a single crossing "+
-					"window, so the alert would read back with more windows than configured and every apply "+
-					"would fail. Either make the crossing window the only one, or end it at 23:59 so it stays "+
-					"within the day.",
-			)
-		}
+	// A window written as crossing midnight always expands to two intervals, and PostHog
+	// only rejoins them when nothing else is on the timeline. Alongside any other window it
+	// stays split, so the alert reads back with one more window than was configured.
+	if wrappingWindows > 0 && windowCount > 1 {
+		diags.AddAttributeError(
+			path.Root("blocked_windows"),
+			"Quiet hours crossing midnight must be the only window",
+			"A window whose end is before its start crosses midnight, and PostHog stores it as one window per "+
+				"side of midnight unless it is the only window configured. Either make it the only window, or "+
+				"split it yourself into a window ending at 00:00 and one starting at 00:00.",
+		)
+		return diags
+	}
+
+	// Two windows that between them block both sides of midnight get rejoined into a single
+	// crossing window, but only while they are the whole timeline. A third window anywhere
+	// in the day leaves all of them stored as written.
+	if len(intervals) == 2 && intervals[0].source != intervals[1].source &&
+		((intervals[0].start == 0 && intervals[1].end == minutesPerDay) ||
+			(intervals[1].start == 0 && intervals[0].end == minutesPerDay)) {
+		diags.AddAttributeError(
+			path.Root("blocked_windows"),
+			"Quiet-hours windows meeting at midnight are stored as one",
+			fmt.Sprintf(
+				"Windows %s and %s together block midnight from both sides, and PostHog rejoins them into a "+
+					"single crossing window when they are the only two, so the alert would read back differently "+
+					"than configured. Write them as one window crossing midnight, add a third window elsewhere "+
+					"in the day, or end the evening window at 23:59.",
+				intervals[0].label, intervals[1].label,
+			),
+		)
 	}
 
 	return diags
