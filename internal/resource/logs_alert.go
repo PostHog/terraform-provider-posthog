@@ -44,9 +44,16 @@ const (
 // default is still caught.
 const (
 	defaultThresholdCount    = 100
-	defaultThresholdOperator = "above"
+	defaultThresholdOperator = thresholdOperatorAbove
 	defaultEvaluationPeriods = 1
 	defaultDatapointsToAlarm = 1
+)
+
+// The threshold operators PostHog accepts. Named so the schema validator, the default and
+// the plan-time check cannot drift apart.
+const (
+	thresholdOperatorAbove = "above"
+	thresholdOperatorBelow = "below"
 )
 
 // blockedWindowAttrTypes mirrors BlockedWindowTFModel for set conversions.
@@ -201,7 +208,7 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				Computed:            true,
 				MarkdownDescription: "Whether the alert fires when the count is `above` or `below` the threshold. Defaults to `above`.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("above", "below"),
+					stringvalidator.OneOf(thresholdOperatorAbove, thresholdOperatorBelow),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -551,7 +558,7 @@ func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 	// A log count is never negative, so "below 0" is unsatisfiable.
 	operator, operatorKnown := resolveString(plan.ThresholdOperator, config.ThresholdOperator, defaultThresholdOperator)
 	count, countKnown := resolveInt64(plan.ThresholdCount, config.ThresholdCount, defaultThresholdCount)
-	if operatorKnown && countKnown && operator == "below" && count == 0 {
+	if operatorKnown && countKnown && operator == thresholdOperatorBelow && count == 0 {
 		diags.AddAttributeError(
 			path.Root("threshold_count"),
 			"Alert can never fire",

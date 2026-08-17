@@ -14,6 +14,25 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
+// skipIfNoLogsAlerting skips when the logs alerts API is not available to this
+// organization. PostHog gates the endpoint behind the `logs-alerting` feature flag and
+// answers 403 until it is enabled, which would otherwise surface as every test in this
+// file failing on a raw API error rather than skipping.
+func skipIfNoLogsAlerting(t *testing.T) {
+	t.Helper()
+
+	client := httpclient.NewDefaultClient(
+		os.Getenv("POSTHOG_HOST"),
+		os.Getenv("POSTHOG_API_KEY"),
+		"test",
+	)
+
+	_, status, err := client.GetLogsAlert(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), "capability-probe")
+	if err != nil && status == httpclient.HTTPStatusCode(http.StatusForbidden) {
+		t.Skip("Skipping test: the logs-alerting feature flag is not enabled for this organization")
+	}
+}
+
 // testAccCheckLogsAlertDestroy verifies the log alert has been destroyed.
 func testAccCheckLogsAlertDestroy(s *terraform.State) error {
 	client := httpclient.NewDefaultClient(
@@ -43,6 +62,7 @@ func testAccCheckLogsAlertDestroy(s *terraform.State) error {
 // TestLogsAlert_Basic tests creating a log alert with minimal configuration.
 func TestLogsAlert_Basic(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -72,6 +92,7 @@ func TestLogsAlert_Basic(t *testing.T) {
 // TestLogsAlert_AllFields tests creating a log alert with all optional fields.
 func TestLogsAlert_AllFields(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -103,6 +124,7 @@ func TestLogsAlert_AllFields(t *testing.T) {
 // TestLogsAlert_Update tests updating a log alert's threshold and filters in place.
 func TestLogsAlert_Update(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -132,6 +154,7 @@ func TestLogsAlert_Update(t *testing.T) {
 // TestLogsAlert_Import tests importing an existing log alert.
 func TestLogsAlert_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -157,6 +180,7 @@ func TestLogsAlert_Import(t *testing.T) {
 // fails with "inconsistent result after apply" if name is not Computed.
 func TestLogsAlert_OmittedName(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -179,88 +203,11 @@ resource "posthog_logs_alert" "test" {
 	})
 }
 
-// TestLogsAlert_RejectsNeverFiringConfig verifies the N-of-M cross-field check runs at
-// plan time rather than producing an alert that can never fire.
-func TestLogsAlert_RejectsNeverFiringConfig(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: fmt.Sprintf(`
-resource "posthog_logs_alert" "test" {
-  name                = %[1]q
-  severity_levels     = ["error"]
-  evaluation_periods  = 2
-  datapoints_to_alarm = 5
-}
-`, rName),
-				ExpectError: regexp.MustCompile(`Alert can never fire`),
-			},
-		},
-	})
-}
-
-// TestLogsAlert_RejectsOverlappingWindows verifies quiet-hours overlap is caught at plan
-// time, since PostHog would otherwise merge the windows and break every subsequent apply.
-func TestLogsAlert_RejectsOverlappingWindows(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: fmt.Sprintf(`
-resource "posthog_logs_alert" "test" {
-  name            = %[1]q
-  severity_levels = ["error"]
-
-  blocked_windows = [
-    { start = "01:00", end = "03:00" },
-    { start = "02:00", end = "04:00" },
-  ]
-}
-`, rName),
-				ExpectError: regexp.MustCompile(`overlap`),
-			},
-		},
-	})
-}
-
-// TestLogsAlert_RejectsEnabledAlertWithoutFilters verifies the at-least-one-filter rule is
-// enforced at plan time instead of surfacing as a mid-apply API error.
-func TestLogsAlert_RejectsEnabledAlertWithoutFilters(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: fmt.Sprintf(`
-resource "posthog_logs_alert" "test" {
-  name = %[1]q
-}
-`, rName),
-				ExpectError: regexp.MustCompile(`no filters`),
-			},
-		},
-	})
-}
-
 // TestLogsAlert_ClearsFilter removes a previously-set filter and asserts it is actually
 // gone server-side — the whole-object replace semantics the client relies on.
 func TestLogsAlert_ClearsFilter(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -286,7 +233,107 @@ resource "posthog_logs_alert" "test" {
   severity_levels = ["error"]
 }
 `, rName),
-				Check: resource.TestCheckNoResourceAttr("posthog_logs_alert.test", "service_names.#"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_logs_alert.test", "service_names.#"),
+					// State alone would pass even if the PATCH never reached the server.
+					// service_names goes through the same whole-object Filters replace as
+					// the filter group, so it needs the same server-side assertion.
+					testAccCheckLogsAlertServiceNamesCleared("posthog_logs_alert.test"),
+				),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_ClearsFilterWithEmptyList covers the other removal form the schema
+// documents: setting the attribute to an empty list rather than omitting it. The provider
+// preserves an explicitly empty set instead of flipping it to null, so this must stay a
+// clean no-op plan rather than drifting back to the configured value.
+func TestLogsAlert_ClearsFilterWithEmptyList(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	emptyLists := fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+  service_names   = []
+  blocked_windows = []
+}
+`, rName)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+  service_names   = ["checkout-api"]
+
+  blocked_windows = [{ start = "22:00", end = "06:00" }]
+}
+`, rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "service_names.#", "1"),
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "blocked_windows.#", "1"),
+				),
+			},
+			{
+				Config: emptyLists,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "service_names.#", "0"),
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "blocked_windows.#", "0"),
+					testAccCheckLogsAlertServiceNamesCleared("posthog_logs_alert.test"),
+					testAccCheckLogsAlertQuietHoursCleared("posthog_logs_alert.test"),
+				),
+			},
+			{
+				Config:   emptyLists,
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestLogsAlert_ImportComposite covers the `project_id/uuid` import form documented in
+// examples/resources/posthog_logs_alert/import.sh, alongside an alert that carries a
+// filter group. Import adopts the API's filter JSON verbatim while apply projects it onto
+// the declared fields, so filter_group_json is verified separately rather than compared.
+func TestLogsAlert_ImportComposite(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	config := testAccLogsAlertWithFilterGroup(rName, "500")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check:  resource.TestCheckResourceAttrSet("posthog_logs_alert.test", "filter_group_json"),
+			},
+			{
+				Config:       config,
+				ResourceName: "posthog_logs_alert.test",
+				ImportState:  true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["posthog_logs_alert.test"]
+					if !ok {
+						return "", fmt.Errorf("resource not found: posthog_logs_alert.test")
+					}
+					return fmt.Sprintf("%s/%s", getProjectID(), rs.Primary.ID), nil
+				},
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"filter_group_json"},
 			},
 		},
 	})
@@ -299,6 +346,7 @@ resource "posthog_logs_alert" "test" {
 // evaluation_periods (1)".
 func TestLogsAlert_UpdateOmittingComputedAttribute(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -339,29 +387,12 @@ resource "posthog_logs_alert" "test" {
 	})
 }
 
-// TestLogsAlert_RejectsInvalidOperator verifies schema validation runs before any API call.
-func TestLogsAlert_RejectsInvalidOperator(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config:      testAccLogsAlertInvalidOperator(rName),
-				ExpectError: regexp.MustCompile(`Attribute threshold_operator value must be one of`),
-			},
-		},
-	})
-}
-
 // TestLogsAlert_BlockedWindowsLifecycle walks quiet hours through add, change, remove and
 // re-add. The removal step is the one with teeth: schedule_restriction is sent without
 // omitempty so an absent set clears it, and this asserts PostHog agrees.
 func TestLogsAlert_BlockedWindowsLifecycle(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -382,14 +413,6 @@ func TestLogsAlert_BlockedWindowsLifecycle(t *testing.T) {
 					}),
 				),
 			},
-			// Replan the same config: PostHog returns windows in its own order, so a list
-			// would show a spurious diff here where a set does not.
-			{
-				Config: testAccLogsAlertWithBlockedWindows(rName, `
-    { start = "22:00", end = "06:00" },
-`),
-				PlanOnly: true,
-			},
 			// Two windows, neither crossing midnight and with a gap between them. PostHog
 			// re-derives the stored windows from a merged daily timeline, so windows that
 			// touch or wrap midnight alongside another window come back reshaped.
@@ -405,6 +428,16 @@ func TestLogsAlert_BlockedWindowsLifecycle(t *testing.T) {
 						"end":   "13:00",
 					}),
 				),
+			},
+			// Replan with two windows configured, which is where ordering can actually
+			// vary: PostHog returns them sorted by start time regardless of config order,
+			// so a list would show a spurious diff here where a set does not.
+			{
+				Config: testAccLogsAlertWithBlockedWindows(rName, `
+    { start = "12:00", end = "13:00" },
+    { start = "01:00", end = "05:00" },
+`),
+				PlanOnly: true,
 			},
 			// Drop the attribute entirely.
 			{
@@ -428,6 +461,7 @@ func TestLogsAlert_BlockedWindowsLifecycle(t *testing.T) {
 // reason to touch a logs alert after creating it.
 func TestLogsAlert_EnabledToggle(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -458,6 +492,7 @@ func TestLogsAlert_EnabledToggle(t *testing.T) {
 // would show up as permanent drift.
 func TestLogsAlert_FilterGroupLifecycle(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -503,6 +538,7 @@ func TestLogsAlert_FilterGroupLifecycle(t *testing.T) {
 // confirms a rename is an update rather than a replace.
 func TestLogsAlert_UpdateName(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -531,6 +567,7 @@ func TestLogsAlert_UpdateName(t *testing.T) {
 // than erroring.
 func TestLogsAlert_ExternalDeletion(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
@@ -583,95 +620,110 @@ func TestLogsAlert_ExternalDeletion(t *testing.T) {
 	})
 }
 
-// TestLogsAlert_RejectsShortBlockedWindow verifies the >=30-minute quiet-hours rule is
-// caught at plan time rather than mid-apply.
-func TestLogsAlert_RejectsShortBlockedWindow(t *testing.T) {
+// TestLogsAlert_RejectsInvalidConfigs checks every plan-time rule rejects before any API
+// call. The rules themselves are covered exhaustively by the unit tables; what this adds
+// is that ModifyResourcePlan and the schema validators are actually wired into the
+// registered resource, and that each rule's user-facing message is the one a practitioner
+// sees. One table rather than one function per rule keeps that visible on a single screen.
+func TestLogsAlert_RejectsInvalidConfigs(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccLogsAlertWithBlockedWindows(rName, `
-    { start = "02:00", end = "02:15" },
-`),
-				ExpectError: regexp.MustCompile(`Quiet-hours window is too short`),
-			},
+	tests := map[string]struct {
+		body      string
+		wantError *regexp.Regexp
+	}{
+		"datapoints exceed evaluation periods": {
+			body:      "evaluation_periods = 2\n  datapoints_to_alarm = 5",
+			wantError: regexp.MustCompile(`Alert can never fire`),
 		},
-	})
-}
-
-// TestLogsAlert_RejectsTouchingBlockedWindows verifies that windows which merely touch are
-// rejected. PostHog merges on `next.start <= prev.end`, so 01:00-02:00 and 02:00-03:00
-// would be saved as a single 01:00-03:00 window and the apply would fail.
-func TestLogsAlert_RejectsTouchingBlockedWindows(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccLogsAlertWithBlockedWindows(rName, `
-    { start = "01:00", end = "02:00" },
-    { start = "02:00", end = "03:00" },
-`),
-				ExpectError: regexp.MustCompile(`overlap`),
-			},
+		"below zero can never be satisfied": {
+			body:      `threshold_operator = "below"` + "\n  threshold_count = 0",
+			wantError: regexp.MustCompile(`Alert can never fire`),
 		},
-	})
-}
-
-// TestLogsAlert_RejectsWrappedWindowAlongsideAnother verifies the midnight-crossing rule.
-// PostHog re-encodes a crossing window as one window only when it is the whole
-// configuration; next to another window it is stored as two, so the alert would read back
-// with three windows where two were configured.
-func TestLogsAlert_RejectsWrappedWindowAlongsideAnother(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccLogsAlertWithBlockedWindows(rName, `
-    { start = "22:00", end = "07:00" },
-    { start = "12:00", end = "13:00" },
-`),
-				ExpectError: regexp.MustCompile(`must be the only window`),
-			},
+		"invalid threshold operator": {
+			body:      `threshold_operator = "sideways"`,
+			wantError: regexp.MustCompile(`Attribute threshold_operator value must be one of`),
 		},
-	})
-}
+		"empty filter group json": {
+			body:      "filter_group_json = jsonencode({})",
+			wantError: regexp.MustCompile(`must be a non-empty JSON object`),
+		},
+		"overlapping windows": {
+			body:      `blocked_windows = [{ start = "01:00", end = "03:00" }, { start = "02:00", end = "04:00" }]`,
+			wantError: regexp.MustCompile(`overlap`),
+		},
+		"touching windows": {
+			body:      `blocked_windows = [{ start = "01:00", end = "02:00" }, { start = "02:00", end = "03:00" }]`,
+			wantError: regexp.MustCompile(`overlap`),
+		},
+		"window shorter than thirty minutes": {
+			body:      `blocked_windows = [{ start = "02:00", end = "02:15" }]`,
+			wantError: regexp.MustCompile(`Quiet-hours window is too short`),
+		},
+		"crossing window alongside another": {
+			body:      `blocked_windows = [{ start = "22:00", end = "07:00" }, { start = "12:00", end = "13:00" }]`,
+			wantError: regexp.MustCompile(`must be the only window`),
+		},
+		"windows meeting at midnight": {
+			body:      `blocked_windows = [{ start = "00:00", end = "06:00" }, { start = "22:00", end = "00:00" }]`,
+			wantError: regexp.MustCompile(`meeting at midnight`),
+		},
+		"malformed window time": {
+			body:      `blocked_windows = [{ start = "24:00", end = "06:00" }]`,
+			wantError: regexp.MustCompile(`must be a 24-hour time in HH:MM format`),
+		},
+		"more than five windows": {
+			body: `blocked_windows = [
+    { start = "00:00", end = "01:00" }, { start = "02:00", end = "03:00" },
+    { start = "04:00", end = "05:00" }, { start = "06:00", end = "07:00" },
+    { start = "08:00", end = "09:00" }, { start = "10:00", end = "11:00" },
+  ]`,
+			// Terraform hard-wraps diagnostics, so the pattern stops before the line
+			// break that falls between the count and "elements".
+			wantError: regexp.MustCompile(`set must contain at most 5`),
+		},
+	}
 
-// TestLogsAlert_RejectsEmptyFilterGroupJSON verifies jsonencode({}) is rejected at plan
-// time. jsontypes.Normalized only checks that the string is well-formed JSON, so without
-// the extra validator this reaches the API as an empty filter group.
-func TestLogsAlert_RejectsEmptyFilterGroupJSON(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: fmt.Sprintf(`
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config: fmt.Sprintf(`
 resource "posthog_logs_alert" "test" {
-  name              = %[1]q
-  severity_levels   = ["error"]
-  filter_group_json = jsonencode({})
+  name            = %[1]q
+  severity_levels = ["error"]
+  %[2]s
 }
-`, rName),
-				ExpectError: regexp.MustCompile(`must be a non-empty JSON object`),
+`, rName, test.body),
+						ExpectError: test.wantError,
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestLogsAlert_RejectsEnabledAlertWithoutFilters is separate from the table above because
+// it is the one rule whose config must omit severity_levels, which the table always sets.
+func TestLogsAlert_RejectsEnabledAlertWithoutFilters(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      fmt.Sprintf("resource \"posthog_logs_alert\" \"test\" {\n  name = %[1]q\n}\n", rName),
+				ExpectError: regexp.MustCompile(`no filters`),
 			},
 		},
 	})
@@ -705,6 +757,23 @@ func testAccCheckLogsAlertFilterGroupCleared(resourceName string) resource.TestC
 		if alert.Filters != nil && len(alert.Filters.FilterGroup) > 0 {
 			return fmt.Errorf("logs alert %s still has a filter group server-side: %v",
 				alert.ID, alert.Filters.FilterGroup)
+		}
+		return nil
+	}
+}
+
+// testAccCheckLogsAlertServiceNamesCleared asserts the service filter is gone server-side.
+// It goes through the same whole-object Filters replace as the filter group, so a
+// state-only check would pass even if the PATCH never reached PostHog.
+func testAccCheckLogsAlertServiceNamesCleared(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		alert, err := testAccLogsAlertFromAPI(s, resourceName)
+		if err != nil {
+			return err
+		}
+		if alert.Filters != nil && len(alert.Filters.ServiceNames) > 0 {
+			return fmt.Errorf("logs alert %s still has service names server-side: %v",
+				alert.ID, alert.Filters.ServiceNames)
 		}
 		return nil
 	}
@@ -829,14 +898,4 @@ resource "posthog_logs_alert" "test" {
   window_minutes  = 10
 }
 `, name, threshold, severity)
-}
-
-func testAccLogsAlertInvalidOperator(name string) string {
-	return fmt.Sprintf(`
-resource "posthog_logs_alert" "test" {
-  name               = %[1]q
-  severity_levels    = ["error"]
-  threshold_operator = "sideways"
-}
-`, name)
 }
