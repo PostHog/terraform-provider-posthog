@@ -758,6 +758,39 @@ func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
 					}),
 				),
 			},
+			// Move the window rather than clearing it. This is the other drift shape: the
+			// server holds windows, just different ones, so it exercises the populated
+			// branch of the response mapper instead of the null one.
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						ScheduleRestriction: &httpclient.AlertScheduleRestriction{
+							BlockedWindows: []httpclient.AlertBlockedWindow{{Start: "03:00", End: "05:00"}},
+						},
+					}); err != nil {
+						t.Fatalf("moving quiet hours on %s: %v", alertID, err)
+					}
+				},
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: config,
+				Check: resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+					"start": "02:00",
+					"end":   "04:00",
+				}),
+			},
 		},
 	})
 }

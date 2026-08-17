@@ -91,7 +91,8 @@ func (v blockedWindowsValidator) Description(context.Context) string {
 	return fmt.Sprintf(
 		"blocked windows must not overlap or touch, must each span at least %d minutes, and "+
 			"must not be reshaped by PostHog: a window crossing midnight has to be the only one, "+
-			"and two windows meeting at midnight are only allowed alongside a third",
+			"two windows meeting at midnight are only allowed alongside a third, and they may "+
+			"not cover the whole day",
 		alertMinBlockedWindowMinutes,
 	)
 }
@@ -163,6 +164,15 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		}
 	}
 
+	// The rules below judge the shape of the whole day, so they need every configured
+	// window. When one was dropped as malformed or too short, the timeline they would see
+	// is not the one the user wrote: a legal midnight pair looks illegal once the third
+	// window is missing. Report what is already known and let the next plan, with the
+	// short window fixed, judge the real timeline.
+	if windowCount != len(windows) {
+		return
+	}
+
 	// Blocking the whole day leaves the alert no time to run, and PostHog rejects it
 	// outright. Checked before the overlap loop because such a config always overlaps too,
 	// and "combine them into a single window" is the wrong advice here: doing so produces
@@ -217,9 +227,13 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		resp.Diagnostics.AddAttributeError(
 			req.Path,
 			"Blocked window crossing midnight must be the only window",
-			"A window whose end is before its start crosses midnight, and PostHog stores it as one window per "+
-				"side of midnight unless it is the only window configured. Either make it the only window, or "+
-				"split it yourself into a window ending at 00:00 and one starting at 00:00.",
+			fmt.Sprintf(
+				"A window whose end is before its start crosses midnight, and PostHog stores it as one window "+
+					"per side of midnight unless it is the only window configured. Either make it the only "+
+					"window, or split it yourself into a window ending at 00:00 and one starting at 00:00. "+
+					"Splitting costs a window slot, so it needs you to be under the limit of %d.",
+				alertMaxBlockedWindows,
+			),
 		)
 		return
 	}
@@ -364,6 +378,7 @@ func (o AlertOps) Schema() schema.Schema {
 								"Windows must not overlap or touch, except that one may end at `00:00` where another "+
 								"starts. A window may wrap midnight (`end` before `start`), but only as the sole "+
 								"window, and two windows meeting at midnight are only allowed alongside a third. "+
+								"The windows may not cover the whole day, since the alert would never run. "+
 								"Between 1 and %d windows; remove `schedule_restriction` to disable quiet hours.",
 							alertMinBlockedWindowMinutes, alertMaxBlockedWindows,
 						),

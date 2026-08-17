@@ -142,29 +142,32 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		meetsAtMN = "Blocked windows meeting at midnight are stored as one"
 	)
 
-	// wantSummary is the diagnostic summary expected, empty meaning the config is valid.
-	// Asserting the summary rather than a bool stops a case passing because a different
-	// rule happened to reject it.
+	// wantSummaries lists every diagnostic summary expected, in order; empty means the
+	// config is valid. Asserting the whole list rather than the first entry is what pins
+	// the validator reporting all problems in one plan instead of stopping at the first.
 	tests := map[string]struct {
-		windows     [][2]string
-		wantSummary string
+		windows       [][2]string
+		wantSummaries []string
 	}{
 		"separate windows":                           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
 		"windows with a gap between them":            {windows: [][2]string{{"01:00", "05:00"}, {"12:00", "13:00"}}},
 		"lone wrapped window":                        {windows: [][2]string{{"22:00", "07:00"}}},
 		"window ending at midnight plus daytime":     {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
 		"malformed times are ignored":                {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
-		"equal bounds block no time at all":          {windows: [][2]string{{"02:00", "02:00"}}, wantSummary: tooShort},
+		"equal bounds block no time at all":          {windows: [][2]string{{"02:00", "02:00"}}, wantSummaries: []string{tooShort}},
 		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
 		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
-		"shorter than thirty minutes":                {windows: [][2]string{{"02:00", "02:15"}}, wantSummary: tooShort},
-		"wrapped window shorter than thirty minutes": {windows: [][2]string{{"23:50", "00:10"}}, wantSummary: tooShort},
-		"touching windows are merged":                {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}, wantSummary: overlaps},
-		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantSummary: overlaps},
-		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantSummary: overlaps},
-		"wrapped window overlaps morning":            {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantSummary: overlaps},
-		"wrapped window plus daytime":                {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}, wantSummary: crossesMN},
-		"midnight blocked from both sides":           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "00:00"}}, wantSummary: meetsAtMN},
+		"shorter than thirty minutes":                {windows: [][2]string{{"02:00", "02:15"}}, wantSummaries: []string{tooShort}},
+		"wrapped window shorter than thirty minutes": {windows: [][2]string{{"23:50", "00:10"}}, wantSummaries: []string{tooShort}},
+		"touching windows are merged":                {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}, wantSummaries: []string{overlaps}},
+		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantSummaries: []string{overlaps}},
+		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantSummaries: []string{overlaps}},
+		// Both rules fire: the wrapped window overlaps the morning one, and it is not
+		// the only window. Asserting both is what pins the validator reporting every
+		// problem in one plan.
+		"wrapped window overlaps morning":  {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantSummaries: []string{overlaps, crossesMN}},
+		"wrapped window plus daytime":      {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}, wantSummaries: []string{crossesMN}},
+		"midnight blocked from both sides": {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "00:00"}}, wantSummaries: []string{meetsAtMN}},
 		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
 		// window anywhere in the day leaves all three stored exactly as written.
 		"midnight pair with a third window": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "07:00"}, {"12:00", "13:00"}}},
@@ -174,8 +177,8 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		// Blocking every minute leaves the alert no time to run. Reported directly rather
 		// than as an overlap, whose advice to combine the windows would produce a
 		// zero-length window that fails again for an unrelated reason.
-		"windows covering the whole day":             {windows: [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}}, wantSummary: fullDay},
-		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummary: meetsAtMN},
+		"windows covering the whole day":             {windows: [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}}, wantSummaries: []string{fullDay}},
+		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummaries: []string{meetsAtMN}},
 		"midnight pair with two others":              {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
 	}
 
@@ -189,12 +192,11 @@ func TestBlockedWindowsValidator(t *testing.T) {
 
 			blockedWindowsValidator{}.ValidateSet(context.Background(), req, resp)
 
-			if test.wantSummary == "" {
-				assert.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
-				return
+			var got []string
+			for _, d := range resp.Diagnostics.Errors() {
+				got = append(got, d.Summary())
 			}
-			require.True(t, resp.Diagnostics.HasError(), "expected a diagnostic")
-			assert.Equal(t, test.wantSummary, resp.Diagnostics.Errors()[0].Summary())
+			assert.Equal(t, test.wantSummaries, got)
 		})
 	}
 }

@@ -44,7 +44,7 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 
 Required:
 
-- `blocked_windows` (Attributes Set) Blocked time windows, half-open `[start, end)`, each spanning at least 30 minutes. Windows must not overlap or touch, except that one may end at `00:00` where another starts. A window may wrap midnight (`end` before `start`), but only as the sole window, and two windows meeting at midnight are only allowed alongside a third. Between 1 and 5 windows; remove `schedule_restriction` to disable quiet hours. (see [below for nested schema](#nestedatt--schedule_restriction--blocked_windows))
+- `blocked_windows` (Attributes Set) Blocked time windows, half-open `[start, end)`, each spanning at least 30 minutes. Windows must not overlap or touch, except that one may end at `00:00` where another starts. A window may wrap midnight (`end` before `start`), but only as the sole window, and two windows meeting at midnight are only allowed alongside a third. The windows may not cover the whole day, since the alert would never run. Between 1 and 5 windows; remove `schedule_restriction` to disable quiet hours. (see [below for nested schema](#nestedatt--schedule_restriction--blocked_windows))
 
 <a id="nestedatt--schedule_restriction--blocked_windows"></a>
 ### Nested Schema for `schedule_restriction.blocked_windows`
