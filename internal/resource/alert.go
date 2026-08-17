@@ -72,7 +72,13 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	"must be a 24-hour time in HH:MM format",
 )
 
-const alertMinutesPerDay = 24 * 60
+const (
+	alertMinutesPerDay = 24 * 60
+	// The quiet-hour limits PostHog enforces. Referenced by the validator, its error
+	// text and the schema description, so they live in one place.
+	alertMinBlockedWindowMinutes = 30
+	alertMaxBlockedWindows       = 5
+)
 
 // blockedWindowsValidator enforces the quiet-hour rules PostHog applies server-side, so a
 // bad config fails during plan. PostHog does not store the windows it is given: it lays
@@ -82,8 +88,11 @@ const alertMinutesPerDay = 24 * 60
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
-	return "blocked windows must not overlap or touch, must each span at least 30 minutes, " +
-		"and a window crossing midnight must be the only one"
+	return fmt.Sprintf(
+		"blocked windows must not overlap or touch, must each span at least %d minutes, "+
+			"and a window crossing midnight must be the only one",
+		alertMinBlockedWindowMinutes,
+	)
 }
 
 func (v blockedWindowsValidator) MarkdownDescription(ctx context.Context) string {
@@ -101,14 +110,19 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
+	// window is the index of the configured window a span came from. Two spans of the same
+	// window are the two halves of one midnight crossing, not a conflict. The label is only
+	// message text, so it must not be used to decide identity.
 	type interval struct {
+		window     int
 		label      string
 		start, end int
 	}
 
 	var spans []interval
 	windowCount := 0
-	for _, window := range windows {
+	wrappingWindows := 0
+	for i, window := range windows {
 		start, startOK := alertMinutesSinceMidnight(window.Start)
 		end, endOK := alertMinutesSinceMidnight(window.End)
 		// Malformed times are the format validator's problem, equal bounds are the API's.
@@ -120,26 +134,30 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		if length < 0 {
 			length += alertMinutesPerDay
 		}
-		if length < 30 {
+		if length < alertMinBlockedWindowMinutes {
 			resp.Diagnostics.AddAttributeError(
 				req.Path,
 				"Blocked window is too short",
-				fmt.Sprintf("Window %s spans %d minutes. PostHog requires each blocked window to span at least 30 minutes.", label, length),
+				fmt.Sprintf(
+					"Window %s spans %d minutes. PostHog requires each blocked window to span at least %d minutes.",
+					label, length, alertMinBlockedWindowMinutes,
+				),
 			)
 			return
 		}
 		windowCount++
 		switch {
 		case end > start:
-			spans = append(spans, interval{label, start, end})
+			spans = append(spans, interval{i, label, start, end})
 		case end == 0:
 			// Runs to the end of the day without wrapping into the next morning, so it
 			// needs no second half. An empty [0, 0) half would collide with every window
 			// starting at midnight in the check below.
-			spans = append(spans, interval{label, start, alertMinutesPerDay})
+			spans = append(spans, interval{i, label, start, alertMinutesPerDay})
 		default:
 			// Wraps midnight, as the overnight 22:00-07:00 preset does.
-			spans = append(spans, interval{label, start, alertMinutesPerDay}, interval{label, 0, end})
+			wrappingWindows++
+			spans = append(spans, interval{i, label, start, alertMinutesPerDay}, interval{i, label, 0, end})
 		}
 	}
 
@@ -148,7 +166,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
 			// The two halves of one wrapped window are not in conflict with each other.
-			if spans[i].label == spans[j].label {
+			if spans[i].window == spans[j].window {
 				continue
 			}
 			if spans[i].start <= spans[j].end && spans[j].start <= spans[i].end {
@@ -165,25 +183,37 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		}
 	}
 
-	// Quiet time running across midnight is stored as one wrapping window only when it is
-	// the entire configuration. Alongside any other window PostHog stores it as two, so the
-	// alert reads back with one more window than was configured.
-	if windowCount > 1 {
-		var touchesDayStart, touchesDayEnd bool
-		for _, span := range spans {
-			touchesDayStart = touchesDayStart || span.start == 0
-			touchesDayEnd = touchesDayEnd || span.end == alertMinutesPerDay
-		}
-		if touchesDayStart && touchesDayEnd {
-			resp.Diagnostics.AddAttributeError(
-				req.Path,
-				"Blocked window crossing midnight must be the only window",
-				"This configuration blocks time on both sides of midnight while also configuring another window. "+
-					"PostHog stores that as one window per side rather than as a single crossing window, so the "+
-					"alert would not match this configuration. Either make the crossing window the only one, or "+
-					"end it at 23:59 so it stays within the day.",
-			)
-		}
+	// A window written as crossing midnight always expands to two spans, and PostHog only
+	// rejoins them when nothing else is on the timeline. Alongside any other window it
+	// stays split, so the alert reads back with one more window than was configured.
+	if wrappingWindows > 0 && windowCount > 1 {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Blocked window crossing midnight must be the only window",
+			"A window whose end is before its start crosses midnight, and PostHog stores it as one window per "+
+				"side of midnight unless it is the only window configured. Either make it the only window, or "+
+				"split it yourself into a window ending at 00:00 and one starting at 00:00.",
+		)
+		return
+	}
+
+	// Two windows that between them block both sides of midnight get rejoined into a single
+	// crossing window, but only while they are the whole timeline. A third window anywhere
+	// in the day leaves all of them stored as written.
+	if len(spans) == 2 && spans[0].window != spans[1].window &&
+		((spans[0].start == 0 && spans[1].end == alertMinutesPerDay) ||
+			(spans[1].start == 0 && spans[0].end == alertMinutesPerDay)) {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Blocked windows meeting at midnight are stored as one",
+			fmt.Sprintf(
+				"Windows %s and %s together block midnight from both sides, and PostHog rejoins them into a "+
+					"single crossing window when they are the only two, so the alert would not match this "+
+					"configuration. Write them as one window crossing midnight, add a third window elsewhere in "+
+					"the day, or end the evening window at 23:59.",
+				spans[0].label, spans[1].label,
+			),
+		)
 	}
 }
 
@@ -303,7 +333,7 @@ func (o AlertOps) Schema() schema.Schema {
 							// normalizes it to null, which would not match the configured
 							// (non-null) block and would fail the apply.
 							setvalidator.SizeAtLeast(1),
-							setvalidator.SizeAtMost(5),
+							setvalidator.SizeAtMost(alertMaxBlockedWindows),
 							blockedWindowsValidator{},
 						},
 						NestedObject: schema.NestedAttributeObject{
@@ -507,7 +537,10 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 		model.SkipWeekend = types.BoolNull()
 	}
 
-	if resp.ScheduleRestriction == nil {
+	// An empty window list means the same thing as no restriction at all. Treating it as a
+	// populated object would leave a non-null object against a null config and fail the
+	// apply with an inconsistent result.
+	if resp.ScheduleRestriction == nil || len(resp.ScheduleRestriction.BlockedWindows) == 0 {
 		model.ScheduleRestriction = types.ObjectNull(alertScheduleRestrictionAttrTypes)
 	} else {
 		windows := make([]AlertBlockedWindowModel, len(resp.ScheduleRestriction.BlockedWindows))
