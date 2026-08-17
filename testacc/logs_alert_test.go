@@ -672,8 +672,10 @@ func TestLogsAlert_RejectsInvalidConfigs(t *testing.T) {
 			wantError: regexp.MustCompile(`meeting at midnight`),
 		},
 		"malformed window time": {
-			body:      `blocked_windows = [{ start = "24:00", end = "06:00" }]`,
-			wantError: regexp.MustCompile(`must be a 24-hour time in HH:MM format`),
+			body: `blocked_windows = [{ start = "24:00", end = "06:00" }]`,
+			// Terraform hard-wraps diagnostics and the break lands mid-sentence, so match
+			// only the fragment that cannot straddle it.
+			wantError: regexp.MustCompile(`24-hour time in HH:MM format`),
 		},
 		"more than five windows": {
 			body: `blocked_windows = [
