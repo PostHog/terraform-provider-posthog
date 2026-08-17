@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -12,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
@@ -22,10 +25,17 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 // hhmmPattern matches a 24-hour HH:MM local time, as used by quiet-hours windows.
 var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+
+const (
+	minutesPerDay = 24 * 60
+	// minBlockedWindowMinutes is the shortest quiet-hours window PostHog accepts.
+	minBlockedWindowMinutes = 30
+)
 
 // blockedWindowAttrTypes mirrors BlockedWindowTFModel for set conversions.
 var blockedWindowAttrTypes = map[string]attr.Type{
@@ -79,7 +89,12 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, " +
 			"and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, " +
 			"so Terraform cannot track them without reporting permanent drift. Attach destinations from the " +
-			"PostHog UI. An alert with no destination still evaluates, but notifies nobody.",
+			"PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any " +
+			"change that replaces the resource — notably changing `project_id` — creates a new alert with no " +
+			"destinations attached, which you must re-attach manually.\n\n" +
+			"~> An alert whose `state` is `broken` or `snoozed` has stopped notifying. Terraform does not manage " +
+			"either condition, so `terraform plan` stays clean while the alert is silent; reset or unsnooze it " +
+			"from the PostHog UI.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -90,10 +105,16 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			},
 			"project_id": core.ProjectIDSchemaAttribute(),
 			"name": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Human-readable name for the alert. PostHog defaults this to `Untitled alert`.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Human-readable name for the alert. PostHog defaults this to `Untitled alert` " +
+					"when omitted, so this attribute is computed: leaving it out adopts the server's default rather " +
+					"than producing a diff.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtMost(255),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"enabled": schema.BoolAttribute{
@@ -128,14 +149,20 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				CustomType: jsontypes.NormalizedType{},
 				Optional:   true,
 				MarkdownDescription: "Attribute-level filters as JSON, matching the `filters.filterGroup` object of the " +
-					"[logs alerts API](https://posthog.com/docs/api/logs). Compared semantically, so key ordering and " +
-					"whitespace differences from the PostHog API do not produce a diff. Use this for anything beyond " +
-					"severity and service, such as filtering on a log attribute.",
+					"[logs alerts API](https://posthog.com/docs/api/logs). Use this for anything beyond severity and " +
+					"service, such as filtering on a log attribute. Must be a non-empty JSON object. Only the fields " +
+					"you declare are tracked: PostHog annotates saved filters with defaults (such as `label`) that " +
+					"would otherwise surface as permanent drift.",
+				Validators: []validator.String{
+					nonEmptyJSONObjectValidator{},
+				},
 			},
 			"threshold_count": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Number of matching log entries that breaches the threshold within the window. Defaults to 100. Use `0` with the `above` operator to fire on any matching log.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Log entry count to compare against. The alert fires when the number of matching " +
+					"entries in the window is `above` (or `below`) this value. Defaults to 100. Use `0` with `above` to " +
+					"fire on any matching log.",
 				Validators: []validator.Int64{
 					int64validator.AtLeast(0),
 				},
@@ -166,9 +193,10 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				},
 			},
 			"evaluation_periods": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Total number of check periods in the sliding evaluation window (the `M` in N-of-M). Defaults to 1.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "How many of the most recent check periods to consider. PostHog checks a log alert " +
+					"every 5 minutes, so 3 periods covers the last 15 minutes. Defaults to 1.",
 				Validators: []validator.Int64{
 					int64validator.Between(1, 10),
 				},
@@ -177,9 +205,10 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				},
 			},
 			"datapoints_to_alarm": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "How many periods within the evaluation window must breach the threshold to fire (the `N` in N-of-M). Defaults to 1.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "How many of those periods must breach the threshold before the alert fires. " +
+					"Must not exceed `evaluation_periods`. Defaults to 1.",
 				Validators: []validator.Int64{
 					int64validator.Between(1, 10),
 				},
@@ -200,13 +229,12 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			},
 			"blocked_windows": schema.SetNestedAttribute{
 				Optional: true,
-				MarkdownDescription: "Quiet hours: local time windows during which the alert must not run. Times use the " +
-					"project timezone. Each window must span at least 30 minutes. Omit the attribute to disable quiet " +
-					"hours.\n\n" +
-					"~> PostHog merges overlapping or identical windows when saving. Declare non-overlapping windows, " +
-					"otherwise the merged result read back from the API will differ from your configuration on every plan.",
+				MarkdownDescription: "Quiet hours: up to 5 time windows during which the alert is not evaluated. Times " +
+					"use the project timezone. A window may cross midnight (for example `22:00` to `06:00`) and must " +
+					"span at least 30 minutes. Windows must not overlap each other. Omit the attribute to disable quiet hours.",
 				Validators: []validator.Set{
 					setvalidator.SizeAtMost(5),
+					setvalidator.SizeAtLeast(1),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
@@ -228,8 +256,10 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				},
 			},
 			"state": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "Current evaluation state of the alert, such as `not_firing`, `firing`, or `snoozed`.",
+				Computed: true,
+				MarkdownDescription: "Current evaluation state of the alert: `not_firing`, `firing`, `snoozed`, or " +
+					"`broken`. `broken` means PostHog stopped evaluating the alert after repeated failed checks — it " +
+					"notifies nobody until it is reset from the PostHog UI.",
 			},
 		},
 	}
@@ -362,25 +392,29 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	}
 	model.ServiceNames = serviceSet
 
+	// PostHog annotates saved filters with its own defaults (a leaf sent as
+	// {key,type,operator,value} reads back with "label":null), so project the response
+	// onto the fields the user actually declared. Without this the state written after
+	// apply differs from the config and Terraform reports an inconsistent result.
 	if filterGroup != nil {
-		encoded, err := json.Marshal(filterGroup)
+		encoded, err := normalizeJSONForState(filterGroup, model.FilterGroupJSON.ValueString())
 		if err != nil {
 			diags.AddError("Invalid filter group in response", fmt.Sprintf("Could not encode filterGroup returned by PostHog: %s", err.Error()))
 			return diags
 		}
-		model.FilterGroupJSON = jsontypes.NewNormalizedValue(string(encoded))
+		model.FilterGroupJSON = jsontypes.NewNormalizedValue(encoded)
 	} else {
 		model.FilterGroupJSON = jsontypes.NewNormalizedNull()
 	}
 
-	model.ThresholdCount = int64PtrToValue(resp.ThresholdCount)
+	model.ThresholdCount = util.PtrToInt64(resp.ThresholdCount)
 	model.ThresholdOperator = core.PtrToStringNullIfEmptyTrimmed(resp.ThresholdOperator)
-	model.WindowMinutes = int64PtrToValue(resp.WindowMinutes)
-	model.EvaluationPeriods = int64PtrToValue(resp.EvaluationPeriods)
-	model.DatapointsToAlarm = int64PtrToValue(resp.DatapointsToAlarm)
-	model.CooldownMinutes = int64PtrToValue(resp.CooldownMinutes)
+	model.WindowMinutes = util.PtrToInt64(resp.WindowMinutes)
+	model.EvaluationPeriods = util.PtrToInt64(resp.EvaluationPeriods)
+	model.DatapointsToAlarm = util.PtrToInt64(resp.DatapointsToAlarm)
+	model.CooldownMinutes = util.PtrToInt64(resp.CooldownMinutes)
 
-	blockedWindows, d := blockedWindowsToSet(ctx, resp.ScheduleRestriction)
+	blockedWindows, d := blockedWindowsToSet(ctx, resp.ScheduleRestriction, model.BlockedWindows)
 	diags.Append(d...)
 	if diags.HasError() {
 		return diags
@@ -390,18 +424,16 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	return diags
 }
 
-func int64PtrToValue(v *int64) types.Int64 {
-	if v == nil {
-		return types.Int64Null()
-	}
-	return types.Int64Value(*v)
-}
-
 // blockedWindowsToSet converts the API's schedule_restriction into the flattened
-// blocked_windows set. A null or empty restriction means quiet hours are off.
-func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSchedule) (types.Set, diag.Diagnostics) {
+// blocked_windows set. A null or empty restriction means quiet hours are off, but a
+// set the user explicitly configured as empty stays empty — mirroring
+// core.TagsToSetPreserveEmpty, so an empty config does not read back as null.
+func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSchedule, current types.Set) (types.Set, diag.Diagnostics) {
 	objectType := types.ObjectType{AttrTypes: blockedWindowAttrTypes}
 	if schedule == nil || len(schedule.BlockedWindows) == 0 {
+		if !current.IsNull() && !current.IsUnknown() {
+			return types.SetValueFrom(ctx, objectType, []BlockedWindowTFModel{})
+		}
 		return types.SetNull(objectType), nil
 	}
 
@@ -413,6 +445,186 @@ func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSche
 		}
 	}
 	return types.SetValueFrom(ctx, objectType, windows)
+}
+
+// nonEmptyJSONObjectValidator rejects filter_group_json values that are well-formed JSON
+// but not a usable filter group. jsontypes.Normalized only checks well-formedness, so
+// without this `jsonencode({})`, `"null"`, and JSON arrays all fail at apply time — the
+// last with a raw Go unmarshal error.
+type nonEmptyJSONObjectValidator struct{}
+
+func (v nonEmptyJSONObjectValidator) Description(_ context.Context) string {
+	return "must be a non-empty JSON object"
+}
+
+func (v nonEmptyJSONObjectValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v nonEmptyJSONObjectValidator) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(req.ConfigValue.ValueString()), &decoded); err != nil {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Invalid filter group",
+			fmt.Sprintf("Must be a JSON object, got: %s", err.Error()),
+		)
+		return
+	}
+	if len(decoded) == 0 {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Empty filter group",
+			"Must be a non-empty JSON object. Omit the attribute entirely to apply no attribute-level filter.",
+		)
+	}
+}
+
+// ModifyResourcePlan enforces the invariants PostHog documents but only checks server-side,
+// so a bad config fails at plan time with an actionable message instead of mid-apply.
+func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	var plan LogsAlertTFModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// An alert firing on N of M periods can never fire when N > M.
+	if isKnown(plan.DatapointsToAlarm) && isKnown(plan.EvaluationPeriods) &&
+		plan.DatapointsToAlarm.ValueInt64() > plan.EvaluationPeriods.ValueInt64() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("datapoints_to_alarm"),
+			"Alert can never fire",
+			fmt.Sprintf(
+				"datapoints_to_alarm (%d) must not exceed evaluation_periods (%d): the alert requires more breaching "+
+					"periods than it ever evaluates, so it would never fire.",
+				plan.DatapointsToAlarm.ValueInt64(), plan.EvaluationPeriods.ValueInt64(),
+			),
+		)
+	}
+
+	// PostHog rejects an enabled alert with no filters; catch it before the API does.
+	// enabled is Optional+Computed, so an unknown value means the server default (true).
+	enabled := plan.Enabled.IsUnknown() || plan.Enabled.IsNull() || plan.Enabled.ValueBool()
+	noFilters := isEmptySet(plan.SeverityLevels) && isEmptySet(plan.ServiceNames) &&
+		plan.FilterGroupJSON.IsNull()
+	if enabled && noFilters && !plan.FilterGroupJSON.IsUnknown() {
+		resp.Diagnostics.AddError(
+			"Log alert has no filters",
+			"An enabled log alert needs at least one of severity_levels, service_names, or filter_group_json. "+
+				"Set enabled = false to keep it as a draft.",
+		)
+	}
+
+	resp.Diagnostics.Append(validateBlockedWindows(ctx, plan.BlockedWindows)...)
+}
+
+func isKnown(v types.Int64) bool {
+	return !v.IsNull() && !v.IsUnknown()
+}
+
+func isEmptySet(v types.Set) bool {
+	return v.IsNull() || len(v.Elements()) == 0
+}
+
+// validateBlockedWindows enforces the ≥30-minute span and non-overlap rules. PostHog
+// silently merges overlapping windows on save, which would come back as a set that
+// differs from the config — an apply failure rather than recoverable drift.
+func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if windows.IsNull() || windows.IsUnknown() {
+		return diags
+	}
+
+	var parsed []BlockedWindowTFModel
+	diags.Append(windows.ElementsAs(ctx, &parsed, false)...)
+	if diags.HasError() {
+		return diags
+	}
+
+	type interval struct{ start, end int }
+	var intervals []interval
+	var labels []string
+
+	for _, w := range parsed {
+		if w.Start.IsUnknown() || w.End.IsUnknown() {
+			return diags
+		}
+		start, okStart := parseHHMM(w.Start.ValueString())
+		end, okEnd := parseHHMM(w.End.ValueString())
+		if !okStart || !okEnd {
+			// The HH:MM regex validator already reports malformed values.
+			return diags
+		}
+
+		span := end - start
+		if span <= 0 {
+			span += minutesPerDay
+		}
+		label := fmt.Sprintf("%s-%s", w.Start.ValueString(), w.End.ValueString())
+		if start == end || span < minBlockedWindowMinutes {
+			diags.AddAttributeError(
+				path.Root("blocked_windows"),
+				"Quiet-hours window is too short",
+				fmt.Sprintf("Window %s spans %d minutes; PostHog requires at least %d.", label, span, minBlockedWindowMinutes),
+			)
+			continue
+		}
+
+		// Split a window that crosses midnight so overlap is a plain interval comparison.
+		if end > start {
+			intervals = append(intervals, interval{start, end})
+			labels = append(labels, label)
+		} else {
+			intervals = append(intervals, interval{start, minutesPerDay}, interval{0, end})
+			labels = append(labels, label, label)
+		}
+	}
+
+	for i := 0; i < len(intervals); i++ {
+		for j := i + 1; j < len(intervals); j++ {
+			if labels[i] == labels[j] {
+				continue
+			}
+			if intervals[i].start < intervals[j].end && intervals[j].start < intervals[i].end {
+				diags.AddAttributeError(
+					path.Root("blocked_windows"),
+					"Quiet-hours windows overlap",
+					fmt.Sprintf(
+						"Windows %s and %s overlap. PostHog merges overlapping windows when saving, so the alert "+
+							"would read back with different windows than configured and every apply would fail.",
+						labels[i], labels[j],
+					),
+				)
+				return diags
+			}
+		}
+	}
+
+	return diags
+}
+
+// parseHHMM converts a validated HH:MM string to minutes past local midnight.
+func parseHHMM(v string) (int, bool) {
+	hh, mm, found := strings.Cut(v, ":")
+	if !found {
+		return 0, false
+	}
+	hours, err := strconv.Atoi(hh)
+	if err != nil {
+		return 0, false
+	}
+	minutes, err := strconv.Atoi(mm)
+	if err != nil {
+		return 0, false
+	}
+	return hours*60 + minutes, true
 }
 
 func (o LogsAlertOps) Create(ctx context.Context, client httpclient.PosthogClient, model LogsAlertTFModel, req httpclient.LogsAlertRequest) (httpclient.LogsAlert, error) {

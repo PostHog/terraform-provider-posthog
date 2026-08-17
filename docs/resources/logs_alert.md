@@ -5,7 +5,8 @@ subcategory: ""
 description: |-
   Manage PostHog log alerts https://posthog.com/docs/logs/alerts. A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
   At least one of severity_levels, service_names, or filter_group_json is required unless the alert is a draft (enabled = false). A project may hold at most 20 log alerts.
-  ~> Notification destinations are not managed by this resource. PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody.
+  ~> Notification destinations are not managed by this resource. PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing project_id — creates a new alert with no destinations attached, which you must re-attach manually.
+  ~> An alert whose state is broken or snoozed has stopped notifying. Terraform does not manage either condition, so terraform plan stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
 ---
 
 # posthog_logs_alert (Resource)
@@ -14,7 +15,9 @@ Manage PostHog [log alerts](https://posthog.com/docs/logs/alerts). A log alert p
 
 At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the alert is a draft (`enabled = false`). A project may hold at most 20 log alerts.
 
-~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody.
+~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing `project_id` — creates a new alert with no destinations attached, which you must re-attach manually.
+
+~> An alert whose `state` is `broken` or `snoozed` has stopped notifying. Terraform does not manage either condition, so `terraform plan` stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
 
 ## Example Usage
 
@@ -35,8 +38,9 @@ resource "posthog_logs_alert" "checkout_errors" {
   datapoints_to_alarm = 2
   cooldown_minutes    = 30
 
-  # Quiet hours, in the project's timezone. Windows must not overlap: PostHog
-  # merges overlapping windows on save, which would show up as permanent drift.
+  # Quiet hours, in the project's timezone. A window may cross midnight and must
+  # span at least 30 minutes. Windows must not overlap — PostHog merges overlapping
+  # windows on save, so the provider rejects them at plan time.
   blocked_windows = [{
     start = "22:00"
     end   = "06:00"
@@ -77,26 +81,24 @@ resource "posthog_logs_alert" "draft" {
 
 ### Optional
 
-- `blocked_windows` (Attributes Set) Quiet hours: local time windows during which the alert must not run. Times use the project timezone. Each window must span at least 30 minutes. Omit the attribute to disable quiet hours.
-
-~> PostHog merges overlapping or identical windows when saving. Declare non-overlapping windows, otherwise the merged result read back from the API will differ from your configuration on every plan. (see [below for nested schema](#nestedatt--blocked_windows))
+- `blocked_windows` (Attributes Set) Quiet hours: up to 5 time windows during which the alert is not evaluated. Times use the project timezone. A window may cross midnight (for example `22:00` to `06:00`) and must span at least 30 minutes. Windows must not overlap each other. Omit the attribute to disable quiet hours. (see [below for nested schema](#nestedatt--blocked_windows))
 - `cooldown_minutes` (Number) Minimum minutes between repeated notifications after the alert fires. Defaults to 0, meaning no cooldown.
-- `datapoints_to_alarm` (Number) How many periods within the evaluation window must breach the threshold to fire (the `N` in N-of-M). Defaults to 1.
+- `datapoints_to_alarm` (Number) How many of those periods must breach the threshold before the alert fires. Must not exceed `evaluation_periods`. Defaults to 1.
 - `enabled` (Boolean) Whether the alert is actively evaluated. Defaults to true. Disabling resets the alert state to `not_firing`.
-- `evaluation_periods` (Number) Total number of check periods in the sliding evaluation window (the `M` in N-of-M). Defaults to 1.
-- `filter_group_json` (String) Attribute-level filters as JSON, matching the `filters.filterGroup` object of the [logs alerts API](https://posthog.com/docs/api/logs). Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Use this for anything beyond severity and service, such as filtering on a log attribute.
-- `name` (String) Human-readable name for the alert. PostHog defaults this to `Untitled alert`.
+- `evaluation_periods` (Number) How many of the most recent check periods to consider. PostHog checks a log alert every 5 minutes, so 3 periods covers the last 15 minutes. Defaults to 1.
+- `filter_group_json` (String) Attribute-level filters as JSON, matching the `filters.filterGroup` object of the [logs alerts API](https://posthog.com/docs/api/logs). Use this for anything beyond severity and service, such as filtering on a log attribute. Must be a non-empty JSON object. Only the fields you declare are tracked: PostHog annotates saved filters with defaults (such as `label`) that would otherwise surface as permanent drift.
+- `name` (String) Human-readable name for the alert. PostHog defaults this to `Untitled alert` when omitted, so this attribute is computed: leaving it out adopts the server's default rather than producing a diff.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `service_names` (Set of String) Service names to scope the alert to.
 - `severity_levels` (Set of String) Log severity levels to count: `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.
-- `threshold_count` (Number) Number of matching log entries that breaches the threshold within the window. Defaults to 100. Use `0` with the `above` operator to fire on any matching log.
+- `threshold_count` (Number) Log entry count to compare against. The alert fires when the number of matching entries in the window is `above` (or `below`) this value. Defaults to 100. Use `0` with `above` to fire on any matching log.
 - `threshold_operator` (String) Whether the alert fires when the count is `above` or `below` the threshold. Defaults to `above`.
 - `window_minutes` (Number) Time window in minutes over which log entries are counted: `5`, `10`, `15`, `30`, or `60`. Defaults to 5.
 
 ### Read-Only
 
 - `id` (String) UUID of the log alert.
-- `state` (String) Current evaluation state of the alert, such as `not_firing`, `firing`, or `snoozed`.
+- `state` (String) Current evaluation state of the alert: `not_firing`, `firing`, `snoozed`, or `broken`. `broken` means PostHog stopped evaluating the alert after repeated failed checks — it notifies nobody until it is reset from the PostHog UI.
 
 <a id="nestedatt--blocked_windows"></a>
 ### Nested Schema for `blocked_windows`

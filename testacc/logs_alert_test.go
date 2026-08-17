@@ -152,6 +152,146 @@ func TestLogsAlert_Import(t *testing.T) {
 	})
 }
 
+// TestLogsAlert_OmittedName covers the config shape the schema explicitly permits: no
+// name at all, adopting PostHog's "Untitled alert" server default. This is the path that
+// fails with "inconsistent result after apply" if name is not Computed.
+func TestLogsAlert_OmittedName(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "posthog_logs_alert" "test" {
+  severity_levels = ["error"]
+  enabled         = false
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "name", "Untitled alert"),
+					resource.TestCheckResourceAttrSet("posthog_logs_alert.test", "id"),
+				),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_RejectsNeverFiringConfig verifies the N-of-M cross-field check runs at
+// plan time rather than producing an alert that can never fire.
+func TestLogsAlert_RejectsNeverFiringConfig(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name                = %[1]q
+  severity_levels     = ["error"]
+  evaluation_periods  = 2
+  datapoints_to_alarm = 5
+}
+`, rName),
+				ExpectError: regexp.MustCompile(`Alert can never fire`),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_RejectsOverlappingWindows verifies quiet-hours overlap is caught at plan
+// time, since PostHog would otherwise merge the windows and break every subsequent apply.
+func TestLogsAlert_RejectsOverlappingWindows(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+
+  blocked_windows = [
+    { start = "01:00", end = "03:00" },
+    { start = "02:00", end = "04:00" },
+  ]
+}
+`, rName),
+				ExpectError: regexp.MustCompile(`overlap`),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_RejectsEnabledAlertWithoutFilters verifies the at-least-one-filter rule is
+// enforced at plan time instead of surfacing as a mid-apply API error.
+func TestLogsAlert_RejectsEnabledAlertWithoutFilters(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name = %[1]q
+}
+`, rName),
+				ExpectError: regexp.MustCompile(`no filters`),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_ClearsFilter removes a previously-set filter and asserts it is actually
+// gone server-side — the whole-object replace semantics the client relies on.
+func TestLogsAlert_ClearsFilter(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+  service_names   = ["checkout-api"]
+}
+`, rName),
+				Check: resource.TestCheckResourceAttr("posthog_logs_alert.test", "service_names.#", "1"),
+			},
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+}
+`, rName),
+				Check: resource.TestCheckNoResourceAttr("posthog_logs_alert.test", "service_names.#"),
+			},
+		},
+	})
+}
+
 // TestLogsAlert_RejectsInvalidOperator verifies schema validation runs before any API call.
 func TestLogsAlert_RejectsInvalidOperator(t *testing.T) {
 	skipIfNotAcceptance(t)

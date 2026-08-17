@@ -38,10 +38,13 @@ type LogsAlertRequest struct {
 	ScheduleRestriction *LogsAlertSchedule `json:"schedule_restriction"`
 }
 
+// LogsAlertFilters omits no fields: the API accepts null for each key and treats the
+// whole object as a replacement, so sending an explicit null is what clears a filter.
+// With omitempty, "cleared" and "unchanged" would be identical on the wire.
 type LogsAlertFilters struct {
-	SeverityLevels []string       `json:"severityLevels,omitempty"`
-	ServiceNames   []string       `json:"serviceNames,omitempty"`
-	FilterGroup    map[string]any `json:"filterGroup,omitempty"`
+	SeverityLevels []string       `json:"severityLevels"`
+	ServiceNames   []string       `json:"serviceNames"`
+	FilterGroup    map[string]any `json:"filterGroup"`
 }
 
 type LogsAlertSchedule struct {
