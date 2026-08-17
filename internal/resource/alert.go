@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -180,7 +181,11 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	blocked := 0
 	var covered [alertMinutesPerDay]bool
 	for _, span := range spans {
-		for m := span.start; m < span.end && m < alertMinutesPerDay; m++ {
+		// Clamped rather than trusted. Every span here came through the strict parser, but
+		// indexing a fixed array on parsed input is worth one bound rather than a panic if
+		// that ever stops holding.
+		start := max(span.start, 0)
+		for m := start; m < span.end && m < alertMinutesPerDay; m++ {
 			if !covered[m] {
 				covered[m] = true
 				blocked++
@@ -263,15 +268,19 @@ func alertWindowLabel(window AlertBlockedWindowModel) string {
 	return window.Start.ValueString() + "-" + window.End.ValueString()
 }
 
+// alertMinutesSinceMidnight converts a validated HH:MM string to minutes past midnight.
+// Attribute validators do not gate this one, so it has to reject anything the HH:MM regex
+// would: time.Parse is strict where Sscanf is not, and would otherwise accept a negative
+// hour and produce a negative offset.
 func alertMinutesSinceMidnight(value types.String) (int, bool) {
 	if value.IsNull() || value.IsUnknown() {
 		return 0, false
 	}
-	var hours, minutes int
-	if _, err := fmt.Sscanf(value.ValueString(), "%d:%d", &hours, &minutes); err != nil {
+	parsed, err := time.Parse("15:04", value.ValueString())
+	if err != nil {
 		return 0, false
 	}
-	return hours*60 + minutes, true
+	return parsed.Hour()*60 + parsed.Minute(), true
 }
 
 type AlertOps struct{}

@@ -149,11 +149,17 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		windows       [][2]string
 		wantSummaries []string
 	}{
-		"separate windows":                           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
-		"windows with a gap between them":            {windows: [][2]string{{"01:00", "05:00"}, {"12:00", "13:00"}}},
-		"lone wrapped window":                        {windows: [][2]string{{"22:00", "07:00"}}},
-		"window ending at midnight plus daytime":     {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
-		"malformed times are ignored":                {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
+		"separate windows":                       {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
+		"windows with a gap between them":        {windows: [][2]string{{"01:00", "05:00"}, {"12:00", "13:00"}}},
+		"lone wrapped window":                    {windows: [][2]string{{"22:00", "07:00"}}},
+		"window ending at midnight plus daytime": {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
+		"malformed times are ignored":            {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
+		// The HH:MM regex and this validator run independently, so anything the regex
+		// rejects can still reach here. A negative hour used to parse and index the
+		// coverage array out of range.
+		"negative hour is rejected, not parsed":      {windows: [][2]string{{"-1:30", "06:00"}}},
+		"out-of-range time is rejected":              {windows: [][2]string{{"99:99", "06:00"}}},
+		"trailing junk is rejected":                  {windows: [][2]string{{"12:30extra", "13:00"}}},
 		"equal bounds block no time at all":          {windows: [][2]string{{"02:00", "02:00"}}, wantSummaries: []string{tooShort}},
 		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
 		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
