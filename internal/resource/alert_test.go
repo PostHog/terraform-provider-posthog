@@ -157,9 +157,12 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		// The HH:MM regex and this validator run independently, so anything the regex
 		// rejects can still reach here. A negative hour used to parse and index the
 		// coverage array out of range.
-		"negative hour is rejected, not parsed":      {windows: [][2]string{{"-1:30", "06:00"}}},
-		"out-of-range time is rejected":              {windows: [][2]string{{"99:99", "06:00"}}},
-		"trailing junk is rejected":                  {windows: [][2]string{{"12:30extra", "13:00"}}},
+		"negative hour is rejected, not parsed": {windows: [][2]string{{"-1:30", "06:00"}}},
+		"out-of-range time is rejected":         {windows: [][2]string{{"99:99", "06:00"}}},
+		"trailing junk is rejected":             {windows: [][2]string{{"12:30extra", "13:00"}}},
+		// time.Parse alone would read this as 09:30, which the pattern does not allow.
+		// Both layers have to agree on what a valid time is.
+		"single-digit hour is rejected":              {windows: [][2]string{{"9:30", "13:00"}}},
 		"equal bounds block no time at all":          {windows: [][2]string{{"02:00", "02:00"}}, wantSummaries: []string{tooShort}},
 		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
 		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
@@ -177,15 +180,36 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
 		// window anywhere in the day leaves all three stored exactly as written.
 		"midnight pair with a third window": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "07:00"}, {"12:00", "13:00"}}},
-		// The meets-at-midnight check tests both orientations of the pair. Terraform does
-		// not promise set elements reach ElementsAs in config order, so the reversed form
-		// is the one that fires roughly half the time in practice.
 		// Blocking every minute leaves the alert no time to run. Reported directly rather
 		// than as an overlap, whose advice to combine the windows would produce a
 		// zero-length window that fails again for an unrelated reason.
-		"windows covering the whole day":             {windows: [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}}, wantSummaries: []string{fullDay}},
+		"windows covering the whole day": {windows: [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}}, wantSummaries: []string{fullDay}},
+		// The meets-at-midnight check tests both orientations of the pair. Terraform does
+		// not promise set elements reach ElementsAs in config order, so the reversed form
+		// is the one that fires roughly half the time in practice.
 		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummaries: []string{meetsAtMN}},
-		"midnight pair with two others":              {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
+		// A dropped window can fabricate the two-span shape the meets-at-midnight rule
+		// keys off, so that rule alone waits for a complete timeline. Without the guard
+		// this pair, which is legal alongside a third window, reports a midnight conflict
+		// as well as the length error.
+		"short window hides nothing but the midnight rule": {
+			windows:       [][2]string{{"02:00", "02:10"}, {"00:00", "06:00"}, {"22:00", "00:00"}},
+			wantSummaries: []string{tooShort},
+		},
+		// The other rules still report on a partial timeline, because a dropped window can
+		// only make them miss a problem, never invent one.
+		"short window does not hide a real overlap": {
+			windows:       [][2]string{{"02:00", "02:10"}, {"08:00", "12:00"}, {"11:00", "14:00"}},
+			wantSummaries: []string{tooShort, overlaps},
+		},
+		// The crossing-midnight rule counts surviving windows, so a dropped one makes it
+		// undercount and stay quiet. Missing a problem is the safe direction: the next
+		// plan, with the length fixed, reports it.
+		"short window can hide a crossing window": {
+			windows:       [][2]string{{"02:00", "02:10"}, {"22:00", "07:00"}},
+			wantSummaries: []string{tooShort},
+		},
+		"midnight pair with two others": {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
 	}
 
 	for name, test := range tests {

@@ -68,8 +68,13 @@ var alertScheduleRestrictionAttrTypes = map[string]attr.Type{
 	"blocked_windows": types.SetType{ElemType: alertBlockedWindowObjectType},
 }
 
+// alertTimeOfDayPattern is the one definition of the HH:MM grammar. The attribute
+// validator and the set validator both check against it, so the two layers cannot come to
+// different conclusions about what a valid time is.
+var alertTimeOfDayPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+
 var alertTimeOfDayValidator = stringvalidator.RegexMatches(
-	regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`),
+	alertTimeOfDayPattern,
 	"must be a 24-hour time in HH:MM format",
 )
 
@@ -165,15 +170,6 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		}
 	}
 
-	// The rules below judge the shape of the whole day, so they need every configured
-	// window. When one was dropped as malformed or too short, the timeline they would see
-	// is not the one the user wrote: a legal midnight pair looks illegal once the third
-	// window is missing. Report what is already known and let the next plan, with the
-	// short window fixed, judge the real timeline.
-	if windowCount != len(windows) {
-		return
-	}
-
 	// Blocking the whole day leaves the alert no time to run, and PostHog rejects it
 	// outright. Checked before the overlap loop because such a config always overlaps too,
 	// and "combine them into a single window" is the wrong advice here: doing so produces
@@ -246,6 +242,14 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	// Two windows that between them block both sides of midnight get rejoined into a single
 	// crossing window, but only while they are the whole timeline. A third window anywhere
 	// in the day leaves all of them stored as written.
+	//
+	// This is the one rule a dropped window can make wrong rather than merely incomplete:
+	// it keys off there being exactly two spans, which a window dropped as malformed or
+	// too short can fabricate. The rules above only ever miss a problem on a partial
+	// timeline, never invent one, so they still run.
+	if windowCount != len(windows) {
+		return
+	}
 	if len(spans) == 2 && spans[0].window != spans[1].window &&
 		((spans[0].start == 0 && spans[1].end == alertMinutesPerDay) ||
 			(spans[1].start == 0 && spans[0].end == alertMinutesPerDay)) {
@@ -268,12 +272,15 @@ func alertWindowLabel(window AlertBlockedWindowModel) string {
 	return window.Start.ValueString() + "-" + window.End.ValueString()
 }
 
-// alertMinutesSinceMidnight converts a validated HH:MM string to minutes past midnight.
-// Attribute validators do not gate this one, so it has to reject anything the HH:MM regex
-// would: time.Parse is strict where Sscanf is not, and would otherwise accept a negative
-// hour and produce a negative offset.
+// alertMinutesSinceMidnight converts an HH:MM string to minutes past midnight. The
+// attribute validator does not gate this one, so it checks the same pattern itself rather
+// than trusting that a value reaching it was already rejected. time.Parse alone is not
+// enough: it accepts a single-digit hour that the pattern does not.
 func alertMinutesSinceMidnight(value types.String) (int, bool) {
 	if value.IsNull() || value.IsUnknown() {
+		return 0, false
+	}
+	if !alertTimeOfDayPattern.MatchString(value.ValueString()) {
 		return 0, false
 	}
 	parsed, err := time.Parse("15:04", value.ValueString())

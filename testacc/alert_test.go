@@ -651,6 +651,12 @@ func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
       { start = "19:00", end = "00:00" },
       { start = "12:00", end = "13:00" },
 `
+	// Exactly the minimum the provider permits. If PostHog's floor were strictly greater
+	// than 30 minutes this would fail the apply rather than the plan, and only a live
+	// apply can tell the difference.
+	exactlyThirtyMinutes := `
+      { start = "02:00", end = "02:30" },
+`
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -678,6 +684,73 @@ func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
 			{
 				Config:   testAccAlertWithBlockedWindows(rName, endsAtMidnight),
 				PlanOnly: true,
+			},
+			{
+				Config: testAccAlertWithBlockedWindows(rName, exactlyThirtyMinutes),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, exactlyThirtyMinutes),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestAlert_UnrelatedUpdateKeepsQuietHours changes an attribute that has nothing to do with
+// quiet hours while quiet hours are set. BuildUpdateRequest re-sends the whole request and
+// schedule_restriction carries no omitempty, so a regression there would clear the windows
+// server-side on an unrelated edit and nothing else would notice.
+func TestAlert_UnrelatedUpdateKeepsQuietHours(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	withWindows := func(upper int) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.test.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = %d
+  condition_type   = "absolute_value"
+  series_index     = 0
+
+  schedule_restriction = {
+    blocked_windows = [
+      { start = "02:00", end = "04:00" },
+    ]
+  }
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(rName), rName, upper)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: withWindows(100),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+			{
+				Config: withWindows(250),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_upper", "250"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "02:00",
+						"end":   "04:00",
+					}),
+				),
 			},
 		},
 	})
