@@ -297,7 +297,7 @@ func (o AlertOps) Schema() schema.Schema {
 				Attributes: map[string]schema.Attribute{
 					"blocked_windows": schema.SetNestedAttribute{
 						Required:            true,
-						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap or touch, since PostHog merges them into one. A window whose `end` is before its `start` wraps midnight, but such a window must be the only one: PostHog stores blocked windows on a single merged 24-hour timeline, and a crossing window alongside another one is stored as two windows rather than one. Between 1 and 5 windows; remove the whole `schedule_restriction` block to disable quiet hours.",
+						MarkdownDescription: "Blocked time windows, half-open `[start, end)`, each spanning at least 30 minutes. Windows must not overlap or touch. A window may wrap midnight (`end` before `start`), but only as the sole window. Between 1 and 5 windows; remove `schedule_restriction` to disable quiet hours.",
 						Validators: []validator.Set{
 							// An empty set is not the same as no quiet hours: PostHog
 							// normalizes it to null, which would not match the configured

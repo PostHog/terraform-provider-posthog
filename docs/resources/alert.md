@@ -44,7 +44,7 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 
 Required:
 
-- `blocked_windows` (Attributes Set) Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap or touch, since PostHog merges them into one. A window whose `end` is before its `start` wraps midnight, but such a window must be the only one: PostHog stores blocked windows on a single merged 24-hour timeline, and a crossing window alongside another one is stored as two windows rather than one. Between 1 and 5 windows; remove the whole `schedule_restriction` block to disable quiet hours. (see [below for nested schema](#nestedatt--schedule_restriction--blocked_windows))
+- `blocked_windows` (Attributes Set) Blocked time windows, half-open `[start, end)`, each spanning at least 30 minutes. Windows must not overlap or touch. A window may wrap midnight (`end` before `start`), but only as the sole window. Between 1 and 5 windows; remove `schedule_restriction` to disable quiet hours. (see [below for nested schema](#nestedatt--schedule_restriction--blocked_windows))
 
 <a id="nestedatt--schedule_restriction--blocked_windows"></a>
 ### Nested Schema for `schedule_restriction.blocked_windows`

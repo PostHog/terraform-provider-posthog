@@ -631,9 +631,11 @@ func TestAlert_RejectsEmptyBlockedWindows(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      testAccAlertWithBlockedWindows(rName, ``),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`(?s)set must contain at least 1 elements`),
+				Config:   testAccAlertWithBlockedWindows(rName, ``),
+				PlanOnly: true,
+				// Terraform hard-wraps diagnostics, so the pattern stops before the
+				// line break that falls between the count and "elements".
+				ExpectError: regexp.MustCompile(`set must contain at least 1`),
 			},
 		},
 	})
@@ -703,8 +705,10 @@ func TestAlert_RejectsTooManyBlockedWindows(t *testing.T) {
       { start = "08:00", end = "09:00" },
       { start = "10:00", end = "11:00" },
 `),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`(?s)set must contain at most 5 elements`),
+				PlanOnly: true,
+				// Terraform hard-wraps diagnostics, so the pattern stops before the
+				// line break that falls between the count and "elements".
+				ExpectError: regexp.MustCompile(`set must contain at most 5`),
 			},
 		},
 	})
