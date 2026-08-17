@@ -148,7 +148,10 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 				req.Path,
 				"Blocked window is too short",
 				fmt.Sprintf(
-					"Window %s spans %d minutes. PostHog requires each blocked window to span at least %d minutes.",
+					"Window %s spans %d minutes. PostHog requires each blocked window to span at least %d "+
+						"minutes. PostHog can produce such a window itself when it splits an overnight window "+
+						"at midnight, so an imported alert may carry one it will not accept back. Widen or drop "+
+						"it: the alert cannot be applied as stored.",
 					alertWindowLabel(window), length, alertMinBlockedWindowMinutes,
 				),
 			)
