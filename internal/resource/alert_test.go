@@ -104,6 +104,22 @@ func TestMapResponseToModelScheduleRestriction(t *testing.T) {
 		}, windows)
 	})
 
+	// An empty window list means the same thing as no restriction. This is the branch the
+	// httpclient comment promises, and it is what stops a cleared restriction reading back
+	// as a populated object against a null config.
+	t.Run("empty list is treated as absent", func(t *testing.T) {
+		model := alertModelWithWindows(t, [2]string{"00:00", "06:00"})
+		resp := httpclient.Alert{
+			ID:                  "01a000df-f6cc-0000-9779-2ebb16417c3e",
+			Insight:             httpclient.AlertInsight{ID: 1},
+			ScheduleRestriction: &httpclient.AlertScheduleRestriction{BlockedWindows: []httpclient.AlertBlockedWindow{}},
+		}
+
+		diags := AlertOps{}.MapResponseToModel(ctx, resp, &model)
+		require.False(t, diags.HasError(), "%v", diags)
+		assert.True(t, model.ScheduleRestriction.IsNull())
+	})
+
 	t.Run("absent", func(t *testing.T) {
 		model := alertModelWithWindows(t, [2]string{"00:00", "06:00"})
 		resp := httpclient.Alert{
@@ -151,7 +167,11 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
 		// window anywhere in the day leaves all three stored exactly as written.
 		"midnight pair with a third window": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "07:00"}, {"12:00", "13:00"}}},
-		"midnight pair with two others":     {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
+		// The meets-at-midnight check tests both orientations of the pair. Terraform does
+		// not promise set elements reach ElementsAs in config order, so the reversed form
+		// is the one that fires roughly half the time in practice.
+		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummary: meetsAtMN},
+		"midnight pair with two others":              {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
 	}
 
 	for name, test := range tests {

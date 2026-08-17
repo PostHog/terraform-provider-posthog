@@ -6,6 +6,10 @@
 
 - **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated
 
+### Upgrade notes
+
+- **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them.
+
 ## 1.0.0
 
 ### Features

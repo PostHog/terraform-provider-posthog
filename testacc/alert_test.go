@@ -502,8 +502,10 @@ func TestAlert_ScheduleRestrictionWrapsMidnight(t *testing.T) {
 					}),
 				),
 			},
-			// A second plan against the same config must be empty: PostHog returns the
-			// windows in its own order, and a list would report a spurious diff here.
+			// A second plan against the same config must be empty, proving the wrapped
+			// window round-trips unchanged. The set-versus-list ordering property is
+			// proved by the five-window replan in BlockedWindowsAcceptedBoundaries,
+			// since a single window has no order to get wrong.
 			{
 				Config: testAccAlertWithBlockedWindows(rName, `
       { start = "22:00", end = "07:00" },

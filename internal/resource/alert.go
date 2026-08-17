@@ -74,8 +74,8 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 
 const (
 	alertMinutesPerDay = 24 * 60
-	// The quiet-hour limits PostHog enforces. Referenced by the validator, its error
-	// text and the schema description, so they live in one place.
+	// The quiet-hour limits PostHog enforces, shared by the validator, its error text and
+	// the schema description so the three cannot drift.
 	alertMinBlockedWindowMinutes = 30
 	alertMaxBlockedWindows       = 5
 )
@@ -89,8 +89,9 @@ type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
 	return fmt.Sprintf(
-		"blocked windows must not overlap or touch, must each span at least %d minutes, "+
-			"and a window crossing midnight must be the only one",
+		"blocked windows must not overlap or touch, must each span at least %d minutes, and "+
+			"must not be reshaped by PostHog: a window crossing midnight has to be the only one, "+
+			"and two windows meeting at midnight are only allowed alongside a third",
 		alertMinBlockedWindowMinutes,
 	)
 }
@@ -146,7 +147,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 					label, length, alertMinBlockedWindowMinutes,
 				),
 			)
-			return
+			continue
 		}
 		windowCount++
 		switch {
@@ -168,7 +169,9 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	// prev.end`, so 00:00-06:00 and 06:00-09:00 are saved as a single 00:00-09:00 window.
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
-			// The two halves of one wrapped window are not in conflict with each other.
+			// The two halves of one wrapped window cannot conflict: the first always ends at
+			// midnight and the second always starts there. Kept so a future change to how
+			// spans are built cannot turn a lone wrapped window into a self-overlap.
 			if spans[i].window == spans[j].window {
 				continue
 			}
@@ -181,7 +184,6 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 						spans[i].label, spans[j].label,
 					),
 				)
-				return
 			}
 		}
 	}
@@ -329,8 +331,15 @@ func (o AlertOps) Schema() schema.Schema {
 				MarkdownDescription: "Quiet hours: local time windows during which the alert is not evaluated. Times use the project timezone.",
 				Attributes: map[string]schema.Attribute{
 					"blocked_windows": schema.SetNestedAttribute{
-						Required:            true,
-						MarkdownDescription: "Blocked time windows, half-open `[start, end)`, each spanning at least 30 minutes. Windows must not overlap or touch. A window may wrap midnight (`end` before `start`), but only as the sole window. Between 1 and 5 windows; remove `schedule_restriction` to disable quiet hours.",
+						Required: true,
+						MarkdownDescription: fmt.Sprintf(
+							"Blocked time windows, half-open `[start, end)`, each spanning at least %d minutes. "+
+								"Windows must not overlap or touch, except that one may end at `00:00` where another "+
+								"starts. A window may wrap midnight (`end` before `start`), but only as the sole "+
+								"window, and two windows meeting at midnight are only allowed alongside a third. "+
+								"Between 1 and %d windows; remove `schedule_restriction` to disable quiet hours.",
+							alertMinBlockedWindowMinutes, alertMaxBlockedWindows,
+						),
 						Validators: []validator.Set{
 							// An empty set is not the same as no quiet hours: PostHog
 							// normalizes it to null, which would not match the configured
