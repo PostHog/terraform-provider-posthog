@@ -592,8 +592,10 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 			wantError: regexp.MustCompile(`Blocked window is too short`),
 		},
 		"time that does not exist": {
-			windows:   "\n      { start = \"24:00\", end = \"06:00\" },\n",
-			wantError: regexp.MustCompile(`must be a 24-hour time in HH:MM format`),
+			windows: "\n      { start = \"24:00\", end = \"06:00\" },\n",
+			// Terraform hard-wraps diagnostics and the break lands mid-sentence, so match
+			// only the fragment that cannot straddle it.
+			wantError: regexp.MustCompile(`24-hour time in HH:MM format`),
 		},
 		// Terraform hard-wraps diagnostics, so these patterns stop before the line break
 		// that falls between the count and "elements".
