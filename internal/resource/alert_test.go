@@ -123,8 +123,12 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		wantError bool
 	}{
 		"separate windows":                           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
-		"touching windows are not merged":            {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}},
-		"wrapped window plus daytime":                {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}},
+		"windows with a gap between them":            {windows: [][2]string{{"01:00", "05:00"}, {"12:00", "13:00"}}},
+		"lone wrapped window":                        {windows: [][2]string{{"22:00", "07:00"}}},
+		"window ending at midnight plus daytime":     {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
+		"touching windows are merged":                {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}, wantError: true},
+		"wrapped window plus daytime":                {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}, wantError: true},
+		"midnight blocked from both sides":           {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "00:00"}}, wantError: true},
 		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantError: true},
 		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantError: true},
 		"wrapped window overlaps morning":            {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantError: true},

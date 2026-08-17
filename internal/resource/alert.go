@@ -72,14 +72,18 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	"must be a 24-hour time in HH:MM format",
 )
 
+const alertMinutesPerDay = 24 * 60
+
 // blockedWindowsValidator enforces the quiet-hour rules PostHog applies server-side, so a
-// bad config fails during plan. Overlapping windows matter most: PostHog merges them when
-// saving, so the alert it returns would not match the planned config and the apply would
-// fail with an inconsistent-result error instead.
+// bad config fails during plan. PostHog does not store the windows it is given: it lays
+// them on a single 24-hour timeline, merges, and re-derives windows from the result. A
+// config it would reshape comes back different from the planned one, so the apply fails
+// with an inconsistent-result error instead of showing as drift.
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
-	return "blocked windows must not overlap and must each span at least 30 minutes"
+	return "blocked windows must not overlap or touch, must each span at least 30 minutes, " +
+		"and a window crossing midnight must be the only one"
 }
 
 func (v blockedWindowsValidator) MarkdownDescription(ctx context.Context) string {
@@ -103,6 +107,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	}
 
 	var spans []interval
+	windowCount := 0
 	for _, window := range windows {
 		start, startOK := alertMinutesSinceMidnight(window.Start)
 		end, endOK := alertMinutesSinceMidnight(window.End)
@@ -113,7 +118,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		label := window.Start.ValueString() + "-" + window.End.ValueString()
 		length := end - start
 		if length < 0 {
-			length += 24 * 60
+			length += alertMinutesPerDay
 		}
 		if length < 30 {
 			resp.Diagnostics.AddAttributeError(
@@ -123,31 +128,61 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 			)
 			return
 		}
-		if end < start {
+		windowCount++
+		switch {
+		case end > start:
+			spans = append(spans, interval{label, start, end})
+		case end == 0:
+			// Runs to the end of the day without wrapping into the next morning, so it
+			// needs no second half. An empty [0, 0) half would collide with every window
+			// starting at midnight in the check below.
+			spans = append(spans, interval{label, start, alertMinutesPerDay})
+		default:
 			// Wraps midnight, as the overnight 22:00-07:00 preset does.
-			spans = append(spans, interval{label, start, 24 * 60}, interval{label, 0, end})
-			continue
+			spans = append(spans, interval{label, start, alertMinutesPerDay}, interval{label, 0, end})
 		}
-		spans = append(spans, interval{label, start, end})
 	}
 
+	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
+	// prev.end`, so 00:00-06:00 and 06:00-09:00 are saved as a single 00:00-09:00 window.
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
 			// The two halves of one wrapped window are not in conflict with each other.
 			if spans[i].label == spans[j].label {
 				continue
 			}
-			if spans[i].start < spans[j].end && spans[j].start < spans[i].end {
+			if spans[i].start <= spans[j].end && spans[j].start <= spans[i].end {
 				resp.Diagnostics.AddAttributeError(
 					req.Path,
 					"Overlapping blocked windows",
 					fmt.Sprintf(
-						"Windows %s and %s overlap. PostHog merges overlapping windows when saving, so the alert would not match this configuration. Combine them into a single window.",
+						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a single window when saving, so the alert would not match this configuration. Combine them into a single window.",
 						spans[i].label, spans[j].label,
 					),
 				)
 				return
 			}
+		}
+	}
+
+	// Quiet time running across midnight is stored as one wrapping window only when it is
+	// the entire configuration. Alongside any other window PostHog stores it as two, so the
+	// alert reads back with one more window than was configured.
+	if windowCount > 1 {
+		var touchesDayStart, touchesDayEnd bool
+		for _, span := range spans {
+			touchesDayStart = touchesDayStart || span.start == 0
+			touchesDayEnd = touchesDayEnd || span.end == alertMinutesPerDay
+		}
+		if touchesDayStart && touchesDayEnd {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Blocked window crossing midnight must be the only window",
+				"This configuration blocks time on both sides of midnight while also configuring another window. "+
+					"PostHog stores that as one window per side rather than as a single crossing window, so the "+
+					"alert would not match this configuration. Either make the crossing window the only one, or "+
+					"end it at 23:59 so it stays within the day.",
+			)
 		}
 	}
 }
@@ -262,8 +297,12 @@ func (o AlertOps) Schema() schema.Schema {
 				Attributes: map[string]schema.Attribute{
 					"blocked_windows": schema.SetNestedAttribute{
 						Required:            true,
-						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. A window whose `end` is before its `start` wraps midnight. Maximum 5.",
+						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap or touch, since PostHog merges them into one. A window whose `end` is before its `start` wraps midnight, but such a window must be the only one: PostHog stores blocked windows on a single merged 24-hour timeline, and a crossing window alongside another one is stored as two windows rather than one. Between 1 and 5 windows; remove the whole `schedule_restriction` block to disable quiet hours.",
 						Validators: []validator.Set{
+							// An empty set is not the same as no quiet hours: PostHog
+							// normalizes it to null, which would not match the configured
+							// (non-null) block and would fail the apply.
+							setvalidator.SizeAtLeast(1),
 							setvalidator.SizeAtMost(5),
 							blockedWindowsValidator{},
 						},
