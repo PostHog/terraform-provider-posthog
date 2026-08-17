@@ -228,6 +228,108 @@ func TestLogsAlertBuildCreateRequest_MapsBlockedWindows(t *testing.T) {
 	assert.Equal(t, []string{"error"}, req.Filters.SeverityLevels)
 }
 
+// Plan-time validation runs against the config, where an omitted Optional+Computed
+// attribute is null (server default applies) and an unresolved reference is unknown
+// (nothing can be concluded yet). Conflating the two either blocks valid configs or
+// silently skips the check on create, so both cases are covered explicitly.
+func TestValidateLogsAlertConfig(t *testing.T) {
+	withFilter := func(m LogsAlertTFModel) LogsAlertTFModel {
+		m.SeverityLevels = stringSet(t, "error")
+		return m
+	}
+
+	tests := []struct {
+		name      string
+		config    LogsAlertTFModel
+		expectErr string
+	}{
+		{
+			name:   "minimal valid config",
+			config: withFilter(LogsAlertTFModel{}),
+		},
+		{
+			name: "datapoints exceeds periods",
+			config: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Value(2),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+			expectErr: "Alert can never fire",
+		},
+		{
+			// The create path: evaluation_periods omitted, so the server default of 1
+			// applies and datapoints_to_alarm = 5 can never be reached.
+			name: "datapoints exceeds omitted periods default",
+			config: withFilter(LogsAlertTFModel{
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+			expectErr: "Alert can never fire",
+		},
+		{
+			// Cannot conclude anything: the reference may resolve to any value.
+			name: "unknown periods skips the check",
+			config: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Unknown(),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+		},
+		{
+			name: "below zero can never fire",
+			config: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("below"),
+				ThresholdCount:    types.Int64Value(0),
+			}),
+			expectErr: "Alert can never fire",
+		},
+		{
+			name: "above zero is valid",
+			config: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("above"),
+				ThresholdCount:    types.Int64Value(0),
+			}),
+		},
+		{
+			name:      "enabled alert with no filters",
+			config:    LogsAlertTFModel{},
+			expectErr: "no filters",
+		},
+		{
+			name:   "draft alert may omit filters",
+			config: LogsAlertTFModel{Enabled: types.BoolValue(false)},
+		},
+		{
+			// Regression: an unknown set has zero elements but is not empty. Treating it
+			// as empty blocked valid configs whose filters come from another resource.
+			name:   "unknown severity levels does not trip the filter check",
+			config: LogsAlertTFModel{SeverityLevels: types.SetUnknown(types.StringType)},
+		},
+		{
+			name:   "unknown service names does not trip the filter check",
+			config: LogsAlertTFModel{ServiceNames: types.SetUnknown(types.StringType)},
+		},
+		{
+			name:   "unknown filter group does not trip the filter check",
+			config: LogsAlertTFModel{FilterGroupJSON: jsontypes.NewNormalizedUnknown()},
+		},
+		{
+			name:      "explicitly empty sets still trip the filter check",
+			config:    LogsAlertTFModel{SeverityLevels: emptyStringSet(t), ServiceNames: emptyStringSet(t)},
+			expectErr: "no filters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diags := validateLogsAlertConfig(context.Background(), tt.config)
+			if tt.expectErr == "" {
+				assert.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
+				return
+			}
+			require.True(t, diags.HasError(), "expected a diagnostic")
+			assert.Contains(t, diags.Errors()[0].Summary(), tt.expectErr)
+		})
+	}
+}
+
 func TestValidateBlockedWindows(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -255,9 +357,39 @@ func TestValidateBlockedWindows(t *testing.T) {
 			expectErr: "too short",
 		},
 		{
+			// Must not report "spans 1440 minutes" — the midnight-wrap correction would
+			// otherwise turn a zero-length window into a full day.
 			name:      "zero-length window",
 			windows:   []BlockedWindowTFModel{{types.StringValue("22:00"), types.StringValue("22:00")}},
+			expectErr: "covers no time",
+		},
+		{
+			name:    "exactly 30 minutes is allowed",
+			windows: []BlockedWindowTFModel{{types.StringValue("01:00"), types.StringValue("01:30")}},
+		},
+		{
+			name:      "29 minutes is rejected",
+			windows:   []BlockedWindowTFModel{{types.StringValue("01:00"), types.StringValue("01:29")}},
 			expectErr: "too short",
+		},
+		{
+			name:    "30-minute window spanning midnight",
+			windows: []BlockedWindowTFModel{{types.StringValue("23:45"), types.StringValue("00:15")}},
+		},
+		{
+			name: "adjacent windows do not overlap",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("01:00"), types.StringValue("02:00")},
+				{types.StringValue("02:00"), types.StringValue("03:00")},
+			},
+		},
+		{
+			name: "two wrapping windows that overlap",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("22:00"), types.StringValue("02:00")},
+				{types.StringValue("23:00"), types.StringValue("03:00")},
+			},
+			expectErr: "overlap",
 		},
 		{
 			name: "overlapping windows",
