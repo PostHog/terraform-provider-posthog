@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on log streams, with severity/service/attribute filters, N-of-M noise reduction, and quiet hours
+
 ## 1.0.0
 
 ### Features
