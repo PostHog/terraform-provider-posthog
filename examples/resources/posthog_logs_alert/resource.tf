@@ -14,9 +14,10 @@ resource "posthog_logs_alert" "checkout_errors" {
   datapoints_to_alarm = 2
   cooldown_minutes    = 30
 
-  # Quiet hours, in the project's timezone. A window may cross midnight and must
-  # span at least 30 minutes. Windows must not overlap — PostHog merges overlapping
-  # windows on save, so the provider rejects them at plan time.
+  # Quiet hours, in the project's timezone. Each window must span at least 30
+  # minutes, and windows must not overlap or touch. A window may cross midnight
+  # only when it is the only window. PostHog stores blocked windows on a single
+  # merged 24-hour timeline, so anything it would reshape is rejected at plan time.
   blocked_windows = [{
     start = "22:00"
     end   = "06:00"

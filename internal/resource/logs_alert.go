@@ -253,9 +253,11 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"blocked_windows": schema.SetNestedAttribute{
 				Optional: true,
 				MarkdownDescription: "Quiet hours: up to 5 time windows during which the alert is not evaluated. Times " +
-					"use the project timezone. A window may cross midnight (for example `22:00` to `06:00`) and must " +
-					"span at least 30 minutes. Windows must not overlap each other. Omit the attribute, or set it to " +
-					"an empty list, to disable quiet hours.",
+					"use the project timezone. Each window must span at least 30 minutes, and windows must not " +
+					"overlap or touch each other. A window may cross midnight (for example `22:00` to `06:00`), but " +
+					"only as the sole window: PostHog stores blocked windows on a single merged 24-hour timeline, " +
+					"and a crossing window alongside another one is stored as two windows rather than one. Omit the " +
+					"attribute, or set it to an empty list, to disable quiet hours.",
 				Validators: []validator.Set{
 					setvalidator.SizeAtMost(5),
 				},
@@ -297,15 +299,8 @@ func (o LogsAlertOps) BuildCreateRequest(ctx context.Context, model LogsAlertTFM
 		Filters: &httpclient.LogsAlertFilters{},
 	}
 
-	if !model.Name.IsNull() && !model.Name.IsUnknown() {
-		name := model.Name.ValueString()
-		req.Name = &name
-	}
-
-	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() {
-		enabled := model.Enabled.ValueBool()
-		req.Enabled = &enabled
-	}
+	req.Name = util.StringPtrFromValue(model.Name)
+	req.Enabled = util.BoolPtrFromValue(model.Enabled)
 
 	severityLevels, d := core.ExtractTags(ctx, model.SeverityLevels)
 	diags.Append(d...)
@@ -321,44 +316,19 @@ func (o LogsAlertOps) BuildCreateRequest(ctx context.Context, model LogsAlertTFM
 	}
 	req.Filters.ServiceNames = serviceNames
 
-	if !model.FilterGroupJSON.IsNull() && !model.FilterGroupJSON.IsUnknown() {
-		var filterGroup map[string]any
-		if err := json.Unmarshal([]byte(model.FilterGroupJSON.ValueString()), &filterGroup); err != nil {
-			diags.AddError("Invalid filter_group_json", fmt.Sprintf("Could not parse filter_group_json: %s", err.Error()))
-			return req, diags
-		}
-		req.Filters.FilterGroup = filterGroup
+	filterGroup, d := util.ParseJSONStringMap("filter_group_json", model.FilterGroupJSON.StringValue)
+	diags.Append(d...)
+	if diags.HasError() {
+		return req, diags
 	}
+	req.Filters.FilterGroup = filterGroup
 
-	if !model.ThresholdCount.IsNull() && !model.ThresholdCount.IsUnknown() {
-		count := model.ThresholdCount.ValueInt64()
-		req.ThresholdCount = &count
-	}
-
-	if !model.ThresholdOperator.IsNull() && !model.ThresholdOperator.IsUnknown() {
-		operator := model.ThresholdOperator.ValueString()
-		req.ThresholdOperator = &operator
-	}
-
-	if !model.WindowMinutes.IsNull() && !model.WindowMinutes.IsUnknown() {
-		window := model.WindowMinutes.ValueInt64()
-		req.WindowMinutes = &window
-	}
-
-	if !model.EvaluationPeriods.IsNull() && !model.EvaluationPeriods.IsUnknown() {
-		periods := model.EvaluationPeriods.ValueInt64()
-		req.EvaluationPeriods = &periods
-	}
-
-	if !model.DatapointsToAlarm.IsNull() && !model.DatapointsToAlarm.IsUnknown() {
-		datapoints := model.DatapointsToAlarm.ValueInt64()
-		req.DatapointsToAlarm = &datapoints
-	}
-
-	if !model.CooldownMinutes.IsNull() && !model.CooldownMinutes.IsUnknown() {
-		cooldown := model.CooldownMinutes.ValueInt64()
-		req.CooldownMinutes = &cooldown
-	}
+	req.ThresholdCount = util.Int64PtrFromValue(model.ThresholdCount)
+	req.ThresholdOperator = util.StringPtrFromValue(model.ThresholdOperator)
+	req.WindowMinutes = util.Int64PtrFromValue(model.WindowMinutes)
+	req.EvaluationPeriods = util.Int64PtrFromValue(model.EvaluationPeriods)
+	req.DatapointsToAlarm = util.Int64PtrFromValue(model.DatapointsToAlarm)
+	req.CooldownMinutes = util.Int64PtrFromValue(model.CooldownMinutes)
 
 	if !model.BlockedWindows.IsNull() && !model.BlockedWindows.IsUnknown() {
 		var windows []BlockedWindowTFModel
@@ -635,9 +605,11 @@ func isEmptySet(v types.Set) bool {
 	return v.IsNull() || len(v.Elements()) == 0
 }
 
-// validateBlockedWindows enforces the ≥30-minute span and non-overlap rules. PostHog
-// silently merges overlapping windows on save, which would come back as a set that
-// differs from the config — an apply failure rather than recoverable drift.
+// validateBlockedWindows enforces the ≥30-minute span rule, plus the two config shapes
+// PostHog would silently reshape. PostHog does not store the windows it is given: it lays
+// them on a single 24-hour timeline, merges, and re-derives windows from the result. A
+// reshaped config reads back differently from the plan, which fails the apply with an
+// inconsistent result rather than showing up as recoverable drift.
 func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if windows.IsNull() || windows.IsUnknown() {
@@ -653,6 +625,7 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 	type interval struct{ start, end int }
 	var intervals []interval
 	var labels []string
+	windowCount := 0
 
 	for _, w := range parsed {
 		if w.Start.IsUnknown() || w.End.IsUnknown() {
@@ -695,33 +668,67 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 			continue
 		}
 
-		// Split a window that crosses midnight so overlap is a plain interval comparison.
-		if end > start {
+		windowCount++
+
+		// Split a window that runs past midnight so overlap is a plain interval comparison.
+		// One ending exactly at midnight stops at the end of the day and needs no second
+		// half; emitting an empty [0, 0) half would collide with every window starting at
+		// midnight in the check below.
+		switch {
+		case end > start:
 			intervals = append(intervals, interval{start, end})
 			labels = append(labels, label)
-		} else {
+		case end == 0:
+			intervals = append(intervals, interval{start, minutesPerDay})
+			labels = append(labels, label)
+		default:
 			intervals = append(intervals, interval{start, minutesPerDay}, interval{0, end})
 			labels = append(labels, label, label)
 		}
 	}
 
+	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
+	// prev.end`, so 01:00-02:00 and 02:00-03:00 are saved as a single 01:00-03:00 window.
 	for i := 0; i < len(intervals); i++ {
 		for j := i + 1; j < len(intervals); j++ {
 			if labels[i] == labels[j] {
 				continue
 			}
-			if intervals[i].start < intervals[j].end && intervals[j].start < intervals[i].end {
+			if intervals[i].start <= intervals[j].end && intervals[j].start <= intervals[i].end {
 				diags.AddAttributeError(
 					path.Root("blocked_windows"),
 					"Quiet-hours windows overlap",
 					fmt.Sprintf(
-						"Windows %s and %s overlap. PostHog merges overlapping windows when saving, so the alert "+
-							"would read back with different windows than configured and every apply would fail.",
+						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a "+
+							"single window when saving, so the alert would read back with different windows than "+
+							"configured and every apply would fail. Combine them into one window.",
 						labels[i], labels[j],
 					),
 				)
 				return diags
 			}
+		}
+	}
+
+	// Quiet time running across midnight is stored as one wrapping window only when it is
+	// the entire configuration. Alongside any other window PostHog stores it as two, so the
+	// alert reads back with one more window than was configured.
+	if windowCount > 1 {
+		var touchesDayStart, touchesDayEnd bool
+		for _, iv := range intervals {
+			touchesDayStart = touchesDayStart || iv.start == 0
+			touchesDayEnd = touchesDayEnd || iv.end == minutesPerDay
+		}
+		if touchesDayStart && touchesDayEnd {
+			diags.AddAttributeError(
+				path.Root("blocked_windows"),
+				"Quiet hours crossing midnight must be the only window",
+				"This configuration blocks time on both sides of midnight while also configuring another "+
+					"window. PostHog stores that as one window per side rather than as a single crossing "+
+					"window, so the alert would read back with more windows than configured and every apply "+
+					"would fail. Either make the crossing window the only one, or end it at 23:59 so it stays "+
+					"within the day.",
+			)
 		}
 	}
 

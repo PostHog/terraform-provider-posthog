@@ -453,11 +453,66 @@ func TestValidateBlockedWindows(t *testing.T) {
 			name:    "30-minute window spanning midnight",
 			windows: []BlockedWindowTFModel{{types.StringValue("23:45"), types.StringValue("00:15")}},
 		},
+		// PostHog merges on `next.start <= prev.end`, so windows that merely touch are
+		// stored as one. Verified against validate_and_normalize_schedule_restriction:
+		// 01:00-02:00 plus 02:00-03:00 is saved as a single 01:00-03:00 window.
 		{
-			name: "adjacent windows do not overlap",
+			name: "adjacent windows are merged, so they conflict",
 			windows: []BlockedWindowTFModel{
 				{types.StringValue("01:00"), types.StringValue("02:00")},
 				{types.StringValue("02:00"), types.StringValue("03:00")},
+			},
+			expectErr: "overlap",
+		},
+		{
+			name: "two windows with a gap between them",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("01:00"), types.StringValue("05:00")},
+				{types.StringValue("12:00"), types.StringValue("13:00")},
+			},
+		},
+		// A window crossing midnight is re-encoded as one wrapping window only when it is
+		// the whole configuration. Alongside another window PostHog stores it as two, so
+		// 22:00-07:00 plus 12:00-13:00 reads back as three windows.
+		{
+			name: "wrapping window alone is fine",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("22:00"), types.StringValue("07:00")},
+			},
+		},
+		{
+			name: "wrapping window alongside another window",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("22:00"), types.StringValue("07:00")},
+				{types.StringValue("12:00"), types.StringValue("13:00")},
+			},
+			expectErr: "must be the only window",
+		},
+		// Blocking both sides of midnight with two separate windows is the same shape:
+		// PostHog recombines them into a single 22:00-06:00 window.
+		{
+			name: "window starting at midnight plus one ending at midnight",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("00:00"), types.StringValue("06:00")},
+				{types.StringValue("22:00"), types.StringValue("00:00")},
+			},
+			expectErr: "must be the only window",
+		},
+		// Ending at 23:59 stops short of midnight, so nothing is recombined.
+		{
+			name: "window starting at midnight plus one ending at 23:59",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("00:00"), types.StringValue("06:00")},
+				{types.StringValue("22:00"), types.StringValue("23:59")},
+			},
+		},
+		// A window ending exactly at midnight does not wrap into the next morning, so it
+		// coexists with a daytime window.
+		{
+			name: "window ending at midnight plus a daytime window",
+			windows: []BlockedWindowTFModel{
+				{types.StringValue("19:00"), types.StringValue("00:00")},
+				{types.StringValue("12:00"), types.StringValue("13:00")},
 			},
 		},
 		{
