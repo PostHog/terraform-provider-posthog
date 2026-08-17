@@ -43,6 +43,7 @@ type AlertRequest struct {
 }
 
 type AlertScheduleRestriction struct {
+	// An empty list clears quiet hours, same as a null restriction.
 	BlockedWindows []AlertBlockedWindow `json:"blocked_windows"`
 }
 

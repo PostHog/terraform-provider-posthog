@@ -2,9 +2,11 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -69,6 +71,84 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`),
 	"must be a 24-hour time in HH:MM format",
 )
+
+// blockedWindowsNoOverlap rejects overlapping quiet-hour windows at plan time. PostHog
+// merges overlapping windows when saving, so the alert it returns would not match the
+// planned config and the apply would fail with an inconsistent-result error instead.
+type blockedWindowsNoOverlap struct{}
+
+func (v blockedWindowsNoOverlap) Description(context.Context) string {
+	return "blocked windows must not overlap"
+}
+
+func (v blockedWindowsNoOverlap) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v blockedWindowsNoOverlap) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+
+	var windows []AlertBlockedWindowModel
+	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &windows, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	type span struct {
+		label      string
+		start, end int
+	}
+
+	var spans []span
+	for _, window := range windows {
+		start, startOK := alertMinutesSinceMidnight(window.Start)
+		end, endOK := alertMinutesSinceMidnight(window.End)
+		// Malformed times are the format validator's problem, equal bounds are the API's.
+		if !startOK || !endOK || start == end {
+			continue
+		}
+		label := window.Start.ValueString() + "-" + window.End.ValueString()
+		if end < start {
+			// Wraps midnight, as the overnight 22:00-07:00 preset does.
+			spans = append(spans, span{label, start, 24 * 60}, span{label, 0, end})
+			continue
+		}
+		spans = append(spans, span{label, start, end})
+	}
+
+	for i := range spans {
+		for j := i + 1; j < len(spans); j++ {
+			// The two halves of one wrapped window are not in conflict with each other.
+			if spans[i].label == spans[j].label {
+				continue
+			}
+			if spans[i].start < spans[j].end && spans[j].start < spans[i].end {
+				resp.Diagnostics.AddAttributeError(
+					req.Path,
+					"Overlapping blocked windows",
+					fmt.Sprintf(
+						"Windows %s and %s overlap. PostHog merges overlapping windows when saving, so the alert would not match this configuration. Combine them into a single window.",
+						spans[i].label, spans[j].label,
+					),
+				)
+				return
+			}
+		}
+	}
+}
+
+func alertMinutesSinceMidnight(value types.String) (int, bool) {
+	if value.IsNull() || value.IsUnknown() {
+		return 0, false
+	}
+	var hours, minutes int
+	if _, err := fmt.Sscanf(value.ValueString(), "%d:%d", &hours, &minutes); err != nil {
+		return 0, false
+	}
+	return hours*60 + minutes, true
+}
 
 type AlertOps struct{}
 
@@ -169,7 +249,11 @@ func (o AlertOps) Schema() schema.Schema {
 				Attributes: map[string]schema.Attribute{
 					"blocked_windows": schema.SetNestedAttribute{
 						Required:            true,
-						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. Maximum 5.",
+						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. A window whose `end` is before its `start` wraps midnight. Maximum 5.",
+						Validators: []validator.Set{
+							setvalidator.SizeAtMost(5),
+							blockedWindowsNoOverlap{},
+						},
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"start": schema.StringAttribute{
