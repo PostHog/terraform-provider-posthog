@@ -31,7 +31,6 @@ import (
 // hhmmPattern matches a 24-hour HH:MM local time, as used by quiet-hours windows.
 var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
-// nonBlankPattern matches any string containing at least one non-whitespace character.
 var nonBlankPattern = regexp.MustCompile(`\S`)
 
 const (
@@ -525,14 +524,8 @@ func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.Modif
 }
 
 // validateLogsAlertPlan is split out from ModifyResourcePlan so the invariants can be unit
-// tested directly against a model, including the unknown-value cases.
-//
-// It needs both plan and config because neither alone identifies the value PostHog will end
-// up with. The plan carries the effective value whenever it is known — on update Terraform
-// copies the prior state into the plan for an Optional+Computed attribute the config omits,
-// so an omitted attribute keeps its last applied value rather than reverting to the
-// documented default. The plan is unknown only on create, or when the config references
-// something unresolvable; the config tells those apart (null versus unknown).
+// tested directly against a model, including the unknown-value cases. It takes both plan
+// and config because neither alone identifies the effective value; see resolveInt64.
 func validateLogsAlertPlan(ctx context.Context, plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 	diags.Append(validateCanEverFire(plan, config)...)
