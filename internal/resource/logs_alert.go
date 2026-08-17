@@ -31,7 +31,11 @@ import (
 // hhmmPattern matches a 24-hour HH:MM local time, as used by quiet-hours windows.
 var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
-var nonBlankPattern = regexp.MustCompile(`\S`)
+// nonBlankPattern requires the name to start and end with a non-whitespace character.
+// PostHog trims names server-side (verified against a live instance), so a name with
+// surrounding whitespace reads back different from the config and fails every apply
+// without ever self-healing, since the config keeps the whitespace.
+var nonBlankPattern = regexp.MustCompile(`^\S(.*\S)?$`)
 
 const (
 	minutesPerDay = 24 * 60
@@ -43,6 +47,7 @@ const (
 // omitted attributes to these so a config that trips an invariant only by relying on a
 // default is still caught.
 const (
+	defaultEnabled           = true
 	defaultThresholdCount    = 100
 	defaultThresholdOperator = thresholdOperatorAbove
 	defaultEvaluationPeriods = 1
@@ -55,6 +60,43 @@ const (
 	thresholdOperatorAbove = "above"
 	thresholdOperatorBelow = "below"
 )
+
+// The alert states that mean nobody is being notified. Named for the same reason as the
+// operators: the warning switch and the schema description both refer to them.
+const (
+	stateBroken  = "broken"
+	stateSnoozed = "snoozed"
+)
+
+// notNotifyingWarnings reports the states in which an alert exists and plans clean but
+// notifies nobody. Terraform manages neither, so without a warning on refresh the first
+// signal is a page that never arrived. It stays quiet in every healthy state.
+func notNotifyingWarnings(resp httpclient.LogsAlert) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	// Name the alert: during import there is no config for Terraform to attach the
+	// diagnostic to, and a stack managing many alerts would otherwise emit warnings that
+	// read identically.
+	who := fmt.Sprintf("%q (%s)", strings.TrimSpace(util.PtrToString(resp.Name)), resp.ID)
+
+	switch strings.TrimSpace(util.PtrToString(resp.State)) {
+	case stateBroken:
+		diags.AddWarning(
+			"Log alert is not notifying",
+			fmt.Sprintf("PostHog marked alert %s broken after repeated failed checks, so it has stopped "+
+				"evaluating and notifies nobody. Reset it from the PostHog UI. Terraform does not manage this "+
+				"state, so plans stay clean until you do.", who),
+		)
+	case stateSnoozed:
+		diags.AddWarning(
+			"Log alert is snoozed",
+			fmt.Sprintf("Alert %s is snoozed and notifies nobody until the snooze expires or is cleared from "+
+				"the PostHog UI. Terraform does not manage snoozing, so plans stay clean meanwhile.", who),
+		)
+	}
+
+	return diags
+}
 
 // blockedWindowAttrTypes mirrors BlockedWindowTFModel for set conversions.
 var blockedWindowAttrTypes = map[string]attr.Type{
@@ -121,7 +163,8 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
 			"retains its last applied value rather than restoring the documented default — set it explicitly to " +
-			"change it back.",
+			"change it back. Drift works the same way: Terraform corrects a PostHog UI edit to an attribute you " +
+			"declared, but silently adopts one to a computed attribute you left out.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -138,10 +181,11 @@ func (o LogsAlertOps) Schema() schema.Schema {
 					"when omitted, so this attribute is computed: leaving it out adopts the server's default rather " +
 					"than producing a diff.",
 				Validators: []validator.String{
-					// Not just LengthAtLeast(1): the response mapper nulls out any name that
-					// is blank after trimming, so a whitespace-only name would come back as
-					// null against a non-null config and fail the apply.
-					stringvalidator.RegexMatches(nonBlankPattern, "must contain at least one non-whitespace character"),
+					// Not just LengthAtLeast(1): PostHog trims names, and the response mapper
+					// nulls out any name that is blank after trimming, so both a
+					// whitespace-only name and one with surrounding whitespace read back
+					// different from the config and fail the apply.
+					stringvalidator.RegexMatches(nonBlankPattern, "must not be blank or start or end with whitespace"),
 					stringvalidator.LengthAtMost(255),
 				},
 				PlanModifiers: []planmodifier.String{
@@ -185,7 +229,8 @@ func (o LogsAlertOps) Schema() schema.Schema {
 					"you declare are tracked: PostHog annotates saved filters with defaults (such as `label`) that " +
 					"would otherwise surface as permanent drift. The flip side is that a field you omit is not " +
 					"tracked either, so if someone edits it in the PostHog UI Terraform will not detect the drift — " +
-					"declare every field you care about.",
+					"declare every field you care about. An imported alert adopts PostHog's stored filter group " +
+					"verbatim, so the first plan after an import may show one diff that clears on apply.",
 				Validators: []validator.String{
 					nonEmptyJSONObjectValidator{},
 				},
@@ -372,24 +417,7 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	model.Enabled = core.PtrToBool(resp.Enabled)
 	model.State = core.PtrToStringNullIfEmptyTrimmed(resp.State)
 
-	// Terraform does not manage state, so a broken or snoozed alert leaves plans clean
-	// while notifying nobody. Warn on refresh rather than leaving the docs as the only
-	// signal. It fires only in the degraded state, so it does not nag in steady state.
-	switch strings.TrimSpace(util.PtrToString(resp.State)) {
-	case "broken":
-		diags.AddWarning(
-			"Log alert is not notifying",
-			"PostHog marked this alert broken after repeated failed checks, so it has stopped evaluating and "+
-				"notifies nobody. Reset it from the PostHog UI. Terraform does not manage this state, so plans "+
-				"stay clean until you do.",
-		)
-	case "snoozed":
-		diags.AddWarning(
-			"Log alert is snoozed",
-			"This alert is snoozed and notifies nobody until the snooze expires or is cleared from the PostHog "+
-				"UI. Terraform does not manage snoozing, so plans stay clean meanwhile.",
-		)
-	}
+	diags.Append(notNotifyingWarnings(resp)...)
 
 	// The API echoes back only the filter keys that are set, so an absent key maps
 	// to null rather than an empty collection.
@@ -524,6 +552,18 @@ func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.Modif
 		return
 	}
 	resp.Diagnostics.Append(validateLogsAlertPlan(ctx, plan, config)...)
+
+	// On update Terraform carries the refreshed state value into the plan for a computed
+	// attribute, but PostHog owns this one and can move it between refresh and apply:
+	// disabling an alert resets it, and every alert is re-evaluated on a 5-minute cycle.
+	// Planning it as unknown lets the applied value differ without failing as an
+	// inconsistent result.
+	//
+	// Only when something else is actually changing. Marking it unknown on an otherwise
+	// no-op plan would make state a permanent diff and never converge.
+	if !req.State.Raw.IsNull() && !req.Plan.Raw.Equal(req.State.Raw) {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("state"), types.StringUnknown())...)
+	}
 }
 
 // validateLogsAlertPlan is split out from ModifyResourcePlan so the invariants can be unit
@@ -575,7 +615,7 @@ func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	enabled, enabledKnown := resolveBool(plan.Enabled, config.Enabled, true)
+	enabled, enabledKnown := resolveBool(plan.Enabled, config.Enabled, defaultEnabled)
 	if !enabledKnown || !enabled {
 		return diags
 	}

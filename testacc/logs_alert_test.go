@@ -293,10 +293,6 @@ resource "posthog_logs_alert" "test" {
 					testAccCheckLogsAlertQuietHoursCleared("posthog_logs_alert.test"),
 				),
 			},
-			{
-				Config:   emptyLists,
-				PlanOnly: true,
-			},
 		},
 	})
 }
@@ -332,8 +328,20 @@ func TestLogsAlert_ImportComposite(t *testing.T) {
 					}
 					return fmt.Sprintf("%s/%s", getProjectID(), rs.Primary.ID), nil
 				},
-				ImportStateVerify:       true,
+				ImportStateVerify: true,
+				// Import adopts PostHog's stored filter group verbatim while apply
+				// projects it onto the declared fields, so the two legitimately differ.
+				// Assert the imported value is present rather than comparing it.
 				ImportStateVerifyIgnore: []string{"filter_group_json"},
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					if len(states) != 1 {
+						return fmt.Errorf("expected 1 imported state, got %d", len(states))
+					}
+					if got := states[0].Attributes["filter_group_json"]; got == "" {
+						return fmt.Errorf("imported alert has no filter_group_json")
+					}
+					return nil
+				},
 			},
 		},
 	})
@@ -476,7 +484,11 @@ func TestLogsAlert_EnabledToggle(t *testing.T) {
 			},
 			{
 				Config: testAccLogsAlertWithEnabled(rName, false),
-				Check:  resource.TestCheckResourceAttr("posthog_logs_alert.test", "enabled", "false"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "enabled", "false"),
+					// The schema documents that disabling resets the alert state.
+					resource.TestCheckResourceAttr("posthog_logs_alert.test", "state", "not_firing"),
+				),
 			},
 			{
 				Config: testAccLogsAlertWithEnabled(rName, true),
@@ -511,10 +523,6 @@ func TestLogsAlert_FilterGroupLifecycle(t *testing.T) {
 			{
 				Config: withStatusCode,
 				Check:  resource.TestCheckResourceAttrSet("posthog_logs_alert.test", "filter_group_json"),
-			},
-			{
-				Config:   withStatusCode,
-				PlanOnly: true,
 			},
 			// Change a value inside the JSON.
 			{

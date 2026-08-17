@@ -25,6 +25,49 @@ func emptyStringSet(t *testing.T) types.Set {
 	return set
 }
 
+// window builds a blocked window from plain strings. Both fields are types.String, so
+// unkeyed literals would silently invert if the struct's field order ever changed.
+func window(start, end string) BlockedWindowTFModel {
+	return BlockedWindowTFModel{Start: types.StringValue(start), End: types.StringValue(end)}
+}
+
+// TestNotNotifyingWarnings pins the states in which the provider warns that an alert exists
+// but notifies nobody. Acceptance tests cannot reach these: a test alert never fires, and
+// nothing can mark it broken on demand.
+func TestNotNotifyingWarnings(t *testing.T) {
+	tests := map[string]struct {
+		state       *string
+		wantWarning string
+	}{
+		"broken":     {state: util.StringPtr(stateBroken), wantWarning: "Log alert is not notifying"},
+		"snoozed":    {state: util.StringPtr(stateSnoozed), wantWarning: "Log alert is snoozed"},
+		"not firing": {state: util.StringPtr("not_firing")},
+		"firing":     {state: util.StringPtr("firing")},
+		"absent":     {state: nil},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			diags := notNotifyingWarnings(httpclient.LogsAlert{
+				ID:    "01a00000-0000-0000-0000-00000000beef",
+				Name:  util.StringPtr("Checkout errors"),
+				State: test.state,
+			})
+
+			if test.wantWarning == "" {
+				assert.Empty(t, diags.Warnings(), "unexpected warnings: %v", diags)
+				return
+			}
+			require.Len(t, diags.Warnings(), 1)
+			assert.Equal(t, test.wantWarning, diags.Warnings()[0].Summary())
+			// The alert has to be identifiable: on import there is no config for
+			// Terraform to attach the diagnostic to.
+			assert.Contains(t, diags.Warnings()[0].Detail(), "Checkout errors")
+			assert.Contains(t, diags.Warnings()[0].Detail(), "01a00000-0000-0000-0000-00000000beef")
+		})
+	}
+}
+
 // blockedWindowObjectType reuses the production attribute map so a new field on
 // BlockedWindowTFModel cannot leave the tests exercising a stale shape.
 func blockedWindowObjectType() types.ObjectType {
@@ -413,43 +456,43 @@ func TestValidateBlockedWindows(t *testing.T) {
 	}{
 		{
 			name:    "single valid window",
-			windows: []BlockedWindowTFModel{{types.StringValue("22:00"), types.StringValue("23:00")}},
+			windows: []BlockedWindowTFModel{window("22:00", "23:00")},
 		},
 		{
 			name:    "window crossing midnight",
-			windows: []BlockedWindowTFModel{{types.StringValue("22:00"), types.StringValue("06:00")}},
+			windows: []BlockedWindowTFModel{window("22:00", "06:00")},
 		},
 		{
 			name: "two non-overlapping windows",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("01:00"), types.StringValue("02:00")},
-				{types.StringValue("03:00"), types.StringValue("04:00")},
+				window("01:00", "02:00"),
+				window("03:00", "04:00"),
 			},
 		},
 		{
 			name:      "window shorter than 30 minutes",
-			windows:   []BlockedWindowTFModel{{types.StringValue("22:00"), types.StringValue("22:15")}},
+			windows:   []BlockedWindowTFModel{window("22:00", "22:15")},
 			expectErr: "too short",
 		},
 		{
 			// Must not report "spans 1440 minutes" — the midnight-wrap correction would
 			// otherwise turn a zero-length window into a full day.
 			name:      "zero-length window",
-			windows:   []BlockedWindowTFModel{{types.StringValue("22:00"), types.StringValue("22:00")}},
+			windows:   []BlockedWindowTFModel{window("22:00", "22:00")},
 			expectErr: "covers no time",
 		},
 		{
 			name:    "exactly 30 minutes is allowed",
-			windows: []BlockedWindowTFModel{{types.StringValue("01:00"), types.StringValue("01:30")}},
+			windows: []BlockedWindowTFModel{window("01:00", "01:30")},
 		},
 		{
 			name:      "29 minutes is rejected",
-			windows:   []BlockedWindowTFModel{{types.StringValue("01:00"), types.StringValue("01:29")}},
+			windows:   []BlockedWindowTFModel{window("01:00", "01:29")},
 			expectErr: "too short",
 		},
 		{
 			name:    "30-minute window spanning midnight",
-			windows: []BlockedWindowTFModel{{types.StringValue("23:45"), types.StringValue("00:15")}},
+			windows: []BlockedWindowTFModel{window("23:45", "00:15")},
 		},
 		// PostHog merges on `next.start <= prev.end`, so windows that merely touch are
 		// stored as one. Verified against validate_and_normalize_schedule_restriction:
@@ -457,16 +500,16 @@ func TestValidateBlockedWindows(t *testing.T) {
 		{
 			name: "adjacent windows are merged, so they conflict",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("01:00"), types.StringValue("02:00")},
-				{types.StringValue("02:00"), types.StringValue("03:00")},
+				window("01:00", "02:00"),
+				window("02:00", "03:00"),
 			},
 			expectErr: "overlap",
 		},
 		{
 			name: "two windows with a gap between them",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("01:00"), types.StringValue("05:00")},
-				{types.StringValue("12:00"), types.StringValue("13:00")},
+				window("01:00", "05:00"),
+				window("12:00", "13:00"),
 			},
 		},
 		// A window crossing midnight is re-encoded as one wrapping window only when it is
@@ -475,14 +518,14 @@ func TestValidateBlockedWindows(t *testing.T) {
 		{
 			name: "wrapping window alone is fine",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("22:00"), types.StringValue("07:00")},
+				window("22:00", "07:00"),
 			},
 		},
 		{
 			name: "wrapping window alongside another window",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("22:00"), types.StringValue("07:00")},
-				{types.StringValue("12:00"), types.StringValue("13:00")},
+				window("22:00", "07:00"),
+				window("12:00", "13:00"),
 			},
 			expectErr: "must be the only window",
 		},
@@ -491,8 +534,8 @@ func TestValidateBlockedWindows(t *testing.T) {
 		{
 			name: "window starting at midnight plus one ending at midnight",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("00:00"), types.StringValue("06:00")},
-				{types.StringValue("22:00"), types.StringValue("00:00")},
+				window("00:00", "06:00"),
+				window("22:00", "00:00"),
 			},
 			expectErr: "meeting at midnight",
 		},
@@ -501,26 +544,26 @@ func TestValidateBlockedWindows(t *testing.T) {
 		{
 			name: "midnight pair with a third window",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("22:00"), types.StringValue("00:00")},
-				{types.StringValue("00:00"), types.StringValue("07:00")},
-				{types.StringValue("12:00"), types.StringValue("13:00")},
+				window("22:00", "00:00"),
+				window("00:00", "07:00"),
+				window("12:00", "13:00"),
 			},
 		},
 		{
 			name: "midnight pair with two other windows",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("00:00"), types.StringValue("06:00")},
-				{types.StringValue("08:00"), types.StringValue("09:00")},
-				{types.StringValue("12:00"), types.StringValue("13:00")},
-				{types.StringValue("19:00"), types.StringValue("00:00")},
+				window("00:00", "06:00"),
+				window("08:00", "09:00"),
+				window("12:00", "13:00"),
+				window("19:00", "00:00"),
 			},
 		},
 		// Ending at 23:59 stops short of midnight, so nothing is recombined.
 		{
 			name: "window starting at midnight plus one ending at 23:59",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("00:00"), types.StringValue("06:00")},
-				{types.StringValue("22:00"), types.StringValue("23:59")},
+				window("00:00", "06:00"),
+				window("22:00", "23:59"),
 			},
 		},
 		// A window ending exactly at midnight does not wrap into the next morning, so it
@@ -528,31 +571,31 @@ func TestValidateBlockedWindows(t *testing.T) {
 		{
 			name: "window ending at midnight plus a daytime window",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("19:00"), types.StringValue("00:00")},
-				{types.StringValue("12:00"), types.StringValue("13:00")},
+				window("19:00", "00:00"),
+				window("12:00", "13:00"),
 			},
 		},
 		{
 			name: "two wrapping windows that overlap",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("22:00"), types.StringValue("02:00")},
-				{types.StringValue("23:00"), types.StringValue("03:00")},
+				window("22:00", "02:00"),
+				window("23:00", "03:00"),
 			},
 			expectErr: "overlap",
 		},
 		{
 			name: "overlapping windows",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("01:00"), types.StringValue("03:00")},
-				{types.StringValue("02:00"), types.StringValue("04:00")},
+				window("01:00", "03:00"),
+				window("02:00", "04:00"),
 			},
 			expectErr: "overlap",
 		},
 		{
 			name: "overlap only after midnight wrap",
 			windows: []BlockedWindowTFModel{
-				{types.StringValue("22:00"), types.StringValue("06:00")},
-				{types.StringValue("05:00"), types.StringValue("07:00")},
+				window("22:00", "06:00"),
+				window("05:00", "07:00"),
 			},
 			expectErr: "overlap",
 		},
