@@ -2,9 +2,11 @@ package resource
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -13,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 )
@@ -39,7 +42,33 @@ type AlertResourceTFModel struct {
 	CheckOngoingInterval types.Bool    `tfsdk:"check_ongoing_interval"`
 	CalculationInterval  types.String  `tfsdk:"calculation_interval"`
 	SkipWeekend          types.Bool    `tfsdk:"skip_weekend"`
+	ScheduleRestriction  types.Object  `tfsdk:"schedule_restriction"`
 }
+
+type AlertBlockedWindowModel struct {
+	Start types.String `tfsdk:"start"`
+	End   types.String `tfsdk:"end"`
+}
+
+type AlertScheduleRestrictionModel struct {
+	BlockedWindows types.Set `tfsdk:"blocked_windows"`
+}
+
+var alertBlockedWindowObjectType = types.ObjectType{
+	AttrTypes: map[string]attr.Type{
+		"start": types.StringType,
+		"end":   types.StringType,
+	},
+}
+
+var alertScheduleRestrictionAttrTypes = map[string]attr.Type{
+	"blocked_windows": types.SetType{ElemType: alertBlockedWindowObjectType},
+}
+
+var alertTimeOfDayValidator = stringvalidator.RegexMatches(
+	regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`),
+	"must be a 24-hour time in HH:MM format",
+)
 
 type AlertOps struct{}
 
@@ -134,6 +163,34 @@ func (o AlertOps) Schema() schema.Schema {
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"schedule_restriction": schema.SingleNestedAttribute{
+				Optional:            true,
+				MarkdownDescription: "Quiet hours: local time windows during which the alert is not evaluated. Times use the project timezone.",
+				Attributes: map[string]schema.Attribute{
+					"blocked_windows": schema.SetNestedAttribute{
+						Required:            true,
+						MarkdownDescription: "Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. Maximum 5.",
+						NestedObject: schema.NestedAttributeObject{
+							Attributes: map[string]schema.Attribute{
+								"start": schema.StringAttribute{
+									Required:            true,
+									MarkdownDescription: "Start time `HH:MM` (24-hour, project timezone). Inclusive.",
+									Validators: []validator.String{
+										alertTimeOfDayValidator,
+									},
+								},
+								"end": schema.StringAttribute{
+									Required:            true,
+									MarkdownDescription: "End time `HH:MM` (24-hour, project timezone). Exclusive.",
+									Validators: []validator.String{
+										alertTimeOfDayValidator,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -194,6 +251,30 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 	if !model.SkipWeekend.IsNull() && !model.SkipWeekend.IsUnknown() {
 		skip := model.SkipWeekend.ValueBool()
 		req.SkipWeekend = &skip
+	}
+
+	// Left nil when the block is absent, which sends an explicit null and clears quiet hours.
+	if !model.ScheduleRestriction.IsNull() && !model.ScheduleRestriction.IsUnknown() {
+		var restriction AlertScheduleRestrictionModel
+		diags.Append(model.ScheduleRestriction.As(ctx, &restriction, basetypes.ObjectAsOptions{})...)
+		if diags.HasError() {
+			return req, diags
+		}
+
+		var windows []AlertBlockedWindowModel
+		diags.Append(restriction.BlockedWindows.ElementsAs(ctx, &windows, false)...)
+		if diags.HasError() {
+			return req, diags
+		}
+
+		blockedWindows := make([]httpclient.AlertBlockedWindow, len(windows))
+		for i, window := range windows {
+			blockedWindows[i] = httpclient.AlertBlockedWindow{
+				Start: window.Start.ValueString(),
+				End:   window.End.ValueString(),
+			}
+		}
+		req.ScheduleRestriction = &httpclient.AlertScheduleRestriction{BlockedWindows: blockedWindows}
 	}
 
 	if !model.SubscribedUsers.IsNull() && !model.SubscribedUsers.IsUnknown() {
@@ -288,6 +369,28 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 		model.SkipWeekend = types.BoolValue(*resp.SkipWeekend)
 	} else {
 		model.SkipWeekend = types.BoolNull()
+	}
+
+	if resp.ScheduleRestriction == nil {
+		model.ScheduleRestriction = types.ObjectNull(alertScheduleRestrictionAttrTypes)
+	} else {
+		windows := make([]AlertBlockedWindowModel, len(resp.ScheduleRestriction.BlockedWindows))
+		for i, window := range resp.ScheduleRestriction.BlockedWindows {
+			windows[i] = AlertBlockedWindowModel{
+				Start: types.StringValue(window.Start),
+				End:   types.StringValue(window.End),
+			}
+		}
+		windowSet, d := types.SetValueFrom(ctx, alertBlockedWindowObjectType, windows)
+		diags.Append(d...)
+		if diags.HasError() {
+			return diags
+		}
+		restriction, d := types.ObjectValueFrom(ctx, alertScheduleRestrictionAttrTypes, AlertScheduleRestrictionModel{
+			BlockedWindows: windowSet,
+		})
+		diags.Append(d...)
+		model.ScheduleRestriction = restriction
 	}
 
 	return diags

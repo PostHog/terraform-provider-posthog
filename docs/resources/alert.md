@@ -30,6 +30,7 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 - `enabled` (Boolean) Whether the alert is enabled. Defaults to true.
 - `name` (String) Name of the alert.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
+- `schedule_restriction` (Attributes) Quiet hours: local time windows during which the alert is not evaluated. Times use the project timezone. (see [below for nested schema](#nestedatt--schedule_restriction))
 - `skip_weekend` (Boolean) Whether to skip checking the alert on weekends.
 - `threshold_lower` (Number) Lower bound of the threshold. Alert fires when value goes below this.
 - `threshold_upper` (Number) Upper bound of the threshold. Alert fires when value goes above this.
@@ -37,6 +38,21 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 ### Read-Only
 
 - `id` (String) UUID of the alert.
+
+<a id="nestedatt--schedule_restriction"></a>
+### Nested Schema for `schedule_restriction`
+
+Required:
+
+- `blocked_windows` (Attributes Set) Blocked time windows. Each window is half-open `[start, end)` and must span at least 30 minutes. Windows must not overlap, since PostHog merges overlapping windows. Maximum 5. (see [below for nested schema](#nestedatt--schedule_restriction--blocked_windows))
+
+<a id="nestedatt--schedule_restriction--blocked_windows"></a>
+### Nested Schema for `schedule_restriction.blocked_windows`
+
+Required:
+
+- `end` (String) End time `HH:MM` (24-hour, project timezone). Exclusive.
+- `start` (String) Start time `HH:MM` (24-hour, project timezone). Inclusive.
 
 ## Import
 
