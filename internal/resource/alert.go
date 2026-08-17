@@ -125,10 +125,13 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	for i, window := range windows {
 		start, startOK := alertMinutesSinceMidnight(window.Start)
 		end, endOK := alertMinutesSinceMidnight(window.End)
-		// Malformed times are the format validator's problem, equal bounds are the API's.
-		if !startOK || !endOK || start == end {
+		// Malformed times are the format validator's problem.
+		if !startOK || !endOK {
 			continue
 		}
+		// Equal bounds fall through to the length check below, which reports 0 minutes and
+		// names the window. The API rejects them too, but flattens every window error to a
+		// single "Invalid schedule restriction" that says nothing about which one.
 		label := window.Start.ValueString() + "-" + window.End.ValueString()
 		length := end - start
 		if length < 0 {

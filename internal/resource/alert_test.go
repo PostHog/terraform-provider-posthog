@@ -137,7 +137,7 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		"lone wrapped window":                        {windows: [][2]string{{"22:00", "07:00"}}},
 		"window ending at midnight plus daytime":     {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
 		"malformed times are ignored":                {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
-		"equal bounds are left to the API":           {windows: [][2]string{{"02:00", "02:00"}}},
+		"equal bounds block no time at all":          {windows: [][2]string{{"02:00", "02:00"}}, wantSummary: tooShort},
 		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
 		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
 		"shorter than thirty minutes":                {windows: [][2]string{{"02:00", "02:15"}}, wantSummary: tooShort},

@@ -86,6 +86,7 @@ func TestAlert_AllFields(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_alert.test", "condition_type", "absolute_value"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "true"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "calculation_interval", "daily"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
 					resource.TestCheckResourceAttrSet("posthog_alert.test", "id"),
 				),
 			},
@@ -545,170 +546,139 @@ func TestAlert_ScheduleRestrictionImport(t *testing.T) {
 	})
 }
 
-// TestAlert_RejectsOverlappingBlockedWindows verifies overlap is caught at plan time.
-// PostHog merges overlapping windows on save, so letting one through would return an
-// alert that does not match the config and fail the apply with an inconsistent result.
-func TestAlert_RejectsOverlappingBlockedWindows(t *testing.T) {
+// TestAlert_RejectsInvalidBlockedWindows checks every quiet-hours rule rejects at plan
+// time, before any API call. The rules themselves are covered by the unit table; what this
+// adds is that the validator is wired at the right schema path and that each rule's
+// user-facing message is the one a practitioner actually sees.
+func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 	skipIfNotAcceptance(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
 
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
+	tests := map[string]struct {
+		windows   string
+		wantError *regexp.Regexp
+	}{
+		"overlapping": {
+			windows: `
       { start = "01:00", end = "03:00" },
       { start = "02:00", end = "04:00" },
-`),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`Overlapping blocked windows`),
-			},
+`,
+			wantError: regexp.MustCompile(`Overlapping blocked windows`),
 		},
-	})
-}
-
-// TestAlert_RejectsTouchingBlockedWindows verifies that windows which merely touch are
-// rejected. PostHog merges on `next.start <= prev.end`, so 00:00-06:00 and 06:00-09:00
-// would be saved as a single 00:00-09:00 window and the apply would fail.
-func TestAlert_RejectsTouchingBlockedWindows(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
+		"touching": {
+			windows: `
       { start = "00:00", end = "06:00" },
       { start = "06:00", end = "09:00" },
-`),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`Overlapping blocked windows`),
-			},
+`,
+			wantError: regexp.MustCompile(`Overlapping blocked windows`),
 		},
-	})
-}
-
-// TestAlert_RejectsWrappedWindowAlongsideAnother verifies the midnight-crossing rule.
-// PostHog re-encodes a crossing window as one window only when it is the whole
-// configuration; next to another window it is stored as two, so the alert would read back
-// with three windows where two were configured.
-func TestAlert_RejectsWrappedWindowAlongsideAnother(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
+		"crossing midnight alongside another": {
+			windows: `
       { start = "22:00", end = "07:00" },
       { start = "12:00", end = "13:00" },
-`),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`must be the only window`),
-			},
+`,
+			wantError: regexp.MustCompile(`must be the only window`),
 		},
-	})
-}
-
-// TestAlert_RejectsEmptyBlockedWindows verifies an empty set is rejected. PostHog
-// normalizes it to a null restriction, which would not match the configured block and
-// would fail the apply with an inconsistent result.
-func TestAlert_RejectsEmptyBlockedWindows(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config:   testAccAlertWithBlockedWindows(rName, ``),
-				PlanOnly: true,
-				// Terraform hard-wraps diagnostics, so the pattern stops before the
-				// line break that falls between the count and "elements".
-				ExpectError: regexp.MustCompile(`set must contain at least 1`),
-			},
+		"meeting at midnight": {
+			windows: `
+      { start = "00:00", end = "06:00" },
+      { start = "22:00", end = "00:00" },
+`,
+			wantError: regexp.MustCompile(`meeting at midnight`),
 		},
-	})
-}
-
-// TestAlert_RejectsShortBlockedWindow verifies the >=30-minute rule runs at plan time
-// rather than surfacing as a mid-apply API error.
-func TestAlert_RejectsShortBlockedWindow(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
-      { start = "02:00", end = "02:15" },
-`),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`Blocked window is too short`),
-			},
+		"shorter than thirty minutes": {
+			windows:   "\n      { start = \"02:00\", end = \"02:15\" },\n",
+			wantError: regexp.MustCompile(`Blocked window is too short`),
 		},
-	})
-}
-
-// TestAlert_RejectsInvalidBlockedWindowTime verifies the HH:MM regex rejects a
-// wall-clock time that does not exist, before any API call.
-func TestAlert_RejectsInvalidBlockedWindowTime(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
-      { start = "24:00", end = "06:00" },
-`),
-				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`(?s)must be a 24-hour time in HH:MM format`),
-			},
+		"time that does not exist": {
+			windows:   "\n      { start = \"24:00\", end = \"06:00\" },\n",
+			wantError: regexp.MustCompile(`must be a 24-hour time in HH:MM format`),
 		},
-	})
-}
-
-// TestAlert_RejectsTooManyBlockedWindows verifies the SizeAtMost(5) validator, matching
-// the limit PostHog enforces server-side.
-func TestAlert_RejectsTooManyBlockedWindows(t *testing.T) {
-	skipIfNotAcceptance(t)
-
-	rName := acctest.RandomWithPrefix("tf-acc-test")
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlertWithBlockedWindows(rName, `
+		// Terraform hard-wraps diagnostics, so these patterns stop before the line break
+		// that falls between the count and "elements".
+		"empty list": {
+			windows:   ``,
+			wantError: regexp.MustCompile(`set must contain at least 1`),
+		},
+		"more than five": {
+			windows: `
       { start = "00:00", end = "01:00" },
       { start = "02:00", end = "03:00" },
       { start = "04:00", end = "05:00" },
       { start = "06:00", end = "07:00" },
       { start = "08:00", end = "09:00" },
       { start = "10:00", end = "11:00" },
-`),
+`,
+			wantError: regexp.MustCompile(`set must contain at most 5`),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config:      testAccAlertWithBlockedWindows(rName, test.windows),
+						PlanOnly:    true,
+						ExpectError: test.wantError,
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestAlert_BlockedWindowsAcceptedBoundaries applies the shapes the validator deliberately
+// permits but that were only ever checked against PostHog's normalizer, not the live API:
+// the maximum five windows, and a window ending exactly at midnight next to another window.
+// Both are places where a wrong permissive call fails every apply with an inconsistent
+// result rather than a plan error.
+func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	fiveWindows := `
+      { start = "00:00", end = "01:00" },
+      { start = "02:00", end = "03:00" },
+      { start = "04:00", end = "05:00" },
+      { start = "06:00", end = "07:00" },
+      { start = "08:00", end = "09:00" },
+`
+	endsAtMidnight := `
+      { start = "19:00", end = "00:00" },
+      { start = "12:00", end = "13:00" },
+`
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAlertWithBlockedWindows(rName, fiveWindows),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "5"),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, fiveWindows),
 				PlanOnly: true,
-				// Terraform hard-wraps diagnostics, so the pattern stops before the
-				// line break that falls between the count and "elements".
-				ExpectError: regexp.MustCompile(`set must contain at most 5`),
+			},
+			{
+				Config: testAccAlertWithBlockedWindows(rName, endsAtMidnight),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "2"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "19:00",
+						"end":   "00:00",
+					}),
+				),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, endsAtMidnight),
+				PlanOnly: true,
 			},
 		},
 	})
@@ -832,6 +802,12 @@ resource "posthog_alert" "test" {
   check_ongoing_interval = true
   calculation_interval   = "daily"
   skip_weekend           = false
+
+  schedule_restriction = {
+    blocked_windows = [
+      { start = "22:00", end = "07:00" },
+    ]
+  }
 
   depends_on = [posthog_insight.test]
 }
