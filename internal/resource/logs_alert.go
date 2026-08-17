@@ -622,9 +622,13 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 		return diags
 	}
 
-	type interval struct{ start, end int }
+	// The label travels with the interval so the two halves of one midnight-crossing
+	// window can be told apart from two genuinely different windows.
+	type interval struct {
+		start, end int
+		label      string
+	}
 	var intervals []interval
-	var labels []string
 	windowCount := 0
 
 	for _, w := range parsed {
@@ -676,14 +680,11 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 		// midnight in the check below.
 		switch {
 		case end > start:
-			intervals = append(intervals, interval{start, end})
-			labels = append(labels, label)
+			intervals = append(intervals, interval{start, end, label})
 		case end == 0:
-			intervals = append(intervals, interval{start, minutesPerDay})
-			labels = append(labels, label)
+			intervals = append(intervals, interval{start, minutesPerDay, label})
 		default:
-			intervals = append(intervals, interval{start, minutesPerDay}, interval{0, end})
-			labels = append(labels, label, label)
+			intervals = append(intervals, interval{start, minutesPerDay, label}, interval{0, end, label})
 		}
 	}
 
@@ -691,7 +692,7 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 	// prev.end`, so 01:00-02:00 and 02:00-03:00 are saved as a single 01:00-03:00 window.
 	for i := 0; i < len(intervals); i++ {
 		for j := i + 1; j < len(intervals); j++ {
-			if labels[i] == labels[j] {
+			if intervals[i].label == intervals[j].label {
 				continue
 			}
 			if intervals[i].start <= intervals[j].end && intervals[j].start <= intervals[i].end {
@@ -702,7 +703,7 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a "+
 							"single window when saving, so the alert would read back with different windows than "+
 							"configured and every apply would fail. Combine them into one window.",
-						labels[i], labels[j],
+						intervals[i].label, intervals[j].label,
 					),
 				)
 				return diags

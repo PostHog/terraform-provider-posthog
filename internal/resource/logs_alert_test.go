@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -26,11 +25,10 @@ func emptyStringSet(t *testing.T) types.Set {
 	return set
 }
 
+// blockedWindowObjectType reuses the production attribute map so a new field on
+// BlockedWindowTFModel cannot leave the tests exercising a stale shape.
 func blockedWindowObjectType() types.ObjectType {
-	return types.ObjectType{AttrTypes: map[string]attr.Type{
-		"start": types.StringType,
-		"end":   types.StringType,
-	}}
+	return types.ObjectType{AttrTypes: blockedWindowAttrTypes}
 }
 
 func blockedWindowSet(t *testing.T, windows ...BlockedWindowTFModel) types.Set {
