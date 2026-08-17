@@ -4,7 +4,7 @@ page_title: "posthog_logs_alert Resource - posthog"
 subcategory: ""
 description: |-
   Manage PostHog log alerts https://posthog.com/docs/logs/alerts. A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
-  At least one of severity_levels, service_names, or filter_group_json is required unless the alert is a draft (enabled = false). A project may hold at most 20 log alerts.
+  At least one of severity_levels, service_names, or filter_group_json is required unless the alert is disabled (enabled = false). A project may hold at most 20 log alerts.
   ~> Notification destinations are not managed by this resource. PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing project_id — creates a new alert with no destinations attached, which you must re-attach manually.
   ~> An alert whose state is broken or snoozed has stopped notifying. Terraform does not manage either condition, so terraform plan stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
   Removing severity_levels, service_names, filter_group_json, or blocked_windows from your configuration clears them server-side. The remaining optional attributes are computed, so removing one retains its last applied value rather than restoring the documented default — set it explicitly to change it back.
@@ -14,7 +14,7 @@ description: |-
 
 Manage PostHog [log alerts](https://posthog.com/docs/logs/alerts). A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
 
-At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the alert is a draft (`enabled = false`). A project may hold at most 20 log alerts.
+At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.
 
 ~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing `project_id` — creates a new alert with no destinations attached, which you must re-attach manually.
 
@@ -86,9 +86,9 @@ resource "posthog_logs_alert" "draft" {
 
 - `blocked_windows` (Attributes Set) Quiet hours: up to 5 time windows during which the alert is not evaluated. Times use the project timezone. A window may cross midnight (for example `22:00` to `06:00`) and must span at least 30 minutes. Windows must not overlap each other. Omit the attribute, or set it to an empty list, to disable quiet hours. (see [below for nested schema](#nestedatt--blocked_windows))
 - `cooldown_minutes` (Number) Minimum minutes between repeated notifications after the alert fires. Defaults to 0, meaning no cooldown.
-- `datapoints_to_alarm` (Number) How many of the `evaluation_periods` most recent check periods must breach the threshold before the alert fires. Must not exceed `evaluation_periods`. Defaults to 1.
+- `datapoints_to_alarm` (Number) How many of the `evaluation_periods` most recent check periods must breach the threshold before the alert fires. Must be between 1 and 10 and must not exceed `evaluation_periods`. Defaults to 1.
 - `enabled` (Boolean) Whether the alert is actively evaluated. Defaults to true. Disabling resets the alert state to `not_firing`.
-- `evaluation_periods` (Number) How many of the most recent check periods to consider. PostHog checks a log alert every 5 minutes, so 3 periods covers the last 15 minutes. Defaults to 1.
+- `evaluation_periods` (Number) How many of the most recent check periods to consider. PostHog checks a log alert every 5 minutes, so 3 periods covers the last 15 minutes. Must be between 1 and 10. Defaults to 1.
 - `filter_group_json` (String) Attribute-level filters as JSON, matching the `filters.filterGroup` object of the [logs alerts API](https://posthog.com/docs/api/logs). Use this for anything beyond severity and service, such as filtering on a log attribute. Must be a non-empty JSON object. Only the fields you declare are tracked: PostHog annotates saved filters with defaults (such as `label`) that would otherwise surface as permanent drift. The flip side is that a field you omit is not tracked either, so if someone edits it in the PostHog UI Terraform will not detect the drift — declare every field you care about.
 - `name` (String) Human-readable name for the alert. PostHog defaults this to `Untitled alert` when omitted, so this attribute is computed: leaving it out adopts the server's default rather than producing a diff.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.

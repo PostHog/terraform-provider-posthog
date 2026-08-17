@@ -31,6 +31,9 @@ import (
 // hhmmPattern matches a 24-hour HH:MM local time, as used by quiet-hours windows.
 var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
+// nonBlankPattern matches any string containing at least one non-whitespace character.
+var nonBlankPattern = regexp.MustCompile(`\S`)
+
 const (
 	minutesPerDay = 24 * 60
 	// minBlockedWindowMinutes is the shortest quiet-hours window PostHog accepts.
@@ -95,7 +98,7 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"periodically counts the log entries matching its filters over a rolling window and fires when that " +
 			"count crosses the threshold.\n\n" +
 			"At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the " +
-			"alert is a draft (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
+			"alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
 			"~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, " +
 			"and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, " +
 			"so Terraform cannot track them without reporting permanent drift. Attach destinations from the " +
@@ -125,7 +128,10 @@ func (o LogsAlertOps) Schema() schema.Schema {
 					"when omitted, so this attribute is computed: leaving it out adopts the server's default rather " +
 					"than producing a diff.",
 				Validators: []validator.String{
-					stringvalidator.LengthAtLeast(1),
+					// Not just LengthAtLeast(1): the response mapper nulls out any name that
+					// is blank after trimming, so a whitespace-only name would come back as
+					// null against a non-null config and fail the apply.
+					stringvalidator.RegexMatches(nonBlankPattern, "must contain at least one non-whitespace character"),
 					stringvalidator.LengthAtMost(255),
 				},
 				PlanModifiers: []planmodifier.String{
@@ -213,7 +219,7 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "How many of the most recent check periods to consider. PostHog checks a log alert " +
-					"every 5 minutes, so 3 periods covers the last 15 minutes. Defaults to 1.",
+					"every 5 minutes, so 3 periods covers the last 15 minutes. Must be between 1 and 10. Defaults to 1.",
 				Validators: []validator.Int64{
 					int64validator.Between(1, 10),
 				},
@@ -225,7 +231,8 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "How many of the `evaluation_periods` most recent check periods must breach the " +
-					"threshold before the alert fires. Must not exceed `evaluation_periods`. Defaults to 1.",
+					"threshold before the alert fires. Must be between 1 and 10 and must not exceed " +
+					"`evaluation_periods`. Defaults to 1.",
 				Validators: []validator.Int64{
 					int64validator.Between(1, 10),
 				},
@@ -504,39 +511,42 @@ func (v nonEmptyJSONObjectValidator) ValidateString(ctx context.Context, req val
 
 // ModifyResourcePlan enforces the invariants PostHog documents but only checks server-side,
 // so a bad config fails at plan time with an actionable message instead of mid-apply.
-//
-// Validation reads the *config* rather than the plan on purpose. For an Optional+Computed
-// attribute the plan value is unknown both when the user omitted it (the server will supply
-// a default) and when it references a value Terraform cannot resolve yet. Only the config
-// distinguishes the two: omitted is null, unresolved is unknown.
 func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
 	}
-	var config LogsAlertTFModel
+	var plan, config LogsAlertTFModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(validateLogsAlertConfig(ctx, config)...)
+	resp.Diagnostics.Append(validateLogsAlertPlan(ctx, plan, config)...)
 }
 
-// validateLogsAlertConfig is split out from ModifyResourcePlan so the invariants can be
-// unit tested directly against a model, including the unknown-value cases.
-func validateLogsAlertConfig(ctx context.Context, config LogsAlertTFModel) diag.Diagnostics {
+// validateLogsAlertPlan is split out from ModifyResourcePlan so the invariants can be unit
+// tested directly against a model, including the unknown-value cases.
+//
+// It needs both plan and config because neither alone identifies the value PostHog will end
+// up with. The plan carries the effective value whenever it is known — on update Terraform
+// copies the prior state into the plan for an Optional+Computed attribute the config omits,
+// so an omitted attribute keeps its last applied value rather than reverting to the
+// documented default. The plan is unknown only on create, or when the config references
+// something unresolvable; the config tells those apart (null versus unknown).
+func validateLogsAlertPlan(ctx context.Context, plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	diags.Append(validateCanEverFire(config)...)
-	diags.Append(validateHasFilters(config)...)
-	diags.Append(validateBlockedWindows(ctx, config.BlockedWindows)...)
+	diags.Append(validateCanEverFire(plan, config)...)
+	diags.Append(validateHasFilters(plan, config)...)
+	diags.Append(validateBlockedWindows(ctx, plan.BlockedWindows)...)
 	return diags
 }
 
 // validateCanEverFire rejects threshold/period combinations that no log volume can satisfy.
-func validateCanEverFire(config LogsAlertTFModel) diag.Diagnostics {
+func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	datapoints, datapointsKnown := int64OrDefault(config.DatapointsToAlarm, defaultDatapointsToAlarm)
-	periods, periodsKnown := int64OrDefault(config.EvaluationPeriods, defaultEvaluationPeriods)
+	datapoints, datapointsKnown := resolveInt64(plan.DatapointsToAlarm, config.DatapointsToAlarm, defaultDatapointsToAlarm)
+	periods, periodsKnown := resolveInt64(plan.EvaluationPeriods, config.EvaluationPeriods, defaultEvaluationPeriods)
 	if datapointsKnown && periodsKnown && datapoints > periods {
 		diags.AddAttributeError(
 			path.Root("datapoints_to_alarm"),
@@ -550,78 +560,81 @@ func validateCanEverFire(config LogsAlertTFModel) diag.Diagnostics {
 	}
 
 	// A log count is never negative, so "below 0" is unsatisfiable.
-	operator, operatorKnown := stringOrDefault(config.ThresholdOperator, defaultThresholdOperator)
-	count, countKnown := int64OrDefault(config.ThresholdCount, defaultThresholdCount)
+	operator, operatorKnown := resolveString(plan.ThresholdOperator, config.ThresholdOperator, defaultThresholdOperator)
+	count, countKnown := resolveInt64(plan.ThresholdCount, config.ThresholdCount, defaultThresholdCount)
 	if operatorKnown && countKnown && operator == "below" && count == 0 {
 		diags.AddAttributeError(
 			path.Root("threshold_count"),
 			"Alert can never fire",
 			"threshold_operator = \"below\" with threshold_count = 0 can never be satisfied, because a log count is "+
-				"never negative. Use threshold_operator = \"above\" to fire on any matching log.",
+				"never negative. Use threshold_count = 1 to fire when no matching logs arrive in the window, or "+
+				"threshold_operator = \"above\" with threshold_count = 0 to fire on any matching log.",
 		)
 	}
 
 	return diags
 }
 
-// validateHasFilters enforces PostHog's rule that a non-draft alert must filter on something.
-func validateHasFilters(config LogsAlertTFModel) diag.Diagnostics {
+// validateHasFilters enforces PostHog's rule that an enabled alert must filter on something.
+func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	// Any unresolved filter could turn out to be non-empty, so leave the rule to the API.
-	if config.SeverityLevels.IsUnknown() || config.ServiceNames.IsUnknown() || config.FilterGroupJSON.IsUnknown() {
-		return diags
-	}
-	enabled, enabledKnown := boolOrDefault(config.Enabled, true)
+	enabled, enabledKnown := resolveBool(plan.Enabled, config.Enabled, true)
 	if !enabledKnown || !enabled {
 		return diags
 	}
-	if isEmptySet(config.SeverityLevels) && isEmptySet(config.ServiceNames) && config.FilterGroupJSON.IsNull() {
+	// An unresolved filter could turn out to be non-empty, so it counts as a filter and
+	// the rule is left to the API: isEmptySet is false for an unknown set, and an unknown
+	// filter_group_json is not null.
+	if isEmptySet(plan.SeverityLevels) && isEmptySet(plan.ServiceNames) && plan.FilterGroupJSON.IsNull() {
 		diags.AddError(
 			"Log alert has no filters",
 			"An enabled log alert needs at least one of severity_levels, service_names, or filter_group_json. "+
-				"Set enabled = false to keep it as a draft.",
+				"Set enabled = false to save it without filters.",
 		)
 	}
 	return diags
 }
 
-// int64OrDefault resolves a config value to what PostHog will actually use: an omitted
-// (null) attribute takes the documented server default. An unknown value is not yet
-// resolvable, so the second return is false and callers skip the check rather than guess.
-func int64OrDefault(v types.Int64, def int64) (int64, bool) {
-	if v.IsUnknown() {
-		return 0, false
+// resolveInt64 reports the value PostHog will end up with, and whether it is knowable yet.
+// The plan already carries the effective value whenever it is known — including on update,
+// where Terraform copies the prior state into the plan for an Optional+Computed attribute
+// the config omits, so an omitted attribute keeps its last applied value. The plan is
+// unknown only on create, or when the config references something not yet resolvable; a
+// null config means the attribute was omitted on create, so the server default applies.
+func resolveInt64(plan, config types.Int64, def int64) (int64, bool) {
+	if !plan.IsUnknown() && !plan.IsNull() {
+		return plan.ValueInt64(), true
 	}
-	if v.IsNull() {
+	if config.IsNull() {
 		return def, true
 	}
-	return v.ValueInt64(), true
+	return 0, false
 }
 
-func stringOrDefault(v types.String, def string) (string, bool) {
-	if v.IsUnknown() {
-		return "", false
+func resolveString(plan, config types.String, def string) (string, bool) {
+	if !plan.IsUnknown() && !plan.IsNull() {
+		return plan.ValueString(), true
 	}
-	if v.IsNull() {
+	if config.IsNull() {
 		return def, true
 	}
-	return v.ValueString(), true
+	return "", false
 }
 
-func boolOrDefault(v types.Bool, def bool) (bool, bool) {
-	if v.IsUnknown() {
-		return false, false
+func resolveBool(plan, config types.Bool, def bool) (bool, bool) {
+	if !plan.IsUnknown() && !plan.IsNull() {
+		return plan.ValueBool(), true
 	}
-	if v.IsNull() {
+	if config.IsNull() {
 		return def, true
 	}
-	return v.ValueBool(), true
+	return false, false
 }
 
-// isEmptySet reports whether a set contributes no values. An unknown set is not empty —
-// its elements are simply not resolvable yet — and Elements() returns nothing for unknown,
-// so the IsUnknown check has to come first.
+// isEmptySet reports whether a set contributes no values. An unknown set is not empty — its
+// elements are simply not resolvable yet — and Elements() returns nothing for unknown, so
+// the IsUnknown check has to come first.
 func isEmptySet(v types.Set) bool {
 	if v.IsUnknown() {
 		return false

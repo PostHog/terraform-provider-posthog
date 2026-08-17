@@ -228,11 +228,15 @@ func TestLogsAlertBuildCreateRequest_MapsBlockedWindows(t *testing.T) {
 	assert.Equal(t, []string{"error"}, req.Filters.SeverityLevels)
 }
 
-// Plan-time validation runs against the config, where an omitted Optional+Computed
-// attribute is null (server default applies) and an unresolved reference is unknown
-// (nothing can be concluded yet). Conflating the two either blocks valid configs or
-// silently skips the check on create, so both cases are covered explicitly.
-func TestValidateLogsAlertConfig(t *testing.T) {
+// Plan-time validation has to reason about the value PostHog will actually end up with.
+// Neither plan nor config alone identifies it:
+//   - create, attribute omitted    → plan unknown, config null  → server default applies
+//   - create, unresolved reference → plan unknown, config unknown → nothing can be concluded
+//   - update, attribute omitted    → plan carries the prior state value (Optional+Computed)
+//
+// Getting this wrong is what produced both a false "never fires" rejection on update and a
+// skipped check on create, so each case is pinned here.
+func TestValidateLogsAlertPlan(t *testing.T) {
 	withFilter := func(m LogsAlertTFModel) LogsAlertTFModel {
 		m.SeverityLevels = stringSet(t, "error")
 		return m
@@ -240,15 +244,21 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		plan      LogsAlertTFModel
 		config    LogsAlertTFModel
 		expectErr string
 	}{
 		{
 			name:   "minimal valid config",
+			plan:   withFilter(LogsAlertTFModel{}),
 			config: withFilter(LogsAlertTFModel{}),
 		},
 		{
 			name: "datapoints exceeds periods",
+			plan: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Value(2),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
 			config: withFilter(LogsAlertTFModel{
 				EvaluationPeriods: types.Int64Value(2),
 				DatapointsToAlarm: types.Int64Value(5),
@@ -256,17 +266,50 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 			expectErr: "Alert can never fire",
 		},
 		{
-			// The create path: evaluation_periods omitted, so the server default of 1
-			// applies and datapoints_to_alarm = 5 can never be reached.
-			name: "datapoints exceeds omitted periods default",
+			// Create with evaluation_periods omitted: the server default of 1 applies, so
+			// datapoints_to_alarm = 5 can never be reached.
+			name: "create: datapoints exceeds omitted periods default",
+			plan: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Unknown(),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
 			config: withFilter(LogsAlertTFModel{
 				DatapointsToAlarm: types.Int64Value(5),
 			}),
 			expectErr: "Alert can never fire",
 		},
 		{
+			// Update with the evaluation_periods line removed: the attribute keeps its last
+			// applied value (10), which the plan carries, so this is valid and must not be
+			// rejected against the server default of 1.
+			name: "update: omitted periods keeps its prior value",
+			plan: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Value(10),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+			config: withFilter(LogsAlertTFModel{
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+		},
+		{
+			// Mirror case: the retained value is the one that breaks, and must be caught.
+			name: "update: retained periods below datapoints still fails",
+			plan: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Value(2),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
+			config: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Value(2),
+			}),
+			expectErr: "Alert can never fire",
+		},
+		{
 			// Cannot conclude anything: the reference may resolve to any value.
-			name: "unknown periods skips the check",
+			name: "unresolved periods skips the check",
+			plan: withFilter(LogsAlertTFModel{
+				EvaluationPeriods: types.Int64Unknown(),
+				DatapointsToAlarm: types.Int64Value(5),
+			}),
 			config: withFilter(LogsAlertTFModel{
 				EvaluationPeriods: types.Int64Unknown(),
 				DatapointsToAlarm: types.Int64Value(5),
@@ -274,6 +317,10 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 		},
 		{
 			name: "below zero can never fire",
+			plan: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("below"),
+				ThresholdCount:    types.Int64Value(0),
+			}),
 			config: withFilter(LogsAlertTFModel{
 				ThresholdOperator: types.StringValue("below"),
 				ThresholdCount:    types.Int64Value(0),
@@ -281,7 +328,24 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 			expectErr: "Alert can never fire",
 		},
 		{
+			// Update: threshold_count = 0 retained from state, operator newly set to below.
+			// Resolving the omitted count to the server default of 100 would miss this.
+			name: "update: retained zero count with below operator fails",
+			plan: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("below"),
+				ThresholdCount:    types.Int64Value(0),
+			}),
+			config: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("below"),
+			}),
+			expectErr: "Alert can never fire",
+		},
+		{
 			name: "above zero is valid",
+			plan: withFilter(LogsAlertTFModel{
+				ThresholdOperator: types.StringValue("above"),
+				ThresholdCount:    types.Int64Value(0),
+			}),
 			config: withFilter(LogsAlertTFModel{
 				ThresholdOperator: types.StringValue("above"),
 				ThresholdCount:    types.Int64Value(0),
@@ -289,29 +353,42 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 		},
 		{
 			name:      "enabled alert with no filters",
+			plan:      LogsAlertTFModel{},
 			config:    LogsAlertTFModel{},
 			expectErr: "no filters",
 		},
 		{
-			name:   "draft alert may omit filters",
+			name:   "disabled alert may omit filters",
+			plan:   LogsAlertTFModel{Enabled: types.BoolValue(false)},
 			config: LogsAlertTFModel{Enabled: types.BoolValue(false)},
 		},
 		{
-			// Regression: an unknown set has zero elements but is not empty. Treating it
-			// as empty blocked valid configs whose filters come from another resource.
+			// Update: the enabled = false line removed. The alert stays disabled, so the
+			// filter rule must not kick in against the server default of true.
+			name:   "update: omitted enabled keeps its prior false value",
+			plan:   LogsAlertTFModel{Enabled: types.BoolValue(false)},
+			config: LogsAlertTFModel{},
+		},
+		{
+			// Regression: an unknown set has zero elements but is not empty. Treating it as
+			// empty blocked valid configs whose filters come from another resource.
 			name:   "unknown severity levels does not trip the filter check",
+			plan:   LogsAlertTFModel{SeverityLevels: types.SetUnknown(types.StringType)},
 			config: LogsAlertTFModel{SeverityLevels: types.SetUnknown(types.StringType)},
 		},
 		{
 			name:   "unknown service names does not trip the filter check",
+			plan:   LogsAlertTFModel{ServiceNames: types.SetUnknown(types.StringType)},
 			config: LogsAlertTFModel{ServiceNames: types.SetUnknown(types.StringType)},
 		},
 		{
 			name:   "unknown filter group does not trip the filter check",
+			plan:   LogsAlertTFModel{FilterGroupJSON: jsontypes.NewNormalizedUnknown()},
 			config: LogsAlertTFModel{FilterGroupJSON: jsontypes.NewNormalizedUnknown()},
 		},
 		{
 			name:      "explicitly empty sets still trip the filter check",
+			plan:      LogsAlertTFModel{SeverityLevels: emptyStringSet(t), ServiceNames: emptyStringSet(t)},
 			config:    LogsAlertTFModel{SeverityLevels: emptyStringSet(t), ServiceNames: emptyStringSet(t)},
 			expectErr: "no filters",
 		},
@@ -319,7 +396,7 @@ func TestValidateLogsAlertConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diags := validateLogsAlertConfig(context.Background(), tt.config)
+			diags := validateLogsAlertPlan(context.Background(), tt.plan, tt.config)
 			if tt.expectErr == "" {
 				assert.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
 				return
