@@ -548,10 +548,16 @@ func TestAlert_ScheduleRestrictionImport(t *testing.T) {
 	})
 }
 
-// TestAlert_RejectsInvalidBlockedWindows checks every quiet-hours rule rejects at plan
-// time, before any API call. The rules themselves are covered by the unit table; what this
-// adds is that the validator is wired at the right schema path and that each rule's
-// user-facing message is the one a practitioner actually sees.
+// TestAlert_RejectsInvalidBlockedWindows checks the plan-time rejections that the unit
+// table cannot reach, plus one representative rule.
+//
+// The rule matrix lives in TestBlockedWindowsValidator, which asserts each diagnostic
+// summary directly and runs without an instance. Re-asserting all of it here would cost a
+// full plan per rule to prove the same thing. What only this layer can show is that the
+// validators are wired at the right schema path: "overlapping" covers the custom set
+// validator, the three schema rows cover the framework validators that the unit table
+// never constructs, and the two midnight rows are kept deliberately because those rules
+// were wrong once and are the subtlest to get right.
 func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -568,13 +574,6 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 `,
 			wantError: regexp.MustCompile(`Overlapping blocked windows`),
 		},
-		"touching": {
-			windows: `
-      { start = "00:00", end = "06:00" },
-      { start = "06:00", end = "09:00" },
-`,
-			wantError: regexp.MustCompile(`Overlapping blocked windows`),
-		},
 		"crossing midnight alongside another": {
 			windows: `
       { start = "22:00", end = "07:00" },
@@ -588,10 +587,6 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
       { start = "22:00", end = "00:00" },
 `,
 			wantError: regexp.MustCompile(`meeting at midnight`),
-		},
-		"shorter than thirty minutes": {
-			windows:   "\n      { start = \"02:00\", end = \"02:15\" },\n",
-			wantError: regexp.MustCompile(`Blocked window is too short`),
 		},
 		"time that does not exist": {
 			windows: "\n      { start = \"24:00\", end = \"06:00\" },\n",
@@ -683,6 +678,85 @@ func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
 			{
 				Config:   testAccAlertWithBlockedWindows(rName, endsAtMidnight),
 				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestAlert_ScheduleRestrictionDrift edits quiet hours outside Terraform, the way someone
+// would from the PostHog UI, and asserts the change surfaces as a plan rather than being
+// absorbed. This matters because MapResponseToModel maps an empty window list to null: a
+// server-side clear has to show up as drift, not as agreement.
+func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	client := httpclient.NewDefaultClient(
+		os.Getenv("POSTHOG_HOST"),
+		os.Getenv("POSTHOG_API_KEY"),
+		"acceptance-test",
+	)
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+
+	config := testAccAlertWithBlockedWindows(rName, `
+      { start = "02:00", end = "04:00" },
+`)
+
+	var alertID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_alert.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_alert.test")
+						}
+						alertID = rs.Primary.ID
+						return nil
+					},
+				),
+			},
+			// Clear quiet hours behind Terraform's back.
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						// Explicit null is how quiet hours are cleared.
+						ScheduleRestriction: nil,
+					}); err != nil {
+						t.Fatalf("clearing quiet hours on %s: %v", alertID, err)
+					}
+				},
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Applying restores what the configuration asks for.
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "02:00",
+						"end":   "04:00",
+					}),
+				),
 			},
 		},
 	})

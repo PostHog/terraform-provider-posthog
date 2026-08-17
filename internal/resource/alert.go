@@ -111,12 +111,11 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	// window is the index of the configured window a span came from. Two spans of the same
-	// window are the two halves of one midnight crossing, not a conflict. The label is only
-	// message text, so it must not be used to decide identity.
+	// window indexes back into windows, so a span always knows which configured window it
+	// came from. Two spans of the same window are the two halves of one midnight crossing,
+	// not a conflict.
 	type interval struct {
 		window     int
-		label      string
 		start, end int
 	}
 
@@ -133,7 +132,6 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		// Equal bounds fall through to the length check below, which reports 0 minutes and
 		// names the window. The API rejects them too, but flattens every window error to a
 		// single "Invalid schedule restriction" that says nothing about which one.
-		label := window.Start.ValueString() + "-" + window.End.ValueString()
 		length := end - start
 		if length < 0 {
 			length += alertMinutesPerDay
@@ -144,7 +142,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 				"Blocked window is too short",
 				fmt.Sprintf(
 					"Window %s spans %d minutes. PostHog requires each blocked window to span at least %d minutes.",
-					label, length, alertMinBlockedWindowMinutes,
+					alertWindowLabel(window), length, alertMinBlockedWindowMinutes,
 				),
 			)
 			continue
@@ -152,17 +150,41 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		windowCount++
 		switch {
 		case end > start:
-			spans = append(spans, interval{i, label, start, end})
+			spans = append(spans, interval{i, start, end})
 		case end == 0:
 			// Runs to the end of the day without wrapping into the next morning, so it
 			// needs no second half. An empty [0, 0) half would collide with every window
 			// starting at midnight in the check below.
-			spans = append(spans, interval{i, label, start, alertMinutesPerDay})
+			spans = append(spans, interval{i, start, alertMinutesPerDay})
 		default:
 			// Wraps midnight, as the overnight 22:00-07:00 preset does.
 			wrappingWindows++
-			spans = append(spans, interval{i, label, start, alertMinutesPerDay}, interval{i, label, 0, end})
+			spans = append(spans, interval{i, start, alertMinutesPerDay}, interval{i, 0, end})
 		}
+	}
+
+	// Blocking the whole day leaves the alert no time to run, and PostHog rejects it
+	// outright. Checked before the overlap loop because such a config always overlaps too,
+	// and "combine them into a single window" is the wrong advice here: doing so produces
+	// a zero-length window that fails again for an unrelated reason.
+	blocked := 0
+	var covered [alertMinutesPerDay]bool
+	for _, span := range spans {
+		for m := span.start; m < span.end && m < alertMinutesPerDay; m++ {
+			if !covered[m] {
+				covered[m] = true
+				blocked++
+			}
+		}
+	}
+	if blocked >= alertMinutesPerDay {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Blocked windows cover the whole day",
+			"These windows block every minute of the day, so the alert could never run. PostHog rejects this. "+
+				"Leave at least one gap when the alert is allowed to be evaluated.",
+		)
+		return
 	}
 
 	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
@@ -181,7 +203,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 					"Overlapping blocked windows",
 					fmt.Sprintf(
 						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a single window when saving, so the alert would not match this configuration. Combine them into a single window.",
-						spans[i].label, spans[j].label,
+						alertWindowLabel(windows[spans[i].window]), alertWindowLabel(windows[spans[j].window]),
 					),
 				)
 			}
@@ -216,10 +238,15 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 					"single crossing window when they are the only two, so the alert would not match this "+
 					"configuration. Write them as one window crossing midnight, add a third window elsewhere in "+
 					"the day, or end the evening window at 23:59.",
-				spans[0].label, spans[1].label,
+				alertWindowLabel(windows[spans[0].window]), alertWindowLabel(windows[spans[1].window]),
 			),
 		)
 	}
+}
+
+// alertWindowLabel renders a window the way the diagnostics name it.
+func alertWindowLabel(window AlertBlockedWindowModel) string {
+	return window.Start.ValueString() + "-" + window.End.ValueString()
 }
 
 func alertMinutesSinceMidnight(value types.String) (int, bool) {

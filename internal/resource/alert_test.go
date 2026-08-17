@@ -138,6 +138,7 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		tooShort  = "Blocked window is too short"
 		overlaps  = "Overlapping blocked windows"
 		crossesMN = "Blocked window crossing midnight must be the only window"
+		fullDay   = "Blocked windows cover the whole day"
 		meetsAtMN = "Blocked windows meeting at midnight are stored as one"
 	)
 
@@ -170,6 +171,10 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		// The meets-at-midnight check tests both orientations of the pair. Terraform does
 		// not promise set elements reach ElementsAs in config order, so the reversed form
 		// is the one that fires roughly half the time in practice.
+		// Blocking every minute leaves the alert no time to run. Reported directly rather
+		// than as an overlap, whose advice to combine the windows would produce a
+		// zero-length window that fails again for an unrelated reason.
+		"windows covering the whole day":             {windows: [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}}, wantSummary: fullDay},
 		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummary: meetsAtMN},
 		"midnight pair with two others":              {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
 	}
