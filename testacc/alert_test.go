@@ -567,7 +567,7 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
       { start = "01:00", end = "03:00" },
       { start = "02:00", end = "04:00" },
 `,
-			wantError: regexp.MustCompile(`Overlapping blocked windows`),
+			wantError: regexp.MustCompile(`Quiet-hours windows overlap`),
 		},
 		"crossing midnight alongside another": {
 			windows: `
