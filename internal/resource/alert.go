@@ -3,8 +3,6 @@ package resource
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -68,38 +66,22 @@ var alertScheduleRestrictionAttrTypes = map[string]attr.Type{
 	"blocked_windows": types.SetType{ElemType: alertBlockedWindowObjectType},
 }
 
-// alertTimeOfDayPattern is the one definition of the HH:MM grammar. The attribute
-// validator and the set validator both check against it, so the two layers cannot come to
-// different conclusions about what a valid time is.
-var alertTimeOfDayPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
-
 var alertTimeOfDayValidator = stringvalidator.RegexMatches(
-	alertTimeOfDayPattern,
+	core.QuietHoursTimePattern,
 	"must be a 24-hour time in HH:MM format",
 )
 
-const (
-	alertMinutesPerDay = 24 * 60
-	// The quiet-hour limits PostHog enforces, shared by the validator, its error text and
-	// the schema description so the three cannot drift.
-	alertMinBlockedWindowMinutes = 30
-	alertMaxBlockedWindows       = 5
-)
-
-// blockedWindowsValidator enforces the quiet-hour rules PostHog applies server-side, so a
-// bad config fails during plan. PostHog does not store the windows it is given: it lays
-// them on a single 24-hour timeline, merges, and re-derives windows from the result. A
-// config it would reshape comes back different from the planned one, so the apply fails
-// with an inconsistent-result error instead of showing as drift.
+// blockedWindowsValidator adapts this resource's nested window shape onto the shared
+// quiet-hours rules. The rules themselves live in core because posthog_logs_alert exposes
+// the same windows under a different attribute and must reject exactly the same shapes.
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
 	return fmt.Sprintf(
-		"blocked windows must not overlap or touch, must each span at least %d minutes, and "+
-			"must not be reshaped by PostHog: a window crossing midnight has to be the only one, "+
-			"two windows meeting at midnight are only allowed alongside a third, and they may "+
-			"not cover the whole day",
-		alertMinBlockedWindowMinutes,
+		"blocked windows must not overlap or touch, must each span at least %d minutes, and must not be "+
+			"reshaped by PostHog: a window crossing midnight has to be the only one, two windows meeting at "+
+			"midnight are only allowed alongside a third, and they may not cover the whole day",
+		core.MinQuietHoursWindowMinutes,
 	)
 }
 
@@ -112,181 +94,42 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	var windows []AlertBlockedWindowModel
-	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &windows, false)...)
-	if resp.Diagnostics.HasError() {
+	windows, ok := alertQuietHoursWindows(ctx, req.ConfigValue, resp)
+	if !ok {
 		return
 	}
-
-	// window indexes back into windows, so a span always knows which configured window it
-	// came from. Two spans of the same window are the two halves of one midnight crossing,
-	// not a conflict.
-	type interval struct {
-		window     int
-		start, end int
-	}
-
-	var spans []interval
-	windowCount := 0
-	wrappingWindows := 0
-	for i, window := range windows {
-		start, startOK := alertMinutesSinceMidnight(window.Start)
-		end, endOK := alertMinutesSinceMidnight(window.End)
-		// Malformed times are the format validator's problem.
-		if !startOK || !endOK {
-			continue
-		}
-		// Equal bounds fall through to the length check below, which reports 0 minutes and
-		// names the window. The API rejects them too, but flattens every window error to a
-		// single "Invalid schedule restriction" that says nothing about which one.
-		length := end - start
-		if length < 0 {
-			length += alertMinutesPerDay
-		}
-		if length < alertMinBlockedWindowMinutes {
-			resp.Diagnostics.AddAttributeError(
-				req.Path,
-				"Blocked window is too short",
-				fmt.Sprintf(
-					"Window %s spans %d minutes. PostHog requires each blocked window to span at least %d "+
-						"minutes. PostHog can produce such a window itself when it splits an overnight window "+
-						"at midnight, so an imported alert may carry one it will not accept back. Widen or drop "+
-						"it: the alert cannot be applied as stored.",
-					alertWindowLabel(window), length, alertMinBlockedWindowMinutes,
-				),
-			)
-			continue
-		}
-		windowCount++
-		switch {
-		case end > start:
-			spans = append(spans, interval{i, start, end})
-		case end == 0:
-			// Runs to the end of the day without wrapping into the next morning, so it
-			// needs no second half. An empty [0, 0) half would collide with every window
-			// starting at midnight in the check below.
-			spans = append(spans, interval{i, start, alertMinutesPerDay})
-		default:
-			// Wraps midnight, as the overnight 22:00-07:00 preset does.
-			wrappingWindows++
-			spans = append(spans, interval{i, start, alertMinutesPerDay}, interval{i, 0, end})
-		}
-	}
-
-	// Blocking the whole day leaves the alert no time to run, and PostHog rejects it
-	// outright. Checked before the overlap loop because such a config always overlaps too,
-	// and "combine them into a single window" is the wrong advice here: doing so produces
-	// a zero-length window that fails again for an unrelated reason.
-	blocked := 0
-	var covered [alertMinutesPerDay]bool
-	for _, span := range spans {
-		for m := span.start; m < span.end && m < alertMinutesPerDay; m++ {
-			if !covered[m] {
-				covered[m] = true
-				blocked++
-			}
-		}
-	}
-	if blocked >= alertMinutesPerDay {
-		resp.Diagnostics.AddAttributeError(
-			req.Path,
-			"Blocked windows cover the whole day",
-			"These windows block every minute of the day, so the alert could never run. PostHog rejects this. "+
-				"Leave at least one gap when the alert is allowed to be evaluated.",
-		)
-		return
-	}
-
-	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
-	// prev.end`, so 00:00-06:00 and 06:00-09:00 are saved as a single 00:00-09:00 window.
-	for i := range spans {
-		for j := i + 1; j < len(spans); j++ {
-			// The two halves of one wrapped window cannot conflict: the first always ends at
-			// midnight and the second always starts there. Kept so a future change to how
-			// spans are built cannot turn a lone wrapped window into a self-overlap.
-			if spans[i].window == spans[j].window {
-				continue
-			}
-			if spans[i].start <= spans[j].end && spans[j].start <= spans[i].end {
-				resp.Diagnostics.AddAttributeError(
-					req.Path,
-					"Overlapping blocked windows",
-					fmt.Sprintf(
-						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a single window when saving, so the alert would not match this configuration. Combine them into a single window.",
-						alertWindowLabel(windows[spans[i].window]), alertWindowLabel(windows[spans[j].window]),
-					),
-				)
-			}
-		}
-	}
-
-	// A window written as crossing midnight always expands to two spans, and PostHog only
-	// rejoins them when nothing else is on the timeline. Alongside any other window it
-	// stays split, so the alert reads back with one more window than was configured.
-	if wrappingWindows > 0 && windowCount > 1 {
-		resp.Diagnostics.AddAttributeError(
-			req.Path,
-			"Blocked window crossing midnight must be the only window",
-			fmt.Sprintf(
-				"A window whose end is before its start crosses midnight, and PostHog stores it as one window "+
-					"per side of midnight unless it is the only window configured. Either make it the only "+
-					"window, or split it yourself into a window ending at 00:00 and one starting at 00:00. "+
-					"Splitting costs a window slot, so it needs you to be under the limit of %d.",
-				alertMaxBlockedWindows,
-			),
-		)
-		return
-	}
-
-	// Two windows that between them block both sides of midnight get rejoined into a single
-	// crossing window, but only while they are the whole timeline. A third window anywhere
-	// in the day leaves all of them stored as written.
-	//
-	// This is the one rule a dropped window can make wrong rather than merely incomplete:
-	// it keys off there being exactly two spans, which a window dropped as malformed or
-	// too short can fabricate. The rules above only ever miss a problem on a partial
-	// timeline, never invent one, so they still run.
-	if windowCount != len(windows) {
-		return
-	}
-	if len(spans) == 2 && spans[0].window != spans[1].window &&
-		((spans[0].start == 0 && spans[1].end == alertMinutesPerDay) ||
-			(spans[1].start == 0 && spans[0].end == alertMinutesPerDay)) {
-		resp.Diagnostics.AddAttributeError(
-			req.Path,
-			"Blocked windows meeting at midnight are stored as one",
-			fmt.Sprintf(
-				"Windows %s and %s together block midnight from both sides, and PostHog rejoins them into a "+
-					"single crossing window when they are the only two, so the alert would not match this "+
-					"configuration. Write them as one window crossing midnight, add a third window elsewhere in "+
-					"the day, or end the evening window at 23:59.",
-				alertWindowLabel(windows[spans[0].window]), alertWindowLabel(windows[spans[1].window]),
-			),
-		)
-	}
+	resp.Diagnostics.Append(core.ValidateQuietHoursWindows(windows, req.Path)...)
 }
 
-// alertWindowLabel renders a window the way the diagnostics name it.
-func alertWindowLabel(window AlertBlockedWindowModel) string {
-	return window.Start.ValueString() + "-" + window.End.ValueString()
-}
-
-// alertMinutesSinceMidnight converts an HH:MM string to minutes past midnight. The
-// attribute validator does not gate this one, so it checks the same pattern itself rather
-// than trusting that a value reaching it was already rejected. time.Parse alone is not
-// enough: it accepts a single-digit hour that the pattern does not.
-func alertMinutesSinceMidnight(value types.String) (int, bool) {
-	if value.IsNull() || value.IsUnknown() {
-		return 0, false
+// alertQuietHoursWindows converts the configured set into the shared window type. Elements
+// that are null or unknown are skipped rather than converted: ElementsAs reflects into a
+// plain struct, which cannot represent either, and would fail the plan with the framework's
+// "report this to the provider developer" error for what is a configuration shape.
+func alertQuietHoursWindows(ctx context.Context, set types.Set, resp *validator.SetResponse) ([]core.QuietHoursWindow, bool) {
+	var windows []core.QuietHoursWindow
+	for _, element := range set.Elements() {
+		if element.IsNull() || element.IsUnknown() {
+			continue
+		}
+		object, isObject := element.(types.Object)
+		if !isObject {
+			continue
+		}
+		var window AlertBlockedWindowModel
+		diags := object.As(ctx, &window, basetypes.ObjectAsOptions{})
+		if diags.HasError() {
+			resp.Diagnostics.Append(diags...)
+			return nil, false
+		}
+		if window.Start.IsNull() || window.Start.IsUnknown() || window.End.IsNull() || window.End.IsUnknown() {
+			continue
+		}
+		windows = append(windows, core.QuietHoursWindow{
+			Start: window.Start.ValueString(),
+			End:   window.End.ValueString(),
+		})
 	}
-	if !alertTimeOfDayPattern.MatchString(value.ValueString()) {
-		return 0, false
-	}
-	parsed, err := time.Parse("15:04", value.ValueString())
-	if err != nil {
-		return 0, false
-	}
-	return parsed.Hour()*60 + parsed.Minute(), true
+	return windows, true
 }
 
 type AlertOps struct{}
@@ -395,14 +238,14 @@ func (o AlertOps) Schema() schema.Schema {
 								"window, and two windows meeting at midnight are only allowed alongside a third. "+
 								"The windows may not cover the whole day, since the alert would never run. "+
 								"Between 1 and %d windows; remove `schedule_restriction` to disable quiet hours.",
-							alertMinBlockedWindowMinutes, alertMaxBlockedWindows,
+							core.MinQuietHoursWindowMinutes, core.MaxQuietHoursWindows,
 						),
 						Validators: []validator.Set{
 							// An empty set is not the same as no quiet hours: PostHog
 							// normalizes it to null, which would not match the configured
 							// (non-null) block and would fail the apply.
 							setvalidator.SizeAtLeast(1),
-							setvalidator.SizeAtMost(alertMaxBlockedWindows),
+							setvalidator.SizeAtMost(core.MaxQuietHoursWindows),
 							blockedWindowsValidator{},
 						},
 						NestedObject: schema.NestedAttributeObject{

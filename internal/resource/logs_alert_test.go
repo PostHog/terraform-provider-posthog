@@ -2,10 +2,10 @@ package resource
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -448,170 +448,44 @@ func TestValidateLogsAlertPlan(t *testing.T) {
 	}
 }
 
+// The rule matrix lives in core.TestValidateQuietHoursWindows now that posthog_alert
+// shares it. What only this layer can show is that the adapter reaches those rules from
+// this resource's flat shape, and how it handles element shapes core never sees.
 func TestValidateBlockedWindows(t *testing.T) {
-	tests := []struct {
-		name      string
-		windows   []BlockedWindowTFModel
-		expectErr string
-	}{
-		{
-			name:    "single valid window",
-			windows: []BlockedWindowTFModel{window("22:00", "23:00")},
-		},
-		{
-			name:    "window crossing midnight",
-			windows: []BlockedWindowTFModel{window("22:00", "06:00")},
-		},
-		{
-			name: "two non-overlapping windows",
-			windows: []BlockedWindowTFModel{
-				window("01:00", "02:00"),
-				window("03:00", "04:00"),
-			},
-		},
-		{
-			name:      "window shorter than 30 minutes",
-			windows:   []BlockedWindowTFModel{window("22:00", "22:15")},
-			expectErr: "too short",
-		},
-		{
-			// Must not report "spans 1440 minutes" — the midnight-wrap correction would
-			// otherwise turn a zero-length window into a full day.
-			name:      "zero-length window",
-			windows:   []BlockedWindowTFModel{window("22:00", "22:00")},
-			expectErr: "covers no time",
-		},
-		{
-			name:    "exactly 30 minutes is allowed",
-			windows: []BlockedWindowTFModel{window("01:00", "01:30")},
-		},
-		{
-			name:      "29 minutes is rejected",
-			windows:   []BlockedWindowTFModel{window("01:00", "01:29")},
-			expectErr: "too short",
-		},
-		{
-			name:    "30-minute window spanning midnight",
-			windows: []BlockedWindowTFModel{window("23:45", "00:15")},
-		},
-		// PostHog merges on `next.start <= prev.end`, so windows that merely touch are
-		// stored as one. Verified against validate_and_normalize_schedule_restriction:
-		// 01:00-02:00 plus 02:00-03:00 is saved as a single 01:00-03:00 window.
-		{
-			name: "adjacent windows are merged, so they conflict",
-			windows: []BlockedWindowTFModel{
-				window("01:00", "02:00"),
-				window("02:00", "03:00"),
-			},
-			expectErr: "overlap",
-		},
-		{
-			name: "two windows with a gap between them",
-			windows: []BlockedWindowTFModel{
-				window("01:00", "05:00"),
-				window("12:00", "13:00"),
-			},
-		},
-		// A window crossing midnight is re-encoded as one wrapping window only when it is
-		// the whole configuration. Alongside another window PostHog stores it as two, so
-		// 22:00-07:00 plus 12:00-13:00 reads back as three windows.
-		{
-			name: "wrapping window alone is fine",
-			windows: []BlockedWindowTFModel{
-				window("22:00", "07:00"),
-			},
-		},
-		{
-			name: "wrapping window alongside another window",
-			windows: []BlockedWindowTFModel{
-				window("22:00", "07:00"),
-				window("12:00", "13:00"),
-			},
-			expectErr: "must be the only window",
-		},
-		// Blocking both sides of midnight with two separate windows is the same shape:
-		// PostHog recombines them into a single 22:00-06:00 window.
-		{
-			name: "window starting at midnight plus one ending at midnight",
-			windows: []BlockedWindowTFModel{
-				window("00:00", "06:00"),
-				window("22:00", "00:00"),
-			},
-			expectErr: "meeting at midnight",
-		},
-		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
-		// window anywhere in the day leaves all of them stored exactly as written.
-		{
-			name: "midnight pair with a third window",
-			windows: []BlockedWindowTFModel{
-				window("22:00", "00:00"),
-				window("00:00", "07:00"),
-				window("12:00", "13:00"),
-			},
-		},
-		{
-			name: "midnight pair with two other windows",
-			windows: []BlockedWindowTFModel{
-				window("00:00", "06:00"),
-				window("08:00", "09:00"),
-				window("12:00", "13:00"),
-				window("19:00", "00:00"),
-			},
-		},
-		// Ending at 23:59 stops short of midnight, so nothing is recombined.
-		{
-			name: "window starting at midnight plus one ending at 23:59",
-			windows: []BlockedWindowTFModel{
-				window("00:00", "06:00"),
-				window("22:00", "23:59"),
-			},
-		},
-		// A window ending exactly at midnight does not wrap into the next morning, so it
-		// coexists with a daytime window.
-		{
-			name: "window ending at midnight plus a daytime window",
-			windows: []BlockedWindowTFModel{
-				window("19:00", "00:00"),
-				window("12:00", "13:00"),
-			},
-		},
-		{
-			name: "two wrapping windows that overlap",
-			windows: []BlockedWindowTFModel{
-				window("22:00", "02:00"),
-				window("23:00", "03:00"),
-			},
-			expectErr: "overlap",
-		},
-		{
-			name: "overlapping windows",
-			windows: []BlockedWindowTFModel{
-				window("01:00", "03:00"),
-				window("02:00", "04:00"),
-			},
-			expectErr: "overlap",
-		},
-		{
-			name: "overlap only after midnight wrap",
-			windows: []BlockedWindowTFModel{
-				window("22:00", "06:00"),
-				window("05:00", "07:00"),
-			},
-			expectErr: "overlap",
-		},
-	}
+	t.Run("reaches the shared rules", func(t *testing.T) {
+		diags := validateBlockedWindows(context.Background(),
+			blockedWindowSet(t, window("01:00", "02:00"), window("02:00", "03:00")))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			diags := validateBlockedWindows(context.Background(), blockedWindowSet(t, tt.windows...))
-			if tt.expectErr == "" {
-				assert.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
-				return
-			}
-			require.True(t, diags.HasError(), "expected a diagnostic")
-			assert.Contains(t, strings.ToLower(diags.Errors()[0].Summary()), tt.expectErr)
+		require.True(t, diags.HasError(), "touching windows must be rejected")
+		assert.Equal(t, "Quiet-hours windows overlap", diags.Errors()[0].Summary())
+	})
+
+	t.Run("valid windows produce nothing", func(t *testing.T) {
+		diags := validateBlockedWindows(context.Background(),
+			blockedWindowSet(t, window("01:00", "05:00"), window("12:00", "13:00")))
+		assert.False(t, diags.HasError(), "%v", diags)
+	})
+
+	// A null or unknown value cannot be reflected into a plain struct, so converting one
+	// would fail the plan with the framework's "report this to the provider developer"
+	// error for what is a configuration shape.
+	t.Run("null and unknown sets are left alone", func(t *testing.T) {
+		assert.False(t, validateBlockedWindows(context.Background(), types.SetNull(blockedWindowObjectType())).HasError())
+		assert.False(t, validateBlockedWindows(context.Background(), types.SetUnknown(blockedWindowObjectType())).HasError())
+	})
+
+	t.Run("an unknown element is skipped, not reported as a provider bug", func(t *testing.T) {
+		set, diags := types.SetValue(blockedWindowObjectType(), []attr.Value{
+			types.ObjectValueMust(blockedWindowAttrTypes, map[string]attr.Value{
+				"start": types.StringValue("01:00"),
+				"end":   types.StringValue("05:00"),
+			}),
+			types.ObjectUnknown(blockedWindowAttrTypes),
 		})
-	}
+		require.False(t, diags.HasError(), "%v", diags)
+
+		assert.False(t, validateBlockedWindows(context.Background(), set).HasError())
+	})
 }
 
 // A null set means quiet hours are off, which is always valid.
@@ -642,25 +516,6 @@ func TestNonEmptyJSONObjectValidator(t *testing.T) {
 			}, resp)
 			assert.Equal(t, tt.expectErr, resp.Diagnostics.HasError(), "diags: %v", resp.Diagnostics)
 		})
-	}
-}
-
-func TestParseHHMM(t *testing.T) {
-	for _, tt := range []struct {
-		in   string
-		want int
-		ok   bool
-	}{
-		{"00:00", 0, true},
-		{"06:30", 390, true},
-		{"23:59", 1439, true},
-		{"nope", 0, false},
-	} {
-		got, ok := parseHHMM(tt.in)
-		assert.Equal(t, tt.ok, ok, "input %q", tt.in)
-		if tt.ok {
-			assert.Equal(t, tt.want, got, "input %q", tt.in)
-		}
 	}
 }
 
