@@ -794,9 +794,9 @@ resource "posthog_logs_alert" "test" {
 }
 
 // TestLogsAlert_ServerEnforcedWindowLimits pins the rules the provider deliberately does
-// NOT duplicate. Window length and count are PostHog's constants, so these configs must
-// reach the API and be rejected by it. Unlike the insight-alert endpoint, this one reports
-// which rule was broken, which is what makes delegating cheap here.
+// not repeat. Window length and count are PostHog's own limits, so these configs reach the
+// API and are rejected there. If PostHog ever stops rejecting them, this test fails and
+// says so, rather than the assumption going stale unnoticed.
 func TestLogsAlert_ServerEnforcedWindowLimits(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -808,7 +808,8 @@ func TestLogsAlert_ServerEnforcedWindowLimits(t *testing.T) {
 		wantError *regexp.Regexp
 	}{
 		"window shorter than PostHog allows": {
-			windows:   `{ start = "02:00", end = "02:15" },`,
+			windows: `{ start = "02:00", end = "02:15" },`,
+			// Terraform hard-wraps the response body, so stop before the break.
 			wantError: regexp.MustCompile(`must span at least 30 minutes`),
 		},
 		"more windows than PostHog stores": {
@@ -816,7 +817,6 @@ func TestLogsAlert_ServerEnforcedWindowLimits(t *testing.T) {
     { start = "00:00", end = "01:00" }, { start = "02:00", end = "03:00" },
     { start = "04:00", end = "05:00" }, { start = "06:00", end = "07:00" },
     { start = "08:00", end = "09:00" }, { start = "10:00", end = "11:00" },`,
-			// Terraform hard-wraps the body, so stop before the break.
 			wantError: regexp.MustCompile(`At most 5 blocked`),
 		},
 	}

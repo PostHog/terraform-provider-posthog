@@ -51,3 +51,34 @@ resource "posthog_logs_alert" "draft" {
   name    = "Work in progress"
   enabled = false
 }
+
+# An alert on its own evaluates but notifies nobody. Delivery is a separate hog
+# function subscribed to the internal event PostHog emits when the alert fires,
+# filtered to this alert's id so no other alert triggers it. This is the same
+# chain insight alerts use; see examples/alert-notifications/ for Slack and
+# webhook variants side by side.
+resource "posthog_hog_function" "checkout_errors_slack" {
+  name        = "Checkout API errors -> Slack"
+  type        = "internal_destination"
+  enabled     = true
+  template_id = "template-slack"
+
+  filters_json = jsonencode({
+    events = [{
+      id   = "$logs_alert_firing"
+      type = "events"
+    }]
+    properties = [{
+      key      = "alert_id"
+      value    = posthog_logs_alert.checkout_errors.id
+      operator = "exact"
+      type     = "event"
+    }]
+  })
+
+  inputs_json = jsonencode({
+    slack_workspace = { value = 1 }
+    channel         = { value = "#alerts" }
+    text            = { value = "Log alert firing: {event.properties.alert_name}" }
+  })
+}

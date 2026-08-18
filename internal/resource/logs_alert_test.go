@@ -467,15 +467,14 @@ func TestValidateBlockedWindows(t *testing.T) {
 		assert.False(t, diags.HasError(), "%v", diags)
 	})
 
-	// A null or unknown value cannot be reflected into a plain struct, so converting one
-	// would fail the plan with the framework's "report this to the provider developer"
-	// error for what is a configuration shape.
 	t.Run("null and unknown sets are left alone", func(t *testing.T) {
 		assert.False(t, validateBlockedWindows(context.Background(), types.SetNull(blockedWindowObjectType())).HasError())
 		assert.False(t, validateBlockedWindows(context.Background(), types.SetUnknown(blockedWindowObjectType())).HasError())
 	})
 
-	t.Run("an unknown element is skipped, not reported as a provider bug", func(t *testing.T) {
+	// A null or unknown element cannot be reflected into a plain struct, so converting one
+	// would fail the plan with the framework's report-this-to-the-developer error.
+	t.Run("an unknown element is skipped", func(t *testing.T) {
 		set, diags := types.SetValue(blockedWindowObjectType(), []attr.Value{
 			types.ObjectValueMust(blockedWindowAttrTypes, map[string]attr.Value{
 				"start": types.StringValue("01:00"),
