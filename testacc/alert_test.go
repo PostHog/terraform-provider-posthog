@@ -596,8 +596,8 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 		},
 		// Terraform hard-wraps diagnostics, so these patterns stop before the line break
 		// that falls between the count and "elements".
-		// Not a PostHog limit: an empty list normalises to a null restriction, so the
-		// alert would read back different from the configured block.
+		// Not a PostHog limit: an empty list normalises to a null restriction, so the alert
+		// would read back different from the configured block.
 		"empty list": {
 			windows:   ``,
 			wantError: regexp.MustCompile(`set must contain at least 1`),
@@ -903,6 +903,9 @@ func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
 // mean a provider release whenever PostHog changes one. These configs must therefore reach
 // the API and be rejected by it. If PostHog ever stops rejecting them, this fails and tells
 // us the delegation assumption has moved.
+//
+// Whole-day coverage is deliberately absent: covering 1440 minutes requires windows that
+// touch, so the reshape rules reject it at plan time and it never reaches the API.
 func TestAlert_ServerEnforcedWindowLimits(t *testing.T) {
 	skipIfNotAcceptance(t)
 
