@@ -86,6 +86,7 @@ func TestAlert_AllFields(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_alert.test", "condition_type", "absolute_value"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "check_ongoing_interval", "true"),
 					resource.TestCheckResourceAttr("posthog_alert.test", "calculation_interval", "daily"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
 					resource.TestCheckResourceAttrSet("posthog_alert.test", "id"),
 				),
 			},
@@ -411,6 +412,587 @@ func TestAlert_RejectsNegativeSeriesIndex(t *testing.T) {
 	})
 }
 
+// TestAlert_ScheduleRestrictionLifecycle walks quiet hours through add, change, remove and
+// re-add. Step 3 carries the weight: removing the block sends an explicit null, and this
+// checks PostHog really cleared it.
+func TestAlert_ScheduleRestrictionLifecycle(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			// Create with a single window.
+			{
+				Config: testAccAlertWithBlockedWindows(rName, `
+      { start = "22:00", end = "23:59" },
+`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "22:00",
+						"end":   "23:59",
+					}),
+				),
+			},
+			// Add a second window and move the first.
+			{
+				Config: testAccAlertWithBlockedWindows(rName, `
+      { start = "21:00", end = "23:59" },
+      { start = "00:00", end = "06:00" },
+`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "2"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "21:00",
+						"end":   "23:59",
+					}),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "00:00",
+						"end":   "06:00",
+					}),
+				),
+			},
+			// Remove the block. Quiet hours must be gone server-side, not just in state.
+			{
+				Config: testAccAlertBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#"),
+					testAccCheckAlertQuietHoursCleared("posthog_alert.test"),
+				),
+			},
+			// Add it back, to show clearing did not leave the alert unable to take one.
+			{
+				Config: testAccAlertWithBlockedWindows(rName, `
+      { start = "01:00", end = "05:00" },
+`),
+				Check: resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+		},
+	})
+}
+
+// TestAlert_ScheduleRestrictionWrapsMidnight covers the overnight window the PostHog UI
+// offers as a preset. An end before the start is legal, so the provider must not rewrite
+// or reject it.
+func TestAlert_ScheduleRestrictionWrapsMidnight(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAlertWithBlockedWindows(rName, `
+      { start = "22:00", end = "07:00" },
+`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "22:00",
+						"end":   "07:00",
+					}),
+				),
+			},
+			// A second plan must be empty, showing the crossing window round-trips
+			// unchanged. Ordering is covered by the five-window replan in
+			// BlockedWindowsAcceptedBoundaries, since one window has no order to get
+			// wrong.
+			{
+				Config: testAccAlertWithBlockedWindows(rName, `
+      { start = "22:00", end = "07:00" },
+`),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestAlert_ScheduleRestrictionImport verifies an alert with quiet hours round-trips
+// through import, so an alert created in the PostHog UI can be adopted into Terraform.
+func TestAlert_ScheduleRestrictionImport(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	config := testAccAlertWithBlockedWindows(rName, `
+      { start = "02:00", end = "04:00" },
+`)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.TestCheckResourceAttr(
+					"posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+			{
+				Config:                  config,
+				ResourceName:            "posthog_alert.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"subscribed_users"},
+			},
+		},
+	})
+}
+
+// TestAlert_RejectsInvalidBlockedWindows checks the plan-time rejections the unit table
+// cannot reach, plus one representative rule.
+//
+// The rule matrix lives in TestBlockedWindowsValidator and runs without an instance.
+// Repeating it here would cost a full plan per rule for the same result. What only this
+// layer shows is that the validators are wired at the right schema path. The two midnight
+// rows are kept on purpose, because those rules were wrong once.
+func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	tests := map[string]struct {
+		windows   string
+		wantError *regexp.Regexp
+	}{
+		"overlapping": {
+			windows: `
+      { start = "01:00", end = "03:00" },
+      { start = "02:00", end = "04:00" },
+`,
+			wantError: regexp.MustCompile(`Overlapping blocked windows`),
+		},
+		"crossing midnight alongside another": {
+			windows: `
+      { start = "22:00", end = "07:00" },
+      { start = "12:00", end = "13:00" },
+`,
+			wantError: regexp.MustCompile(`must be the only window`),
+		},
+		"meeting at midnight": {
+			windows: `
+      { start = "00:00", end = "06:00" },
+      { start = "22:00", end = "00:00" },
+`,
+			wantError: regexp.MustCompile(`meeting at midnight`),
+		},
+		"time that does not exist": {
+			windows: "\n      { start = \"24:00\", end = \"06:00\" },\n",
+			// Terraform wraps diagnostics mid-sentence, so match a fragment that cannot
+			// span the break.
+			wantError: regexp.MustCompile(`24-hour time in HH:MM format`),
+		},
+		// Terraform wraps diagnostics, so these patterns stop before the break between the
+		// count and "elements".
+		// Not a PostHog limit. An empty list becomes a null restriction, so the alert would
+		// read back different from the configured block.
+		"empty list": {
+			windows:   ``,
+			wantError: regexp.MustCompile(`set must contain at least 1`),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{
+					{
+						Config:      testAccAlertWithBlockedWindows(rName, test.windows),
+						PlanOnly:    true,
+						ExpectError: test.wantError,
+					},
+				},
+			})
+		})
+	}
+}
+
+// TestAlert_BlockedWindowsAcceptedBoundaries applies the shapes the validator permits but
+// that were only ever checked against PostHog's normalizer. If either call is wrong, every
+// apply fails instead of the plan.
+func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	fiveWindows := `
+      { start = "00:00", end = "01:00" },
+      { start = "02:00", end = "03:00" },
+      { start = "04:00", end = "05:00" },
+      { start = "06:00", end = "07:00" },
+      { start = "08:00", end = "09:00" },
+`
+	endsAtMidnight := `
+      { start = "19:00", end = "00:00" },
+      { start = "12:00", end = "13:00" },
+`
+	// The shortest window PostHog accepts. Only a live apply shows whether its floor is
+	// really 30 minutes.
+	exactlyThirtyMinutes := `
+      { start = "02:00", end = "02:30" },
+`
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAlertWithBlockedWindows(rName, fiveWindows),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "5"),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, fiveWindows),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccAlertWithBlockedWindows(rName, endsAtMidnight),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "2"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "19:00",
+						"end":   "00:00",
+					}),
+				),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, endsAtMidnight),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccAlertWithBlockedWindows(rName, exactlyThirtyMinutes),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+			{
+				Config:   testAccAlertWithBlockedWindows(rName, exactlyThirtyMinutes),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestAlert_UnrelatedUpdateKeepsQuietHours changes an unrelated attribute while quiet
+// hours are set. Update re-sends the whole request, so a regression would clear the windows
+// on an edit that has nothing to do with them.
+func TestAlert_UnrelatedUpdateKeepsQuietHours(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	withWindows := func(upper int) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.test.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = %d
+  condition_type   = "absolute_value"
+  series_index     = 0
+
+  schedule_restriction = {
+    blocked_windows = [
+      { start = "02:00", end = "04:00" },
+    ]
+  }
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(rName), rName, upper)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: withWindows(100),
+				Check:  resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+			},
+			{
+				Config: withWindows(250),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "threshold_upper", "250"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "02:00",
+						"end":   "04:00",
+					}),
+				),
+			},
+		},
+	})
+}
+
+// TestAlert_ScheduleRestrictionDrift edits quiet hours outside Terraform, as someone would
+// from the PostHog UI, and checks the change shows up as a plan. An empty window list maps
+// to null, so a clear on the server must read as drift rather than agreement.
+func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	client := httpclient.NewDefaultClient(
+		os.Getenv("POSTHOG_HOST"),
+		os.Getenv("POSTHOG_API_KEY"),
+		"acceptance-test",
+	)
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+
+	config := testAccAlertWithBlockedWindows(rName, `
+      { start = "02:00", end = "04:00" },
+`)
+
+	var alertID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					func(s *terraform.State) error {
+						rs, ok := s.RootModule().Resources["posthog_alert.test"]
+						if !ok {
+							return fmt.Errorf("resource not found: posthog_alert.test")
+						}
+						alertID = rs.Primary.ID
+						return nil
+					},
+				),
+			},
+			// Clear quiet hours behind Terraform's back.
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						// Explicit null is how quiet hours are cleared.
+						ScheduleRestriction: nil,
+					}); err != nil {
+						t.Fatalf("clearing quiet hours on %s: %v", alertID, err)
+					}
+				},
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Applying restores what the configuration asks for.
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#", "1"),
+					resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+						"start": "02:00",
+						"end":   "04:00",
+					}),
+				),
+			},
+			// Move the window rather than clearing it. This is the other drift shape: the
+			// server holds windows, just different ones, so it exercises the populated
+			// branch of the response mapper instead of the null one.
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						ScheduleRestriction: &httpclient.AlertScheduleRestriction{
+							BlockedWindows: []httpclient.AlertBlockedWindow{{Start: "03:00", End: "05:00"}},
+						},
+					}); err != nil {
+						t.Fatalf("moving quiet hours on %s: %v", alertID, err)
+					}
+				},
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: config,
+				Check: resource.TestCheckTypeSetElemNestedAttrs("posthog_alert.test", "schedule_restriction.blocked_windows.*", map[string]string{
+					"start": "02:00",
+					"end":   "04:00",
+				}),
+			},
+			// Drop quiet hours from the configuration, then have PostHog gain some out of
+			// band. This is the shape the CHANGELOG upgrade note describes: a config with
+			// no schedule_restriction against a server that has one. It is the only drift
+			// direction where the state field goes from null to populated on refresh.
+			{
+				Config: testAccAlertBasic(rName),
+				Check:  resource.TestCheckNoResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#"),
+			},
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						ScheduleRestriction: &httpclient.AlertScheduleRestriction{
+							BlockedWindows: []httpclient.AlertBlockedWindow{{Start: "08:00", End: "09:00"}},
+						},
+					}); err != nil {
+						t.Fatalf("adding quiet hours to %s out of band: %v", alertID, err)
+					}
+				},
+				Config:             testAccAlertBasic(rName),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Applying removes them again, which is what the upgrade note promises.
+			{
+				Config: testAccAlertBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#"),
+					testAccCheckAlertQuietHoursCleared("posthog_alert.test"),
+				),
+			},
+		},
+	})
+}
+
+// TestAlert_ServerEnforcedWindowLimits pins the rules the provider deliberately does NOT
+// duplicate. Window length and count are PostHog's constants, so repeating them here would
+// mean a provider release whenever PostHog changes one. These configs must therefore reach
+// the API and be rejected by it. If PostHog ever stops rejecting them, this fails and tells
+// us the delegation assumption has moved.
+//
+// Whole-day coverage is deliberately absent: covering 1440 minutes requires windows that
+// touch, so the reshape rules reject it at plan time and it never reaches the API.
+func TestAlert_ServerEnforcedWindowLimits(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	tests := map[string]string{
+		"window shorter than PostHog allows": `
+      { start = "02:00", end = "02:15" },
+`,
+		"more windows than PostHog stores": `
+      { start = "00:00", end = "01:00" },
+      { start = "02:00", end = "03:00" },
+      { start = "04:00", end = "05:00" },
+      { start = "06:00", end = "07:00" },
+      { start = "08:00", end = "09:00" },
+      { start = "10:00", end = "11:00" },
+`,
+	}
+
+	for name, windows := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				CheckDestroy:             testAccCheckAlertDestroy,
+				Steps: []resource.TestStep{
+					{
+						Config: testAccAlertWithBlockedWindows(rName, windows),
+						// This endpoint flattens every schedule error to one message, which
+						// is the cost of delegating rather than checking at plan time.
+						// Terraform hard-wraps the body, so match a fragment that cannot
+						// straddle the break.
+						ExpectError: regexp.MustCompile(`Invalid schedule`),
+					},
+				},
+			})
+		})
+	}
+}
+
+// testAccCheckAlertQuietHoursCleared asserts PostHog itself holds no blocked windows for
+// the alert. Checking only that Terraform dropped them from state would pass even if the
+// PATCH never reached the server.
+func testAccCheckAlertQuietHoursCleared(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+
+		client := httpclient.NewDefaultClient(
+			os.Getenv("POSTHOG_HOST"),
+			os.Getenv("POSTHOG_API_KEY"),
+			"test",
+		)
+
+		alert, _, err := client.GetAlert(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("reading alert %s: %w", rs.Primary.ID, err)
+		}
+		if alert.ScheduleRestriction != nil && len(alert.ScheduleRestriction.BlockedWindows) > 0 {
+			return fmt.Errorf("alert %s still has %d blocked window(s) server-side",
+				rs.Primary.ID, len(alert.ScheduleRestriction.BlockedWindows))
+		}
+
+		return nil
+	}
+}
+
+// testAccAlertWithBlockedWindows builds an alert whose quiet hours are the given HCL
+// object entries, so a test can vary the windows without restating the whole resource.
+func testAccAlertWithBlockedWindows(name, windows string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.test.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = 100
+  condition_type   = "absolute_value"
+  series_index     = 0
+
+  schedule_restriction = {
+    blocked_windows = [
+%s
+    ]
+  }
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(name), name, windows)
+}
+
 // Helper function to create the base insight that alerts monitor
 func testAccAlertInsightBase(name string) string {
 	return fmt.Sprintf(`
@@ -472,6 +1054,12 @@ resource "posthog_alert" "test" {
   check_ongoing_interval = true
   calculation_interval   = "daily"
   skip_weekend           = false
+
+  schedule_restriction = {
+    blocked_windows = [
+      { start = "22:00", end = "07:00" },
+    ]
+  }
 
   depends_on = [posthog_insight.test]
 }
