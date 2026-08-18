@@ -15,7 +15,7 @@ import (
 const (
 	testLogsAlertProjectID     = "123"
 	testLogsAlertID            = "019dbe94-cec8-781b-9470-4a970cd69ebf"
-	testLogsAlertDestinationsP = "/api/environments/123/logs/alerts/019dbe94-cec8-781b-9470-4a970cd69ebf/destinations/"
+	testLogsAlertDestinationsP = "/api/projects/123/logs/alerts/019dbe94-cec8-781b-9470-4a970cd69ebf/destinations/"
 )
 
 func TestListLogsAlertDestinations(t *testing.T) {

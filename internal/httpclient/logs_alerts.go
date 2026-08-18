@@ -113,11 +113,8 @@ type logsAlertDestinationDeleteRequest struct {
 	HogFunctionIDs []string `json:"hog_function_ids"`
 }
 
-// logsAlertDestinationsPath builds the destinations collection path for an alert. These
-// endpoints hang off the environments route, while the alert CRUD above reaches the same
-// viewset through the older /api/projects/ alias.
 func logsAlertDestinationsPath(projectID, alertID string) string {
-	return fmt.Sprintf("/api/environments/%s/logs/alerts/%s/destinations/", projectID, alertID)
+	return fmt.Sprintf("/api/projects/%s/logs/alerts/%s/destinations/", projectID, alertID)
 }
 
 // ListLogsAlertDestinations returns every destination group attached to an alert. The
