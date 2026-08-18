@@ -68,9 +68,8 @@ var alertScheduleRestrictionAttrTypes = map[string]attr.Type{
 	"blocked_windows": types.SetType{ElemType: alertBlockedWindowObjectType},
 }
 
-// alertTimeOfDayPattern is the one definition of the HH:MM grammar. The attribute
-// validator and the set validator both check against it, so the two layers cannot come to
-// different conclusions about what a valid time is.
+// alertTimeOfDayPattern is the only definition of the HH:MM grammar. Both validators check
+// against it, so they cannot disagree about what a valid time is.
 var alertTimeOfDayPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 var alertTimeOfDayValidator = stringvalidator.RegexMatches(
@@ -80,11 +79,9 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 
 const alertMinutesPerDay = 24 * 60
 
-// blockedWindowsValidator enforces the quiet-hour rules PostHog applies server-side, so a
-// bad config fails during plan. PostHog does not store the windows it is given: it lays
-// them on a single 24-hour timeline, merges, and re-derives windows from the result. A
-// config it would reshape comes back different from the planned one, so the apply fails
-// with an inconsistent-result error instead of showing as drift.
+// blockedWindowsValidator rejects windows PostHog would reshape. PostHog does not store
+// the windows it is given. It merges them onto one 24-hour timeline and derives new ones,
+// so a reshaped config reads back different from the plan and the apply fails.
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
@@ -108,9 +105,8 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	// window indexes back into windows, so a span always knows which configured window it
-	// came from. Two spans of the same window are the two halves of one midnight crossing,
-	// not a conflict.
+	// window points back at the configured window a span came from. Two spans sharing one
+	// window are the halves of a midnight crossing, not a conflict.
 	type interval struct {
 		window     int
 		start, end int
@@ -126,9 +122,8 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		if !startOK || !endOK {
 			continue
 		}
-		// Equal bounds block no time. PostHog rejects them, and treating them as a span
-		// here would read 00:00-00:00 as a whole-day block and produce reshape
-		// diagnostics for a window the API will refuse anyway.
+		// Equal bounds block no time. Skip them. Treating one as a span would read
+		// 00:00-00:00 as a whole day. PostHog rejects them on apply.
 		if start == end {
 			continue
 		}
@@ -137,9 +132,9 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		case end > start:
 			spans = append(spans, interval{i, start, end})
 		case end == 0:
-			// Runs to the end of the day without wrapping into the next morning, so it
-			// needs no second half. An empty [0, 0) half would collide with every window
-			// starting at midnight in the check below.
+			// Ends at the close of the day and does not continue into the next morning, so
+			// it needs no second half. An empty [0, 0) half would collide with every
+			// window starting at midnight.
 			spans = append(spans, interval{i, start, alertMinutesPerDay})
 		default:
 			// Wraps midnight, as the overnight 22:00-07:00 preset does.
@@ -148,13 +143,13 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		}
 	}
 
-	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
-	// prev.end`, so 00:00-06:00 and 06:00-09:00 are saved as a single 00:00-09:00 window.
+	// Touching counts as overlapping. PostHog merges on `next.start <= prev.end`, so
+	// 00:00-06:00 and 06:00-09:00 are stored as one 00:00-09:00 window.
 	for i := range spans {
 		for j := i + 1; j < len(spans); j++ {
-			// The two halves of one wrapped window cannot conflict: the first always ends at
-			// midnight and the second always starts there. Kept so a future change to how
-			// spans are built cannot turn a lone wrapped window into a self-overlap.
+			// The halves of one crossing window cannot conflict, since the first ends at
+			// midnight and the second starts there. Kept as a guard in case span building
+			// changes.
 			if spans[i].window == spans[j].window {
 				continue
 			}
@@ -171,9 +166,9 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		}
 	}
 
-	// A window written as crossing midnight always expands to two spans, and PostHog only
-	// rejoins them when nothing else is on the timeline. Alongside any other window it
-	// stays split, so the alert reads back with one more window than was configured.
+	// A window written as crossing midnight expands to two spans. PostHog rejoins them only
+	// when nothing else is on the timeline, so beside another window it stays split and the
+	// alert reads back with one window more than configured.
 	if wrappingWindows > 0 && windowCount > 1 {
 		resp.Diagnostics.AddAttributeError(
 			req.Path,
@@ -186,14 +181,13 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	// Two windows that between them block both sides of midnight get rejoined into a single
-	// crossing window, but only while they are the whole timeline. A third window anywhere
-	// in the day leaves all of them stored as written.
+	// Two windows blocking both sides of midnight are rejoined into one crossing window,
+	// but only while they are the whole timeline. A third window leaves all of them stored
+	// as written.
 	//
-	// This is the one rule a dropped window can make wrong rather than merely incomplete:
-	// it keys off there being exactly two spans, which a window dropped as malformed or
-	// too short can fabricate. The rules above only ever miss a problem on a partial
-	// timeline, never invent one, so they still run.
+	// This is the only rule a skipped window can make wrong rather than incomplete, because
+	// it keys off there being exactly two spans. The rules above can only miss a problem on
+	// a partial timeline, never invent one, so they still run.
 	if windowCount != len(windows) {
 		return
 	}
@@ -219,10 +213,9 @@ func alertWindowLabel(window AlertBlockedWindowModel) string {
 	return window.Start.ValueString() + "-" + window.End.ValueString()
 }
 
-// alertMinutesSinceMidnight converts an HH:MM string to minutes past midnight. The
-// attribute validator does not gate this one, so it checks the same pattern itself rather
-// than trusting that a value reaching it was already rejected. time.Parse alone is not
-// enough: it accepts a single-digit hour that the pattern does not.
+// alertMinutesSinceMidnight converts HH:MM to minutes past midnight. It checks the pattern
+// itself because the attribute validator runs separately and does not gate it. time.Parse
+// alone would accept a single-digit hour that the pattern rejects.
 func alertMinutesSinceMidnight(value types.String) (int, bool) {
 	if value.IsNull() || value.IsUnknown() {
 		return 0, false

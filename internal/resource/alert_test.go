@@ -61,8 +61,8 @@ func TestBuildCreateRequestScheduleRestriction(t *testing.T) {
 		}, req.ScheduleRestriction.BlockedWindows)
 	})
 
-	// A null restriction has to reach the API as an explicit null, otherwise removing the
-	// block from config would leave quiet hours in place on the PATCH.
+	// A null restriction must reach the API as an explicit null. Otherwise removing the
+	// block from config would leave quiet hours in place.
 	t.Run("absent restriction serializes as null", func(t *testing.T) {
 		model := alertModelWithWindows(t)
 		model.ScheduleRestriction = types.ObjectNull(alertScheduleRestrictionAttrTypes)
@@ -104,9 +104,8 @@ func TestMapResponseToModelScheduleRestriction(t *testing.T) {
 		}, windows)
 	})
 
-	// An empty window list means the same thing as no restriction. This is the branch the
-	// httpclient comment promises, and it is what stops a cleared restriction reading back
-	// as a populated object against a null config.
+	// An empty window list means the same as no restriction. Without this branch a cleared
+	// restriction would read back as a populated object against a null config.
 	t.Run("empty list is treated as absent", func(t *testing.T) {
 		model := alertModelWithWindows(t, [2]string{"00:00", "06:00"})
 		resp := httpclient.Alert{
@@ -140,9 +139,9 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		meetsAtMN = "Blocked windows meeting at midnight are stored as one"
 	)
 
-	// wantSummaries lists every diagnostic summary expected, in order; empty means the
-	// config is valid. Asserting the whole list rather than the first entry is what pins
-	// the validator reporting all problems in one plan instead of stopping at the first.
+	// wantSummaries lists every expected diagnostic summary, in order. Empty means the
+	// config is valid. Checking the whole list is what pins the validator reporting all
+	// problems in one plan rather than stopping at the first.
 	tests := map[string]struct {
 		windows       [][2]string
 		wantSummaries []string
@@ -152,48 +151,44 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		"lone wrapped window":                    {windows: [][2]string{{"22:00", "07:00"}}},
 		"window ending at midnight plus daytime": {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
 		"malformed times are ignored":            {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
-		// The HH:MM regex and this validator run independently, so anything the regex
-		// rejects can still reach here. A negative hour used to parse and index the
-		// coverage array out of range.
+		// The regex and this validator run separately, so a value the regex rejects still
+		// reaches here. A negative hour once parsed and read past the start of an array.
 		"negative hour is rejected, not parsed": {windows: [][2]string{{"-1:30", "06:00"}}},
 		"out-of-range time is rejected":         {windows: [][2]string{{"99:99", "06:00"}}},
 		"trailing junk is rejected":             {windows: [][2]string{{"12:30extra", "13:00"}}},
-		// time.Parse alone would read this as 09:30, which the pattern does not allow.
-		// Both layers have to agree on what a valid time is.
+		// time.Parse alone would read this as 09:30, which the pattern rejects. Both layers
+		// must agree on what a valid time is.
 		"single-digit hour is rejected": {windows: [][2]string{{"9:30", "13:00"}}},
-		// Window length and count are PostHog's to enforce; repeating them here would mean
-		// a provider release whenever it changes one. The API rejects these on apply.
+		// Window length and count are PostHog's to enforce. Repeating them here would mean
+		// a provider release whenever PostHog changes one. The API rejects these on apply.
 		"short window is left to the API":         {windows: [][2]string{{"02:00", "02:15"}}},
 		"wrapped short window is left to the API": {windows: [][2]string{{"23:50", "00:10"}}},
-		// Equal bounds block no time. Skipped rather than treated as a span, since
-		// 00:00-00:00 would otherwise read as a whole-day block.
+		// Equal bounds block no time. Skipped, because 00:00-00:00 would otherwise read as
+		// a whole day.
 		"equal bounds are skipped":                   {windows: [][2]string{{"02:00", "02:00"}}},
 		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
 		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
 		"touching windows are merged":                {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}, wantSummaries: []string{overlaps}},
 		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantSummaries: []string{overlaps}},
 		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantSummaries: []string{overlaps}},
-		// Both rules fire: the wrapped window overlaps the morning one, and it is not
-		// the only window. Asserting both is what pins the validator reporting every
-		// problem in one plan.
+		// Both rules fire. The crossing window overlaps the morning one, and it is not the
+		// only window. Checking both pins the report-everything behaviour.
 		"wrapped window overlaps morning":  {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantSummaries: []string{overlaps, crossesMN}},
 		"wrapped window plus daytime":      {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}, wantSummaries: []string{crossesMN}},
 		"midnight blocked from both sides": {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "00:00"}}, wantSummaries: []string{meetsAtMN}},
-		// PostHog only rejoins a midnight pair while it is the whole timeline. A third
-		// window anywhere in the day leaves all three stored exactly as written.
+		// PostHog rejoins a midnight pair only while it is the whole timeline. A third
+		// window leaves all three stored as written.
 		"midnight pair with a third window": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "07:00"}, {"12:00", "13:00"}}},
-		// A whole-day block necessarily touches, so the reshape rules still stop it
-		// reaching the API in a form PostHog would silently rewrite.
+		// A whole-day block always touches, so the overlap rule still stops it.
 		"windows covering the whole day": {
 			windows:       [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}},
 			wantSummaries: []string{overlaps, meetsAtMN},
 		},
-		// The meets-at-midnight check tests both orientations of the pair. Terraform does
-		// not promise set elements reach ElementsAs in config order, so the reversed form
-		// is the one that fires roughly half the time in practice.
+		// Both orientations of the pair are checked. Terraform does not promise set
+		// elements arrive in config order, so either can be the one that fires.
 		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummaries: []string{meetsAtMN}},
-		// Short windows now take part in the timeline like any other, so they overlap
-		// their neighbours normally instead of being skipped and leaving a partial picture.
+		// Short windows now join the timeline like any other, so they overlap their
+		// neighbours normally instead of being skipped.
 		"short window overlaps its neighbour": {
 			windows:       [][2]string{{"02:00", "02:10"}, {"00:00", "06:00"}, {"22:00", "00:00"}},
 			wantSummaries: []string{overlaps},
