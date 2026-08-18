@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -132,93 +134,69 @@ func TestMapResponseToModelScheduleRestriction(t *testing.T) {
 	})
 }
 
+// The rule matrix lives in core.TestValidateQuietHoursWindows now that posthog_logs_alert
+// shares it. What only this layer shows is that the adapter reaches those rules from this
+// resource's nested shape, and how it handles element shapes core never sees.
 func TestBlockedWindowsValidator(t *testing.T) {
-	const (
-		overlaps  = "Overlapping blocked windows"
-		crossesMN = "Blocked window crossing midnight must be the only window"
-		meetsAtMN = "Blocked windows meeting at midnight are stored as one"
-	)
+	t.Run("reaches the shared rules", func(t *testing.T) {
+		req := validator.SetRequest{
+			Path:        path.Root("schedule_restriction").AtName("blocked_windows"),
+			ConfigValue: blockedWindowsSet(t, [2]string{"00:00", "06:00"}, [2]string{"06:00", "09:00"}),
+		}
+		resp := &validator.SetResponse{}
 
-	// wantSummaries lists every expected diagnostic summary, in order. Empty means the
-	// config is valid. Checking the whole list is what pins the validator reporting all
-	// problems in one plan rather than stopping at the first.
-	tests := map[string]struct {
-		windows       [][2]string
-		wantSummaries []string
-	}{
-		"separate windows":                       {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "23:59"}}},
-		"windows with a gap between them":        {windows: [][2]string{{"01:00", "05:00"}, {"12:00", "13:00"}}},
-		"lone wrapped window":                    {windows: [][2]string{{"22:00", "07:00"}}},
-		"window ending at midnight plus daytime": {windows: [][2]string{{"19:00", "00:00"}, {"12:00", "13:00"}}},
-		"malformed times are ignored":            {windows: [][2]string{{"nonsense", "06:00"}, {"05:00", "09:00"}}},
-		// The regex and this validator run separately, so a value the regex rejects still
-		// reaches here. A negative hour once parsed and read past the start of an array.
-		"negative hour is rejected, not parsed": {windows: [][2]string{{"-1:30", "06:00"}}},
-		"out-of-range time is rejected":         {windows: [][2]string{{"99:99", "06:00"}}},
-		"trailing junk is rejected":             {windows: [][2]string{{"12:30extra", "13:00"}}},
-		// time.Parse alone would read this as 09:30, which the pattern rejects. Both layers
-		// must agree on what a valid time is.
-		"single-digit hour is rejected": {windows: [][2]string{{"9:30", "13:00"}}},
-		// Window length and count are PostHog's to enforce. Repeating them here would mean
-		// a provider release whenever PostHog changes one. The API rejects these on apply.
-		"short window is left to the API":         {windows: [][2]string{{"02:00", "02:15"}}},
-		"wrapped short window is left to the API": {windows: [][2]string{{"23:50", "00:10"}}},
-		// Equal bounds block no time. Skipped, because 00:00-00:00 would otherwise read as
-		// a whole day.
-		"equal bounds are skipped":                   {windows: [][2]string{{"02:00", "02:00"}}},
-		"exactly thirty minutes":                     {windows: [][2]string{{"02:00", "02:30"}}},
-		"wrapped window is measured across midnight": {windows: [][2]string{{"23:50", "00:30"}}},
-		"touching windows are merged":                {windows: [][2]string{{"00:00", "06:00"}, {"06:00", "09:00"}}, wantSummaries: []string{overlaps}},
-		"overlapping windows":                        {windows: [][2]string{{"00:00", "06:00"}, {"05:00", "09:00"}}, wantSummaries: []string{overlaps}},
-		"contained window":                           {windows: [][2]string{{"00:00", "09:00"}, {"02:00", "03:00"}}, wantSummaries: []string{overlaps}},
-		// Both rules fire. The crossing window overlaps the morning one, and it is not the
-		// only window. Checking both pins the report-everything behaviour.
-		"wrapped window overlaps morning":  {windows: [][2]string{{"22:00", "07:00"}, {"06:00", "08:00"}}, wantSummaries: []string{overlaps, crossesMN}},
-		"wrapped window plus daytime":      {windows: [][2]string{{"22:00", "07:00"}, {"12:00", "13:00"}}, wantSummaries: []string{crossesMN}},
-		"midnight blocked from both sides": {windows: [][2]string{{"00:00", "06:00"}, {"22:00", "00:00"}}, wantSummaries: []string{meetsAtMN}},
-		// PostHog rejoins a midnight pair only while it is the whole timeline. A third
-		// window leaves all three stored as written.
-		"midnight pair with a third window": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "07:00"}, {"12:00", "13:00"}}},
-		// A whole-day block always touches, so the overlap rule still stops it.
-		"windows covering the whole day": {
-			windows:       [][2]string{{"00:00", "12:00"}, {"12:00", "00:00"}},
-			wantSummaries: []string{overlaps, meetsAtMN},
-		},
-		// Both orientations of the pair are checked. Terraform does not promise set
-		// elements arrive in config order, so either can be the one that fires.
-		"midnight blocked from both sides, reversed": {windows: [][2]string{{"22:00", "00:00"}, {"00:00", "06:00"}}, wantSummaries: []string{meetsAtMN}},
-		// Short windows now join the timeline like any other, so they overlap their
-		// neighbours normally instead of being skipped.
-		"short window overlaps its neighbour": {
-			windows:       [][2]string{{"02:00", "02:10"}, {"00:00", "06:00"}, {"22:00", "00:00"}},
-			wantSummaries: []string{overlaps},
-		},
-		"short window does not hide a real overlap": {
-			windows:       [][2]string{{"02:00", "02:10"}, {"08:00", "12:00"}, {"11:00", "14:00"}},
-			wantSummaries: []string{overlaps},
-		},
-		"short window beside a crossing one": {
-			windows:       [][2]string{{"02:00", "02:10"}, {"22:00", "07:00"}},
-			wantSummaries: []string{overlaps, crossesMN},
-		},
-		"midnight pair with two others": {windows: [][2]string{{"00:00", "06:00"}, {"08:00", "09:00"}, {"12:00", "13:00"}, {"19:00", "00:00"}}},
-	}
+		blockedWindowsValidator{}.ValidateSet(context.Background(), req, resp)
 
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			req := validator.SetRequest{
-				Path:        path.Root("schedule_restriction").AtName("blocked_windows"),
-				ConfigValue: blockedWindowsSet(t, test.windows...),
-			}
-			resp := &validator.SetResponse{}
+		require.True(t, resp.Diagnostics.HasError(), "touching windows must be rejected")
+		assert.Equal(t, "Quiet-hours windows overlap", resp.Diagnostics.Errors()[0].Summary())
 
-			blockedWindowsValidator{}.ValidateSet(context.Background(), req, resp)
+		withPath, ok := resp.Diagnostics.Errors()[0].(diag.DiagnosticWithPath)
+		require.True(t, ok, "diagnostic must be attribute-scoped")
+		assert.Equal(t, req.Path.String(), withPath.Path().String())
+	})
 
-			var got []string
-			for _, d := range resp.Diagnostics.Errors() {
-				got = append(got, d.Summary())
-			}
-			assert.Equal(t, test.wantSummaries, got)
+	t.Run("valid windows produce nothing", func(t *testing.T) {
+		resp := &validator.SetResponse{}
+		blockedWindowsValidator{}.ValidateSet(context.Background(), validator.SetRequest{
+			Path:        path.Root("schedule_restriction").AtName("blocked_windows"),
+			ConfigValue: blockedWindowsSet(t, [2]string{"01:00", "05:00"}, [2]string{"12:00", "13:00"}),
+		}, resp)
+		assert.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	})
+
+	// A null or unknown value cannot be reflected into a plain struct, so converting one
+	// would fail the plan with the framework's report-this-to-the-developer error.
+	t.Run("null and unknown are left alone", func(t *testing.T) {
+		for name, value := range map[string]types.Set{
+			"null set":    types.SetNull(alertBlockedWindowObjectType),
+			"unknown set": types.SetUnknown(alertBlockedWindowObjectType),
+		} {
+			t.Run(name, func(t *testing.T) {
+				resp := &validator.SetResponse{}
+				blockedWindowsValidator{}.ValidateSet(context.Background(), validator.SetRequest{
+					Path:        path.Root("schedule_restriction").AtName("blocked_windows"),
+					ConfigValue: value,
+				}, resp)
+				assert.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+			})
+		}
+	})
+
+	t.Run("an unknown element is skipped", func(t *testing.T) {
+		set, diags := types.SetValue(alertBlockedWindowObjectType, []attr.Value{
+			types.ObjectValueMust(alertBlockedWindowObjectType.AttrTypes, map[string]attr.Value{
+				"start": types.StringValue("01:00"),
+				"end":   types.StringValue("05:00"),
+			}),
+			types.ObjectUnknown(alertBlockedWindowObjectType.AttrTypes),
 		})
-	}
+		require.False(t, diags.HasError(), "%v", diags)
+
+		resp := &validator.SetResponse{}
+		blockedWindowsValidator{}.ValidateSet(context.Background(), validator.SetRequest{
+			Path:        path.Root("schedule_restriction").AtName("blocked_windows"),
+			ConfigValue: set,
+		}, resp)
+		assert.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	})
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
@@ -23,13 +22,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 	"github.com/posthog/terraform-provider/internal/util"
 )
-
-// hhmmPattern matches a 24-hour HH:MM local time, as used by quiet-hours windows.
-var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 // nonBlankPattern requires the name to start and end with a non-whitespace character.
 // PostHog trims names server-side (verified against a live instance), so a name with
@@ -41,8 +38,6 @@ var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 var rfc3339Pattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
 
 var nonBlankPattern = regexp.MustCompile(`^\S(.*\S)?$`)
-
-const minutesPerDay = 24 * 60
 
 // Defaults PostHog applies when an attribute is omitted. Plan-time validation resolves
 // omitted attributes to these so a config that trips an invariant only by relying on a
@@ -317,14 +312,14 @@ func (o LogsAlertOps) Schema() schema.Schema {
 							Required:            true,
 							MarkdownDescription: "Start time as `HH:MM` (24-hour, project timezone). Inclusive.",
 							Validators: []validator.String{
-								stringvalidator.RegexMatches(hhmmPattern, "must be a 24-hour time in HH:MM format"),
+								stringvalidator.RegexMatches(core.QuietHoursTimePattern, "must be a 24-hour time in HH:MM format"),
 							},
 						},
 						"end": schema.StringAttribute{
 							Required:            true,
 							MarkdownDescription: "End time as `HH:MM` (24-hour, project timezone). Exclusive.",
 							Validators: []validator.String{
-								stringvalidator.RegexMatches(hhmmPattern, "must be a 24-hour time in HH:MM format"),
+								stringvalidator.RegexMatches(core.QuietHoursTimePattern, "must be a 24-hour time in HH:MM format"),
 							},
 						},
 					},
@@ -642,148 +637,44 @@ func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 	return diags
 }
 
-// validateBlockedWindows enforces the ≥30-minute span rule, plus the two config shapes
-// PostHog would silently reshape. PostHog does not store the windows it is given: it lays
-// them on a single 24-hour timeline, merges, and re-derives windows from the result. A
-// reshaped config reads back differently from the plan, which fails the apply with an
-// inconsistent result rather than showing up as recoverable drift.
+// validateBlockedWindows adapts this resource's flat window set onto the shared
+// quiet-hours rules. The rules live in core because posthog_alert exposes the same windows
+// nested under schedule_restriction and must reject the same shapes.
 func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if windows.IsNull() || windows.IsUnknown() {
 		return diags
 	}
 
-	var parsed []BlockedWindowTFModel
-	diags.Append(windows.ElementsAs(ctx, &parsed, false)...)
-	if diags.HasError() {
-		return diags
-	}
-
-	// source is the index of the configured window an interval came from. Two intervals of
-	// the same window are the two halves of one midnight crossing, not a conflict. The
-	// label is only message text, so it must not be used to decide identity.
-	type interval struct {
-		start, end int
-		source     int
-		label      string
-	}
-	var intervals []interval
-	windowCount := 0
-	wrappingWindows := 0
-
-	for i, w := range parsed {
-		if w.Start.IsUnknown() || w.End.IsUnknown() {
-			return diags
-		}
-		start, okStart := parseHHMM(w.Start.ValueString())
-		end, okEnd := parseHHMM(w.End.ValueString())
-		if !okStart || !okEnd {
-			// The HH:MM regex validator already reports malformed values.
-			return diags
-		}
-
-		label := fmt.Sprintf("%s-%s", w.Start.ValueString(), w.End.ValueString())
-
-		// A window with the same start and end blocks no time. Skip it. Treating it as a
-		// span would read 00:00-00:00 as a whole day. PostHog rejects it on apply.
-		if start == end {
+	// Elements that are null or unknown are skipped rather than converted. ElementsAs
+	// reflects into a plain struct, which can hold neither, and would fail the plan with
+	// the framework's report-this-to-the-provider-developer error for a config shape.
+	var parsed []core.QuietHoursWindow
+	for _, element := range windows.Elements() {
+		if element.IsNull() || element.IsUnknown() {
 			continue
 		}
-
-		windowCount++
-
-		// Split a window that runs past midnight so overlap is a plain interval comparison.
-		// One ending exactly at midnight stops at the end of the day and needs no second
-		// half; emitting an empty [0, 0) half would collide with every window starting at
-		// midnight in the check below.
-		switch {
-		case end > start:
-			intervals = append(intervals, interval{start: start, end: end, source: i, label: label})
-		case end == 0:
-			intervals = append(intervals, interval{start: start, end: minutesPerDay, source: i, label: label})
-		default:
-			wrappingWindows++
-			intervals = append(intervals,
-				interval{start: start, end: minutesPerDay, source: i, label: label},
-				interval{start: 0, end: end, source: i, label: label},
-			)
+		object, isObject := element.(types.Object)
+		if !isObject {
+			continue
 		}
-	}
-
-	// Windows that merely touch count as overlapping. PostHog merges on `next.start <=
-	// prev.end`, so 01:00-02:00 and 02:00-03:00 are saved as a single 01:00-03:00 window.
-	for i := 0; i < len(intervals); i++ {
-		for j := i + 1; j < len(intervals); j++ {
-			if intervals[i].source == intervals[j].source {
-				continue
-			}
-			if intervals[i].start <= intervals[j].end && intervals[j].start <= intervals[i].end {
-				diags.AddAttributeError(
-					path.Root("blocked_windows"),
-					"Quiet-hours windows overlap",
-					fmt.Sprintf(
-						"Windows %s and %s overlap or run straight into each other. PostHog merges them into a "+
-							"single window when saving, so the alert would read back with different windows than "+
-							"configured and every apply would fail. Combine them into one window.",
-						intervals[i].label, intervals[j].label,
-					),
-				)
-				return diags
-			}
+		var window BlockedWindowTFModel
+		d := object.As(ctx, &window, basetypes.ObjectAsOptions{})
+		if d.HasError() {
+			diags.Append(d...)
+			return diags
 		}
+		if window.Start.IsNull() || window.Start.IsUnknown() || window.End.IsNull() || window.End.IsUnknown() {
+			continue
+		}
+		parsed = append(parsed, core.QuietHoursWindow{
+			Start: window.Start.ValueString(),
+			End:   window.End.ValueString(),
+		})
 	}
 
-	// A window written as crossing midnight always expands to two intervals, and PostHog
-	// only rejoins them when nothing else is on the timeline. Alongside any other window it
-	// stays split, so the alert reads back with one more window than was configured.
-	if wrappingWindows > 0 && windowCount > 1 {
-		diags.AddAttributeError(
-			path.Root("blocked_windows"),
-			"Quiet hours crossing midnight must be the only window",
-			"A window whose end is before its start crosses midnight, and PostHog stores it as one window per "+
-				"side of midnight unless it is the only window configured. Either make it the only window, or "+
-				"split it yourself into a window ending at 00:00 and one starting at 00:00.",
-		)
-		return diags
-	}
-
-	// Two windows that between them block both sides of midnight get rejoined into a single
-	// crossing window, but only while they are the whole timeline. A third window anywhere
-	// in the day leaves all of them stored as written.
-	if len(intervals) == 2 && intervals[0].source != intervals[1].source &&
-		((intervals[0].start == 0 && intervals[1].end == minutesPerDay) ||
-			(intervals[1].start == 0 && intervals[0].end == minutesPerDay)) {
-		diags.AddAttributeError(
-			path.Root("blocked_windows"),
-			"Quiet-hours windows meeting at midnight are stored as one",
-			fmt.Sprintf(
-				"Windows %s and %s together block midnight from both sides, and PostHog rejoins them into a "+
-					"single crossing window when they are the only two, so the alert would read back differently "+
-					"than configured. Write them as one window crossing midnight, add a third window elsewhere "+
-					"in the day, or end the evening window at 23:59.",
-				intervals[0].label, intervals[1].label,
-			),
-		)
-	}
-
+	diags.Append(core.ValidateQuietHoursWindows(parsed, path.Root("blocked_windows"))...)
 	return diags
-}
-
-// parseHHMM converts a validated HH:MM string to minutes past local midnight.
-func parseHHMM(v string) (int, bool) {
-	hh, mm, found := strings.Cut(v, ":")
-	if !found {
-		return 0, false
-	}
-	hours, err := strconv.Atoi(hh)
-	if err != nil {
-		return 0, false
-	}
-	minutes, err := strconv.Atoi(mm)
-	if err != nil {
-		return 0, false
-	}
-	return hours*60 + minutes, true
 }
 
 func (o LogsAlertOps) Create(ctx context.Context, client httpclient.PosthogClient, model LogsAlertTFModel, req httpclient.LogsAlertRequest) (httpclient.LogsAlert, error) {
