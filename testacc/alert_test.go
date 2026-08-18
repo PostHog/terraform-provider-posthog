@@ -596,20 +596,11 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 		},
 		// Terraform hard-wraps diagnostics, so these patterns stop before the line break
 		// that falls between the count and "elements".
+		// Not a PostHog limit: an empty list normalises to a null restriction, so the alert
+		// would read back different from the configured block.
 		"empty list": {
 			windows:   ``,
 			wantError: regexp.MustCompile(`set must contain at least 1`),
-		},
-		"more than five": {
-			windows: `
-      { start = "00:00", end = "01:00" },
-      { start = "02:00", end = "03:00" },
-      { start = "04:00", end = "05:00" },
-      { start = "06:00", end = "07:00" },
-      { start = "08:00", end = "09:00" },
-      { start = "10:00", end = "11:00" },
-`,
-			wantError: regexp.MustCompile(`set must contain at most 5`),
 		},
 	}
 
@@ -905,6 +896,54 @@ func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestAlert_ServerEnforcedWindowLimits pins the rules the provider deliberately does NOT
+// duplicate. Window length and count are PostHog's constants, so repeating them here would
+// mean a provider release whenever PostHog changes one. These configs must therefore reach
+// the API and be rejected by it. If PostHog ever stops rejecting them, this fails and tells
+// us the delegation assumption has moved.
+//
+// Whole-day coverage is deliberately absent: covering 1440 minutes requires windows that
+// touch, so the reshape rules reject it at plan time and it never reaches the API.
+func TestAlert_ServerEnforcedWindowLimits(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	tests := map[string]string{
+		"window shorter than PostHog allows": `
+      { start = "02:00", end = "02:15" },
+`,
+		"more windows than PostHog stores": `
+      { start = "00:00", end = "01:00" },
+      { start = "02:00", end = "03:00" },
+      { start = "04:00", end = "05:00" },
+      { start = "06:00", end = "07:00" },
+      { start = "08:00", end = "09:00" },
+      { start = "10:00", end = "11:00" },
+`,
+	}
+
+	for name, windows := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				CheckDestroy:             testAccCheckAlertDestroy,
+				Steps: []resource.TestStep{
+					{
+						Config: testAccAlertWithBlockedWindows(rName, windows),
+						// This endpoint flattens every schedule error to one message, which
+						// is the cost of delegating rather than checking at plan time.
+						// Terraform hard-wraps the body, so match a fragment that cannot
+						// straddle the break.
+						ExpectError: regexp.MustCompile(`Invalid schedule`),
+					},
+				},
+			})
+		})
+	}
 }
 
 // testAccCheckAlertQuietHoursCleared asserts PostHog itself holds no blocked windows for
