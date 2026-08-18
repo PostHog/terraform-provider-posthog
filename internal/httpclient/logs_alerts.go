@@ -80,3 +80,60 @@ func (c *PosthogClient) DeleteLogsAlert(ctx context.Context, projectID, id strin
 	path := fmt.Sprintf("/api/projects/%s/logs/alerts/%s/", projectID, id)
 	return doDelete(c, ctx, path)
 }
+
+// LogsAlertDestination is one notification destination of a log alert. PostHog implements a
+// destination as a group of hog functions, one per alert transition (firing, resolved,
+// errored, auto-disabled), all sharing the configuration below. The group is created and
+// deleted as a unit and carries no id of its own, so HogFunctionIDs is what identifies it.
+//
+// The Slack and webhook fields are only populated for the type that uses them. There is no
+// slack_channel_name: PostHog accepts one on create to build the destination's display name
+// but never stores it, so no endpoint returns it.
+type LogsAlertDestination struct {
+	HogFunctionIDs   []string `json:"hog_function_ids"`
+	Type             string   `json:"type,omitempty"`
+	SlackWorkspaceID *int64   `json:"slack_workspace_id,omitempty"`
+	SlackChannelID   *string  `json:"slack_channel_id,omitempty"`
+	WebhookURL       *string  `json:"webhook_url,omitempty"`
+}
+
+type LogsAlertDestinationRequest struct {
+	Type string `json:"type"`
+	// Required when Type is slack.
+	SlackWorkspaceID *int64  `json:"slack_workspace_id,omitempty"`
+	SlackChannelID   *string `json:"slack_channel_id,omitempty"`
+	SlackChannelName *string `json:"slack_channel_name,omitempty"`
+	// Required when Type is webhook or teams.
+	WebhookURL *string `json:"webhook_url,omitempty"`
+}
+
+// logsAlertDestinationDeleteRequest deletes a whole destination group. The API takes every
+// hog function id at once rather than one per call, so the group disappears atomically.
+type logsAlertDestinationDeleteRequest struct {
+	HogFunctionIDs []string `json:"hog_function_ids"`
+}
+
+// logsAlertDestinationsPath builds the destinations collection path for an alert. These
+// endpoints hang off the environments route, while the alert CRUD above reaches the same
+// viewset through the older /api/projects/ alias.
+func logsAlertDestinationsPath(projectID, alertID string) string {
+	return fmt.Sprintf("/api/environments/%s/logs/alerts/%s/destinations/", projectID, alertID)
+}
+
+// ListLogsAlertDestinations returns every destination group attached to an alert. The
+// endpoint answers with a bare JSON array rather than the usual paginated envelope.
+func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID, alertID string) ([]LogsAlertDestination, HTTPStatusCode, error) {
+	return doGet[[]LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID))
+}
+
+// CreateLogsAlertDestination creates one destination group. The response carries only the
+// hog function ids that were created, not the configuration they were built from.
+func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest) (LogsAlertDestination, error) {
+	result, _, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
+	return result, err
+}
+
+func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
+	path := logsAlertDestinationsPath(projectID, alertID) + "delete"
+	return doPostNoContent(c, ctx, path, logsAlertDestinationDeleteRequest{HogFunctionIDs: hogFunctionIDs})
+}

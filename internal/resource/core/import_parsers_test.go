@@ -144,6 +144,61 @@ func TestRoleMembershipImportParser(t *testing.T) {
 	}
 }
 
+type testLogsAlertDestinationModel struct {
+	BaseStringIdentifiable
+	BaseProjectID
+	AlertID string
+}
+
+func (m *testLogsAlertDestinationModel) SetAlertID(alertID string) {
+	m.AlertID = alertID
+}
+
+func TestLogsAlertDestinationImportParser(t *testing.T) {
+	parser := LogsAlertDestinationImportParser[testLogsAlertDestinationModel]()
+
+	tests := map[string]struct {
+		importID          string
+		wantErr           bool
+		wantProjectID     string
+		wantAlertID       string
+		wantHogFunctionID string
+	}{
+		"valid three-part format": {
+			importID:          "123/alert-456/hf-789",
+			wantProjectID:     "123",
+			wantAlertID:       "alert-456",
+			wantHogFunctionID: "hf-789",
+		},
+		"two parts is invalid": {
+			importID: "123/alert-456",
+			wantErr:  true,
+		},
+		// The project cannot fall back to the provider default here: a destination is
+		// identified by a hog function id, which is meaningless without its alert.
+		"one part is invalid": {
+			importID: "hf-789",
+			wantErr:  true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			model, err := parser(tc.importID, ProviderDefaults{ProjectID: "default-project"})
+
+			if tc.wantErr {
+				require.Error(t, err, "expected parser to return an error for invalid import ID format")
+				return
+			}
+
+			require.NoError(t, err, "parser should successfully parse valid import ID")
+			assert.Equal(t, tc.wantProjectID, model.ProjectID.ValueString(), "project_id should be extracted from first segment")
+			assert.Equal(t, tc.wantAlertID, model.AlertID, "alert_id should be extracted from second segment")
+			assert.Equal(t, tc.wantHogFunctionID, model.ID.ValueString(), "id should be extracted from third segment")
+		})
+	}
+}
+
 func TestProjectSingletonImportParser(t *testing.T) {
 	parser := ProjectSingletonImportParser[testProjectSingletonModel]()
 

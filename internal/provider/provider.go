@@ -149,6 +149,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewInsight,
 		posthogresource.NewInsightVariable,
 		posthogresource.NewLogsAlert,
+		posthogresource.NewLogsAlertDestination,
 		posthogresource.NewOrganizationMember,
 		posthogresource.NewProject,
 		posthogresource.NewProjectDefaultAccess,
