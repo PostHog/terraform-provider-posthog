@@ -5,9 +5,7 @@ subcategory: ""
 description: |-
   Manage PostHog log alerts https://posthog.com/docs/logs/alerts. A log alert periodically counts the log entries matching its filters over a rolling window and fires when that count crosses the threshold.
   At least one of severity_levels, service_names, or filter_group_json is required unless the alert is disabled (enabled = false). A project may hold at most 20 log alerts.
-  ~> Log alerts are gated behind a feature flag. The API returns 403 with This action requires feature flag 'logs-alerting' to be enabled for your organization until PostHog enables it for you. A 403 on the first apply means the flag is off, not that the credentials or configuration are wrong.
-  ~> Notification destinations are not managed by this resource. PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing project_id — creates a new alert with no destinations attached, which you must re-attach manually.
-  ~> An alert whose state is broken or snoozed has stopped notifying. Terraform does not manage either condition, so terraform plan stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
+  ~> An alert with no destination still evaluates, but notifies nobody. Delivery is not a field on this resource. When the alert fires PostHog emits the internal event $logs_alert_firing, and routing that to Slack, a webhook or Microsoft Teams is a separate posthog_hog_function of type = "internal_destination" filtered to this alert's id. That is the same pattern insight alerts use, so notifications are manageable as code today: see examples/alert-notifications/logs-alert.tf. Destinations attached from the PostHog UI are hog functions too, so Terraform does not adopt them unless you declare them.
   Removing severity_levels, service_names, filter_group_json, or blocked_windows from your configuration clears them server-side. The remaining optional attributes are computed, so removing one retains its last applied value rather than restoring the documented default — set it explicitly to change it back. Drift works the same way: Terraform corrects a PostHog UI edit to an attribute you declared, but silently adopts one to a computed attribute you left out.
 ---
 
@@ -17,11 +15,7 @@ Manage PostHog [log alerts](https://posthog.com/docs/logs/alerts). A log alert p
 
 At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.
 
-~> **Log alerts are gated behind a feature flag.** The API returns `403` with `This action requires feature flag 'logs-alerting' to be enabled for your organization` until PostHog enables it for you. A `403` on the first apply means the flag is off, not that the credentials or configuration are wrong.
-
-~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, so Terraform cannot track them without reporting permanent drift. Attach destinations from the PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any change that replaces the resource — notably changing `project_id` — creates a new alert with no destinations attached, which you must re-attach manually.
-
-~> An alert whose `state` is `broken` or `snoozed` has stopped notifying. Terraform does not manage either condition, so `terraform plan` stays clean while the alert is silent; reset or unsnooze it from the PostHog UI.
+~> **An alert with no destination still evaluates, but notifies nobody.** Delivery is not a field on this resource. When the alert fires PostHog emits the internal event `$logs_alert_firing`, and routing that to Slack, a webhook or Microsoft Teams is a separate `posthog_hog_function` of `type = "internal_destination"` filtered to this alert's id. That is the same pattern insight alerts use, so notifications are manageable as code today: see `examples/alert-notifications/logs-alert.tf`. Destinations attached from the PostHog UI are hog functions too, so Terraform does not adopt them unless you declare them.
 
 Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your configuration clears them server-side. The remaining optional attributes are computed, so removing one retains its last applied value rather than restoring the documented default — set it explicitly to change it back. Drift works the same way: Terraform corrects a PostHog UI edit to an attribute you declared, but silently adopts one to a computed attribute you left out.
 
@@ -98,6 +92,9 @@ resource "posthog_logs_alert" "draft" {
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `service_names` (Set of String) Service names to scope the alert to.
 - `severity_levels` (Set of String) Log severity levels to count: `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.
+- `snooze_until` (String) RFC 3339 timestamp until which the alert is silenced, for example `2026-01-31T09:00:00Z`. Useful for planned work when you want a window of silence in version control rather than in someone's memory.
+
+Managed only when you set it. Leave it out and Terraform never sends it, so a snooze an operator sets in the PostHog UI is left alone rather than being reverted on the next apply.
 - `threshold_count` (Number) Log entry count to compare against. The alert fires when the number of matching entries in the window is `above` (or `below`) this value. Defaults to 100. Use `0` with `above` to fire on any matching log.
 - `threshold_operator` (String) Whether the alert fires when the count is `above` or `below` the threshold. Defaults to `above`.
 - `window_minutes` (Number) Time window in minutes over which log entries are counted: `5`, `10`, `15`, `30`, or `60`. Defaults to 5.
@@ -105,7 +102,7 @@ resource "posthog_logs_alert" "draft" {
 ### Read-Only
 
 - `id` (String) UUID of the log alert.
-- `state` (String) Current evaluation state of the alert: `not_firing`, `firing`, `snoozed`, or `broken`. `broken` means PostHog stopped evaluating the alert after repeated failed checks — it notifies nobody until it is reset from the PostHog UI.
+- `state` (String) Current evaluation state of the alert, as PostHog reports it: `not_firing`, `firing`, `pending_resolve`, `errored`, `snoozed` or `broken`. A `broken` alert has stopped evaluating after repeated failed checks and notifies nobody; clearing that is a PostHog UI action, so the provider warns about it on refresh rather than managing it.
 
 <a id="nestedatt--blocked_windows"></a>
 ### Nested Schema for `blocked_windows`

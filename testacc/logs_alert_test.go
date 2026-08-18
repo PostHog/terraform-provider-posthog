@@ -739,6 +739,74 @@ func TestLogsAlert_RejectsEnabledAlertWithoutFilters(t *testing.T) {
 	})
 }
 
+// TestLogsAlert_SnoozeUntil covers the attribute a practitioner uses to silence an alert
+// for planned work: set it, change it, then drop it from the configuration.
+func TestLogsAlert_SnoozeUntil(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	withSnooze := func(until string) string {
+		return fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+  snooze_until    = %[2]q
+}
+`, rName, until)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: withSnooze("2030-01-31T09:00:00Z"),
+				Check:  resource.TestCheckResourceAttr("posthog_logs_alert.test", "snooze_until", "2030-01-31T09:00:00Z"),
+			},
+			{
+				Config: withSnooze("2030-02-28T17:30:00Z"),
+				Check:  resource.TestCheckResourceAttr("posthog_logs_alert.test", "snooze_until", "2030-02-28T17:30:00Z"),
+			},
+			// Dropping it stops Terraform managing the field. The attribute leaves state
+			// rather than the alert being force-unsnoozed, which is what keeps an operator
+			// snoozing from the UI from being reverted.
+			{
+				Config: testAccLogsAlertBasic(rName),
+				Check:  resource.TestCheckNoResourceAttr("posthog_logs_alert.test", "snooze_until"),
+			},
+		},
+	})
+}
+
+// TestLogsAlert_RejectsInvalidSnoozeUntil verifies the timestamp is checked at plan time
+// rather than surfacing as a mid-apply API error.
+func TestLogsAlert_RejectsInvalidSnoozeUntil(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+  snooze_until    = "next tuesday"
+}
+`, rName),
+				ExpectError: regexp.MustCompile(`RFC 3339 timestamp`),
+			},
+		},
+	})
+}
+
 // testAccCheckLogsAlertQuietHoursCleared asserts PostHog holds no blocked windows for the
 // alert. Checking state alone would pass even if the PATCH never reached the server.
 func testAccCheckLogsAlertQuietHoursCleared(resourceName string) resource.TestCheckFunc {
