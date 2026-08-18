@@ -38,8 +38,8 @@ func TestQuietHoursMinutes(t *testing.T) {
 	}
 }
 
-// The rule matrix lives here now that both resources share it. Each expectation was
-// confirmed against PostHog's own normalizer and, for the rejections, against the live API.
+// The rule matrix lives here now that both resources share it. Every expectation was
+// checked against PostHog's own normalizer, and the rejections against the live API.
 func TestValidateQuietHoursWindows(t *testing.T) {
 	const (
 		overlaps  = "Quiet-hours windows overlap"
@@ -69,11 +69,11 @@ func TestValidateQuietHoursWindows(t *testing.T) {
 		"crossing window measured across midnight":  {windows: w([2]string{"23:50", "00:30"})},
 		"unrecognised times are left to the schema": {windows: w([2]string{"nonsense", "06:00"}, [2]string{"05:00", "09:00"})},
 
-		// Window length and count are PostHog's to enforce, so a short window is not a
-		// finding here. The API rejects it with its own message on apply.
+		// Window length and count are PostHog's to enforce, so this is not a finding here.
+		// The API rejects it on apply.
 		"short window is left to the API": {windows: w([2]string{"02:00", "02:15"})},
-		// Equal bounds block no time. Skipped rather than treated as a span, since
-		// 00:00-00:00 would otherwise read as a whole-day block.
+		// Equal bounds block no time. Skipped, because 00:00-00:00 would otherwise read as
+		// a whole day.
 		"zero length is skipped": {windows: w([2]string{"02:00", "02:00"})},
 		"touching":               {windows: w([2]string{"00:00", "06:00"}, [2]string{"06:00", "09:00"}), wantSummaries: []string{overlaps}},
 		"overlapping":            {windows: w([2]string{"00:00", "06:00"}, [2]string{"05:00", "09:00"}), wantSummaries: []string{overlaps}},
@@ -81,8 +81,7 @@ func TestValidateQuietHoursWindows(t *testing.T) {
 		"crossing plus daytime":  {windows: w([2]string{"22:00", "07:00"}, [2]string{"12:00", "13:00"}), wantSummaries: []string{crossesMN}},
 		"midnight pair alone":    {windows: w([2]string{"00:00", "06:00"}, [2]string{"22:00", "00:00"}), wantSummaries: []string{meetsAtMN}},
 		"midnight pair reversed": {windows: w([2]string{"22:00", "00:00"}, [2]string{"00:00", "06:00"}), wantSummaries: []string{meetsAtMN}},
-		// A whole-day block necessarily touches, and PostHog refuses it outright, so the
-		// overlap rule is enough to stop it reaching the API in a reshapeable form.
+		// A whole-day block always touches, so the overlap rule already stops it.
 		"whole day still caught as a reshape": {
 			windows:       w([2]string{"00:00", "12:00"}, [2]string{"12:00", "00:00"}),
 			wantSummaries: []string{overlaps, meetsAtMN},
@@ -93,8 +92,7 @@ func TestValidateQuietHoursWindows(t *testing.T) {
 			windows:       w([2]string{"22:00", "07:00"}, [2]string{"06:00", "08:00"}),
 			wantSummaries: []string{overlaps, crossesMN},
 		},
-		// Short windows now take part in the timeline like any other, so they overlap
-		// normally rather than being skipped and leaving a partial picture.
+		// Short windows join the timeline like any other, so they overlap normally.
 		"short window overlaps its neighbour": {
 			windows:       w([2]string{"02:00", "02:10"}, [2]string{"00:00", "06:00"}, [2]string{"22:00", "00:00"}),
 			wantSummaries: []string{overlaps},

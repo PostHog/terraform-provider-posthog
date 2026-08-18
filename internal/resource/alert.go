@@ -72,9 +72,9 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	"must be a 24-hour time in HH:MM format",
 )
 
-// blockedWindowsValidator adapts this resource's nested window shape onto the shared
-// quiet-hours rules. The rules live in core because posthog_logs_alert exposes the same
-// windows under a different attribute and must reject the same shapes.
+// blockedWindowsValidator feeds this resource's nested windows into the shared rules.
+// They live in core because posthog_logs_alert has the same windows under a different
+// attribute and must reject the same shapes.
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
@@ -92,9 +92,9 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 		return
 	}
 
-	// Elements that are null or unknown are skipped rather than converted. ElementsAs
-	// reflects into a plain struct, which can hold neither, and would fail the plan with
-	// the framework's report-this-to-the-provider-developer error for a config shape.
+	// Null and unknown elements are skipped, not converted. A plain struct cannot hold
+	// either, so converting one fails the plan with the framework's
+	// report-this-to-the-provider-developer error over a config shape.
 	var windows []core.QuietHoursWindow
 	for _, element := range req.ConfigValue.Elements() {
 		if element.IsNull() || element.IsUnknown() {

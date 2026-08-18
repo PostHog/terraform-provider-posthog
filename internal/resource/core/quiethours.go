@@ -9,32 +9,26 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 )
 
-// Quiet hours are local time windows during which PostHog does not evaluate an alert.
-// Two resources expose them with different Terraform shapes - posthog_alert nests them
-// under schedule_restriction, posthog_logs_alert has them at the top level - but the
-// windows themselves mean the same thing and hit the same server-side handling, so the
+// Quiet hours are the times of day PostHog does not evaluate an alert. Two resources
+// expose them under different attributes, but the windows mean the same thing, so the
 // rules live here once.
 //
-// Only one class of rule lives here: the shapes PostHog accepts and silently reshapes.
-// It does not store the windows it is given - it lays them on a single 24-hour timeline,
-// merges anything that touches or overlaps, and re-derives windows from the merged result.
-// Such a configuration reads back different from the plan, which Terraform reports as
-// "Provider produced inconsistent result after apply" rather than as recoverable drift.
-// There is no server error to surface for these, so the provider has to catch them.
+// Only one kind of rule belongs here: the shapes PostHog accepts and then rewrites.
+// PostHog merges the windows onto one 24-hour timeline and derives new ones, so a
+// rewritten config reads back different from the plan and the apply fails. There is no
+// server error to pass on, so the provider has to catch these itself.
 //
-// Limits the API enforces itself - the 30-minute minimum, the 5-window cap, and refusing
-// windows that cover the whole day - are deliberately NOT repeated here. Duplicating a
-// server constant means a provider release every time PostHog changes one, and rejecting
-// a configuration the server would accept. The API rejects those directly.
+// PostHog's own limits on window length and count are not repeated here. Copying a server
+// constant means a provider release whenever PostHog changes it.
 const MinutesPerDay = 24 * 60
 
-// QuietHoursTimePattern is the single definition of the HH:MM grammar. Schema validators
-// and the parser below both check against it, so the layers cannot disagree about what a
-// valid time is. time.Parse alone is not enough: it accepts a single-digit hour.
+// QuietHoursTimePattern is the only definition of the HH:MM grammar. Schema validators and
+// the parser below both use it, so they cannot disagree about what a valid time is.
+// time.Parse on its own would accept a single-digit hour.
 var QuietHoursTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
-// QuietHoursWindow is one window as written in configuration. Times are HH:MM strings so
-// callers can pass what the practitioner typed and get diagnostics naming it back.
+// QuietHoursWindow is one window as written in configuration. Times stay as strings so
+// diagnostics can name the window the way the user wrote it.
 type QuietHoursWindow struct {
 	Start string
 	End   string
@@ -42,8 +36,8 @@ type QuietHoursWindow struct {
 
 func (w QuietHoursWindow) label() string { return w.Start + "-" + w.End }
 
-// QuietHoursMinutes converts an HH:MM string to minutes past midnight, reporting whether
-// it is a time this package recognises.
+// QuietHoursMinutes converts HH:MM to minutes past midnight. The second value reports
+// whether the string was a time at all.
 func QuietHoursMinutes(value string) (int, bool) {
 	if !QuietHoursTimePattern.MatchString(value) {
 		return 0, false
@@ -55,20 +49,19 @@ func QuietHoursMinutes(value string) (int, bool) {
 	return parsed.Hour()*60 + parsed.Minute(), true
 }
 
-// span is one contiguous blocked range within a single day. A window crossing midnight
-// produces two, both tagged with the index of the window they came from so the two halves
-// of one window are never mistaken for a conflict between two windows.
+// span is one blocked range inside a single day. A window crossing midnight makes two.
+// Each carries the index of its window, so the halves of one window are never read as a
+// conflict between two.
 type span struct {
 	window     int
 	start, end int
 }
 
-// ValidateQuietHoursWindows reports every way the given windows would be reshaped by
-// PostHog. attrPath is the attribute the diagnostics are attached to, which differs
-// between resources.
+// ValidateQuietHoursWindows reports every way PostHog would rewrite the given windows.
+// attrPath is where the diagnostics attach, which differs between resources.
 //
-// Windows whose times this package does not recognise are skipped: the schema's own
-// format validator reports those, and re-reporting them here would duplicate the error.
+// Windows whose times do not parse are skipped. The schema's format validator already
+// reports those.
 func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -83,9 +76,8 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 			continue
 		}
 
-		// Equal bounds block no time at all. PostHog rejects them ("Start and end must
-		// differ"), and treating them as a span here would read 00:00-00:00 as a whole-day
-		// block and produce reshape diagnostics for a window the API will refuse anyway.
+		// Equal bounds block no time. Skip them. Treating one as a span would read
+		// 00:00-00:00 as a whole day. PostHog rejects them on apply.
 		if start == end {
 			continue
 		}
@@ -95,9 +87,9 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 		case end > start:
 			spans = append(spans, span{i, start, end})
 		case end == 0:
-			// Runs to the end of the day without continuing into the next morning, so it
-			// needs no second half. An empty [0, 0) half would collide with every window
-			// starting at midnight in the overlap check.
+			// Ends at the close of the day and does not continue into the next morning, so
+			// it needs no second half. An empty [0, 0) half would collide with every
+			// window starting at midnight.
 			spans = append(spans, span{i, start, MinutesPerDay})
 		default:
 			crossings++
@@ -107,8 +99,8 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 
 	diags.Append(quietHoursOverlapErrors(spans, windows, attrPath)...)
 
-	// A window written as crossing midnight always expands to two spans, and PostHog only
-	// rejoins them when nothing else is on the timeline.
+	// A window written as crossing midnight becomes two spans. PostHog rejoins them only
+	// when nothing else is on the timeline.
 	if crossings > 0 && parsed > 1 {
 		diags.AddAttributeError(
 			attrPath,
@@ -121,16 +113,16 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 		return diags
 	}
 
-	// The rule below is the one a skipped window can make wrong rather than merely
-	// incomplete: it keys off there being exactly two spans, which a skipped window can
-	// fabricate. The rules above only ever miss a problem on a partial timeline.
+	// The rule below is the only one a skipped window can make wrong rather than
+	// incomplete, because it keys off there being exactly two spans. The rules above can
+	// only miss a problem, never invent one.
 	if parsed != len(windows) {
 		return diags
 	}
 
-	// Two windows that between them block both sides of midnight are rejoined into a
-	// single crossing window, but only while they are the whole timeline. A third window
-	// anywhere in the day leaves all of them stored as written.
+	// Two windows blocking both sides of midnight are rejoined into one crossing window,
+	// but only while they are the whole timeline. A third window leaves all of them stored
+	// as written.
 	if len(spans) == 2 && spans[0].window != spans[1].window &&
 		((spans[0].start == 0 && spans[1].end == MinutesPerDay) ||
 			(spans[1].start == 0 && spans[0].end == MinutesPerDay)) {
@@ -150,8 +142,8 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 	return diags
 }
 
-// quietHoursOverlapErrors reports windows that overlap or merely touch. PostHog merges on
-// `next.start <= prev.end`, so 00:00-06:00 and 06:00-09:00 are saved as one window.
+// quietHoursOverlapErrors reports windows that overlap or touch. PostHog merges on
+// `next.start <= prev.end`, so 00:00-06:00 and 06:00-09:00 become one window.
 func quietHoursOverlapErrors(spans []span, windows []QuietHoursWindow, attrPath path.Path) diag.Diagnostics {
 	var diags diag.Diagnostics
 

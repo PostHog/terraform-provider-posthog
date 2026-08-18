@@ -637,18 +637,18 @@ func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 	return diags
 }
 
-// validateBlockedWindows adapts this resource's flat window set onto the shared
-// quiet-hours rules. The rules live in core because posthog_alert exposes the same windows
-// nested under schedule_restriction and must reject the same shapes.
+// validateBlockedWindows feeds this resource's flat window set into the shared rules.
+// They live in core because posthog_alert has the same windows nested under
+// schedule_restriction and must reject the same shapes.
 func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if windows.IsNull() || windows.IsUnknown() {
 		return diags
 	}
 
-	// Elements that are null or unknown are skipped rather than converted. ElementsAs
-	// reflects into a plain struct, which can hold neither, and would fail the plan with
-	// the framework's report-this-to-the-provider-developer error for a config shape.
+	// Null and unknown elements are skipped, not converted. A plain struct cannot hold
+	// either, so converting one fails the plan with the framework's
+	// report-this-to-the-provider-developer error over a config shape.
 	var parsed []core.QuietHoursWindow
 	for _, element := range windows.Elements() {
 		if element.IsNull() || element.IsUnknown() {
