@@ -56,3 +56,5 @@ resource "posthog_logs_alert" "draft" {
 # Teams destination from the PostHog UI: they go through the alert's own destinations
 # endpoint, which Terraform cannot model, and the generic hog function API refuses to
 # create one for a log alert.
+#
+# Tracked in https://github.com/PostHog/posthog/issues/84149.

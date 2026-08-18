@@ -153,9 +153,11 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"with `Alert notification destinations are managed through the alert API`. Insight alerts are the " +
 			"one exception, since `$insight_alert_firing` predates the managed API; see " +
 			"`examples/alert-notifications/main.tf` for that chain.\n\n" +
-			"The alert does report which destination types exist, so the PostHog UI can show whether an alert " +
-			"notifies anyone, but the provider does not surface it. Replacing the resource, notably by changing " +
-			"`project_id`, creates a new alert with no destinations attached.\n\n" +
+			"The alert payload reports which destination types are attached, but the provider does not surface " +
+			"it. Managing destinations as code also needs to read each one back, and the hog functions API " +
+			"hides alert-owned destinations from both list and retrieve. Tracked in " +
+			"[PostHog/posthog#84149](https://github.com/PostHog/posthog/issues/84149). Replacing the resource, " +
+			"notably by changing `project_id`, creates a new alert with no destinations attached.\n\n" +
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
 			"retains its last applied value rather than restoring the documented default. Set it explicitly to " +
