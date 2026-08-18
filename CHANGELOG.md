@@ -9,7 +9,7 @@
 
 ### Internal
 
-- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources. The provider no longer repeats PostHog's own window-length and window-count limits: those are enforced by the API and reported on apply, so a change to either constant no longer needs a provider release.
+- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
 

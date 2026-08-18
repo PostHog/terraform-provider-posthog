@@ -412,10 +412,9 @@ func TestAlert_RejectsNegativeSeriesIndex(t *testing.T) {
 	})
 }
 
-// TestAlert_ScheduleRestrictionLifecycle walks quiet hours through the full CRUD cycle:
-// add windows, change them, drop the block, then add it back. Step 3 is the one that
-// matters most - `schedule_restriction` is serialized without `omitempty` so that removing
-// the block sends an explicit null, and this asserts PostHog actually cleared it.
+// TestAlert_ScheduleRestrictionLifecycle walks quiet hours through add, change, remove and
+// re-add. Step 3 carries the weight: removing the block sends an explicit null, and this
+// checks PostHog really cleared it.
 func TestAlert_ScheduleRestrictionLifecycle(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -465,8 +464,7 @@ func TestAlert_ScheduleRestrictionLifecycle(t *testing.T) {
 					testAccCheckAlertQuietHoursCleared("posthog_alert.test"),
 				),
 			},
-			// Add it back, to prove clearing did not leave the alert in a state that
-			// rejects a later restriction.
+			// Add it back, to show clearing did not leave the alert unable to take one.
 			{
 				Config: testAccAlertWithBlockedWindows(rName, `
       { start = "01:00", end = "05:00" },
@@ -478,8 +476,8 @@ func TestAlert_ScheduleRestrictionLifecycle(t *testing.T) {
 }
 
 // TestAlert_ScheduleRestrictionWrapsMidnight covers the overnight window the PostHog UI
-// offers as a preset. The half-open `[start, end)` reading means end < start is legal, so
-// this asserts the provider does not normalize or reject it.
+// offers as a preset. An end before the start is legal, so the provider must not rewrite
+// or reject it.
 func TestAlert_ScheduleRestrictionWrapsMidnight(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -502,10 +500,10 @@ func TestAlert_ScheduleRestrictionWrapsMidnight(t *testing.T) {
 					}),
 				),
 			},
-			// A second plan against the same config must be empty, proving the wrapped
-			// window round-trips unchanged. The set-versus-list ordering property is
-			// proved by the five-window replan in BlockedWindowsAcceptedBoundaries,
-			// since a single window has no order to get wrong.
+			// A second plan must be empty, showing the crossing window round-trips
+			// unchanged. Ordering is covered by the five-window replan in
+			// BlockedWindowsAcceptedBoundaries, since one window has no order to get
+			// wrong.
 			{
 				Config: testAccAlertWithBlockedWindows(rName, `
       { start = "22:00", end = "07:00" },
@@ -548,16 +546,13 @@ func TestAlert_ScheduleRestrictionImport(t *testing.T) {
 	})
 }
 
-// TestAlert_RejectsInvalidBlockedWindows checks the plan-time rejections that the unit
-// table cannot reach, plus one representative rule.
+// TestAlert_RejectsInvalidBlockedWindows checks the plan-time rejections the unit table
+// cannot reach, plus one representative rule.
 //
-// The rule matrix lives in TestBlockedWindowsValidator, which asserts each diagnostic
-// summary directly and runs without an instance. Re-asserting all of it here would cost a
-// full plan per rule to prove the same thing. What only this layer can show is that the
-// validators are wired at the right schema path: "overlapping" covers the custom set
-// validator, the three schema rows cover the framework validators that the unit table
-// never constructs, and the two midnight rows are kept deliberately because those rules
-// were wrong once and are the subtlest to get right.
+// The rule matrix lives in TestBlockedWindowsValidator and runs without an instance.
+// Repeating it here would cost a full plan per rule for the same result. What only this
+// layer shows is that the validators are wired at the right schema path. The two midnight
+// rows are kept on purpose, because those rules were wrong once.
 func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -572,7 +567,7 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
       { start = "01:00", end = "03:00" },
       { start = "02:00", end = "04:00" },
 `,
-			wantError: regexp.MustCompile(`Quiet-hours windows overlap`),
+			wantError: regexp.MustCompile(`Overlapping blocked windows`),
 		},
 		"crossing midnight alongside another": {
 			windows: `
@@ -590,14 +585,14 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 		},
 		"time that does not exist": {
 			windows: "\n      { start = \"24:00\", end = \"06:00\" },\n",
-			// Terraform hard-wraps diagnostics and the break lands mid-sentence, so match
-			// only the fragment that cannot straddle it.
+			// Terraform wraps diagnostics mid-sentence, so match a fragment that cannot
+			// span the break.
 			wantError: regexp.MustCompile(`24-hour time in HH:MM format`),
 		},
-		// Terraform hard-wraps diagnostics, so these patterns stop before the line break
-		// that falls between the count and "elements".
-		// Not a PostHog limit: an empty list normalises to a null restriction, so the alert
-		// would read back different from the configured block.
+		// Terraform wraps diagnostics, so these patterns stop before the break between the
+		// count and "elements".
+		// Not a PostHog limit. An empty list becomes a null restriction, so the alert would
+		// read back different from the configured block.
 		"empty list": {
 			windows:   ``,
 			wantError: regexp.MustCompile(`set must contain at least 1`),
@@ -621,11 +616,9 @@ func TestAlert_RejectsInvalidBlockedWindows(t *testing.T) {
 	}
 }
 
-// TestAlert_BlockedWindowsAcceptedBoundaries applies the shapes the validator deliberately
-// permits but that were only ever checked against PostHog's normalizer, not the live API:
-// the maximum five windows, and a window ending exactly at midnight next to another window.
-// Both are places where a wrong permissive call fails every apply with an inconsistent
-// result rather than a plan error.
+// TestAlert_BlockedWindowsAcceptedBoundaries applies the shapes the validator permits but
+// that were only ever checked against PostHog's normalizer. If either call is wrong, every
+// apply fails instead of the plan.
 func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -642,9 +635,8 @@ func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
       { start = "19:00", end = "00:00" },
       { start = "12:00", end = "13:00" },
 `
-	// Exactly the minimum the provider permits. If PostHog's floor were strictly greater
-	// than 30 minutes this would fail the apply rather than the plan, and only a live
-	// apply can tell the difference.
+	// The shortest window PostHog accepts. Only a live apply shows whether its floor is
+	// really 30 minutes.
 	exactlyThirtyMinutes := `
       { start = "02:00", end = "02:30" },
 `
@@ -688,10 +680,9 @@ func TestAlert_BlockedWindowsAcceptedBoundaries(t *testing.T) {
 	})
 }
 
-// TestAlert_UnrelatedUpdateKeepsQuietHours changes an attribute that has nothing to do with
-// quiet hours while quiet hours are set. BuildUpdateRequest re-sends the whole request and
-// schedule_restriction carries no omitempty, so a regression there would clear the windows
-// server-side on an unrelated edit and nothing else would notice.
+// TestAlert_UnrelatedUpdateKeepsQuietHours changes an unrelated attribute while quiet
+// hours are set. Update re-sends the whole request, so a regression would clear the windows
+// on an edit that has nothing to do with them.
 func TestAlert_UnrelatedUpdateKeepsQuietHours(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -747,10 +738,9 @@ resource "posthog_alert" "test" {
 	})
 }
 
-// TestAlert_ScheduleRestrictionDrift edits quiet hours outside Terraform, the way someone
-// would from the PostHog UI, and asserts the change surfaces as a plan rather than being
-// absorbed. This matters because MapResponseToModel maps an empty window list to null: a
-// server-side clear has to show up as drift, not as agreement.
+// TestAlert_ScheduleRestrictionDrift edits quiet hours outside Terraform, as someone would
+// from the PostHog UI, and checks the change shows up as a plan. An empty window list maps
+// to null, so a clear on the server must read as drift rather than agreement.
 func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
 	skipIfNotAcceptance(t)
 
