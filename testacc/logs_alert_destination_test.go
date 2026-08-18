@@ -17,7 +17,11 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
-const logsAlertDestinationAddress = "posthog_logs_alert_destination.test"
+const (
+	logsAlertDestinationAddress       = "posthog_logs_alert_destination.test"
+	logsAlertDestinationFirstAddress  = "posthog_logs_alert_destination.first"
+	logsAlertDestinationSecondAddress = "posthog_logs_alert_destination.second"
+)
 
 // skipIfNoSlackWorkspace skips when no Slack integration is available. A Slack destination
 // needs a workspace connected to the project through PostHog's OAuth flow, which an
@@ -107,6 +111,30 @@ func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCh
 			}
 		}
 		return fmt.Errorf("logs alert destination %s not found on alert %s", rs.Primary.ID, alertID)
+	}
+}
+
+// testAccCheckLogsAlertDestinationsDistinct asserts two destinations on one alert own
+// separate hog functions. Two of the same type share a template id, so a read that groups by
+// template alone would hand both resources the same id.
+func testAccCheckLogsAlertDestinationsDistinct(firstName, secondName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		first, ok := s.RootModule().Resources[firstName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", firstName)
+		}
+		second, ok := s.RootModule().Resources[secondName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", secondName)
+		}
+
+		firstIDs := strings.Split(first.Primary.ID, ",")
+		for _, id := range strings.Split(second.Primary.ID, ",") {
+			if slices.Contains(firstIDs, id) {
+				return fmt.Errorf("destinations %s and %s share hog function %s", firstName, secondName, id)
+			}
+		}
+		return nil
 	}
 }
 
@@ -204,6 +232,47 @@ func TestLogsAlertDestination_Slack(t *testing.T) {
 			// slack_channel_name is write-only: PostHog never stores it, so a read cannot
 			// return it. If the response mapper touched the attribute this plan would not be
 			// empty, and would stay non-empty on every subsequent plan.
+			{
+				Config:   config,
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestLogsAlertDestination_TwoOfSameType pins that one alert can hold two webhook
+// destinations and that both are removed again on destroy. It fails at destroy against
+// current PostHog master and goes green with the backend fix on branch
+// fix/alert-destination-delete-grouping.
+func TestLogsAlertDestination_TwoOfSameType(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	config := testAccLogsAlertDestinationTwoWebhooks(
+		rName,
+		"https://example.com/hooks/first",
+		"https://example.com/hooks/second",
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckLogsAlertDestinationDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(logsAlertDestinationFirstAddress, "webhook_url", "https://example.com/hooks/first"),
+					resource.TestCheckResourceAttr(logsAlertDestinationSecondAddress, "webhook_url", "https://example.com/hooks/second"),
+					resource.TestCheckResourceAttrPair(logsAlertDestinationFirstAddress, "alert_id", "posthog_logs_alert.test", "id"),
+					resource.TestCheckResourceAttrPair(logsAlertDestinationSecondAddress, "alert_id", "posthog_logs_alert.test", "id"),
+					testAccCheckLogsAlertDestinationExists(logsAlertDestinationFirstAddress),
+					testAccCheckLogsAlertDestinationExists(logsAlertDestinationSecondAddress),
+					testAccCheckLogsAlertDestinationsDistinct(logsAlertDestinationFirstAddress, logsAlertDestinationSecondAddress),
+				),
+			},
+			// A read that folded the two same-type groups into one would show drift here.
 			{
 				Config:   config,
 				PlanOnly: true,
@@ -492,4 +561,26 @@ func testAccLogsAlertDestinationSlack(name, channelID, channelName string) strin
 	return testAccLogsAlertDestinationConfig(name, fmt.Sprintf(
 		"type = \"slack\"\n  slack_workspace_id = %[1]s\n  slack_channel_id = %[2]q\n  slack_channel_name = %[3]q",
 		getSlackWorkspaceID(), channelID, channelName))
+}
+
+// testAccLogsAlertDestinationTwoWebhooks puts two webhook destinations on one alert.
+func testAccLogsAlertDestinationTwoWebhooks(name, firstURL, secondURL string) string {
+	return fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+}
+
+resource "posthog_logs_alert_destination" "first" {
+  alert_id    = posthog_logs_alert.test.id
+  type        = "webhook"
+  webhook_url = %[2]q
+}
+
+resource "posthog_logs_alert_destination" "second" {
+  alert_id    = posthog_logs_alert.test.id
+  type        = "webhook"
+  webhook_url = %[3]q
+}
+`, name, firstURL, secondURL)
 }
