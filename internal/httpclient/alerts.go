@@ -6,24 +6,25 @@ import (
 )
 
 type Alert struct {
-	ID                  string             `json:"id"`
-	Name                *string            `json:"name,omitempty"`
-	Insight             AlertInsight       `json:"insight"`
-	Enabled             *bool              `json:"enabled,omitempty"`
-	SubscribedUsers     []AlertUser        `json:"subscribed_users,omitempty"`
-	Threshold           *AlertThreshold    `json:"threshold,omitempty"`
-	Condition           *AlertCondition    `json:"condition,omitempty"`
-	Config              *TrendsAlertConfig `json:"config,omitempty"`
-	CalculationInterval *string            `json:"calculation_interval,omitempty"`
-	SnoozedUntil        *string            `json:"snoozed_until,omitempty"`
-	SkipWeekend         *bool              `json:"skip_weekend,omitempty"`
-	State               *string            `json:"state,omitempty"`
-	CreatedAt           *string            `json:"created_at,omitempty"`
-	CreatedBy           map[string]any     `json:"created_by,omitempty"`
-	LastNotifiedAt      *string            `json:"last_notified_at,omitempty"`
-	LastCheckedAt       *string            `json:"last_checked_at,omitempty"`
-	NextCheckAt         *string            `json:"next_check_at,omitempty"`
-	Checks              []AlertCheck       `json:"checks,omitempty"`
+	ID                  string                    `json:"id"`
+	Name                *string                   `json:"name,omitempty"`
+	Insight             AlertInsight              `json:"insight"`
+	Enabled             *bool                     `json:"enabled,omitempty"`
+	SubscribedUsers     []AlertUser               `json:"subscribed_users,omitempty"`
+	Threshold           *AlertThreshold           `json:"threshold,omitempty"`
+	Condition           *AlertCondition           `json:"condition,omitempty"`
+	Config              *TrendsAlertConfig        `json:"config,omitempty"`
+	CalculationInterval *string                   `json:"calculation_interval,omitempty"`
+	SnoozedUntil        *string                   `json:"snoozed_until,omitempty"`
+	SkipWeekend         *bool                     `json:"skip_weekend,omitempty"`
+	ScheduleRestriction *AlertScheduleRestriction `json:"schedule_restriction,omitempty"`
+	State               *string                   `json:"state,omitempty"`
+	CreatedAt           *string                   `json:"created_at,omitempty"`
+	CreatedBy           map[string]any            `json:"created_by,omitempty"`
+	LastNotifiedAt      *string                   `json:"last_notified_at,omitempty"`
+	LastCheckedAt       *string                   `json:"last_checked_at,omitempty"`
+	NextCheckAt         *string                   `json:"next_check_at,omitempty"`
+	Checks              []AlertCheck              `json:"checks,omitempty"`
 }
 
 type AlertRequest struct {
@@ -37,6 +38,18 @@ type AlertRequest struct {
 	CalculationInterval *string            `json:"calculation_interval,omitempty"`
 	SnoozedUntil        *string            `json:"snoozed_until,omitempty"`
 	SkipWeekend         *bool              `json:"skip_weekend,omitempty"`
+	// Sent even when nil: an explicit null is what clears quiet hours on update.
+	ScheduleRestriction *AlertScheduleRestriction `json:"schedule_restriction"`
+}
+
+type AlertScheduleRestriction struct {
+	// An empty list clears quiet hours, same as a null restriction.
+	BlockedWindows []AlertBlockedWindow `json:"blocked_windows"`
+}
+
+type AlertBlockedWindow struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
 }
 
 type AlertInsight struct {
