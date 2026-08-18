@@ -144,13 +144,18 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"count crosses the threshold.\n\n" +
 			"At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the " +
 			"alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
-			"~> **An alert with no destination still evaluates, but notifies nobody.** Delivery is not a field " +
-			"on this resource. When the alert fires PostHog emits the internal event `$logs_alert_firing`, and " +
-			"routing that to Slack, a webhook or Microsoft Teams is a separate `posthog_hog_function` of " +
-			"`type = \"internal_destination\"` filtered to this alert's id. That is the same pattern insight " +
-			"alerts use, so notifications are manageable as code today: see " +
-			"`examples/alert-notifications/logs-alert.tf`. Destinations attached from the PostHog UI are hog " +
-			"functions too, so Terraform does not adopt them unless you declare them.\n\n" +
+			"~> **Notification destinations are not managed by this resource, and cannot be managed as code " +
+			"today.** An alert with no destination still evaluates, but notifies nobody. Slack, webhook and " +
+			"Microsoft Teams destinations are attached through the alert's own `destinations` sub-endpoint, " +
+			"which is not CRUD, so Terraform cannot model it. Attach them from the PostHog UI.\n\n" +
+			"PostHog builds each destination as a hog function internally, but you cannot create one yourself " +
+			"with `posthog_hog_function`: the API refuses any hog function filtering on a managed alert event " +
+			"with `Alert notification destinations are managed through the alert API`. Insight alerts are the " +
+			"one exception, since `$insight_alert_firing` predates the managed API; see " +
+			"`examples/alert-notifications/main.tf` for that chain.\n\n" +
+			"The alert does report which destination types exist, so the PostHog UI can show whether an alert " +
+			"notifies anyone, but the provider does not surface it. Replacing the resource, notably by changing " +
+			"`project_id`, creates a new alert with no destinations attached.\n\n" +
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
 			"retains its last applied value rather than restoring the documented default. Set it explicitly to " +
