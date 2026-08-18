@@ -42,11 +42,7 @@ var rfc3339Pattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.
 
 var nonBlankPattern = regexp.MustCompile(`^\S(.*\S)?$`)
 
-const (
-	minutesPerDay = 24 * 60
-	// minBlockedWindowMinutes is the shortest quiet-hours window PostHog accepts.
-	minBlockedWindowMinutes = 30
-)
+const minutesPerDay = 24 * 60
 
 // Defaults PostHog applies when an attribute is omitted. Plan-time validation resolves
 // omitted attributes to these so a config that trips an invariant only by relying on a
@@ -162,8 +158,8 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"functions too, so Terraform does not adopt them unless you declare them.\n\n" +
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
-			"retains its last applied value rather than restoring the documented default — set it explicitly to " +
-			"change it back. Drift works the same way: Terraform corrects a PostHog UI edit to an attribute you " +
+			"retains its last applied value rather than restoring the documented default. Set it explicitly to " +
+			"change it back. Drift works the same way. Terraform corrects a PostHog UI edit to an attribute you " +
 			"declared, but silently adopts one to a computed attribute you left out.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -228,7 +224,7 @@ func (o LogsAlertOps) Schema() schema.Schema {
 					"service, such as filtering on a log attribute. Must be a non-empty JSON object. Only the fields " +
 					"you declare are tracked: PostHog annotates saved filters with defaults (such as `label`) that " +
 					"would otherwise surface as permanent drift. The flip side is that a field you omit is not " +
-					"tracked either, so if someone edits it in the PostHog UI Terraform will not detect the drift — " +
+					"tracked either. If someone edits it in the PostHog UI Terraform will not detect the drift, so " +
 					"declare every field you care about. An imported alert adopts PostHog's stored filter group " +
 					"verbatim, so the first plan after an import may show one diff that clears on apply.",
 				Validators: []validator.String{
@@ -308,15 +304,13 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			},
 			"blocked_windows": schema.SetNestedAttribute{
 				Optional: true,
-				MarkdownDescription: "Quiet hours: up to 5 time windows during which the alert is not evaluated. Times " +
-					"use the project timezone. Each window must span at least 30 minutes, and windows must not " +
-					"overlap or touch each other. A window may cross midnight (for example `22:00` to `06:00`), but " +
-					"only as the sole window: PostHog stores blocked windows on a single merged 24-hour timeline, " +
-					"and a crossing window alongside another one is stored as two windows rather than one. Omit the " +
-					"attribute, or set it to an empty list, to disable quiet hours.",
-				Validators: []validator.Set{
-					setvalidator.SizeAtMost(5),
-				},
+				MarkdownDescription: "Quiet hours: time windows during which the alert is not evaluated. Times " +
+					"use the project timezone. Windows must not overlap or touch each other. A window may cross " +
+					"midnight (for example `22:00` to `06:00`), but only as the sole window, because PostHog " +
+					"stores a crossing window as two windows when anything else is configured. PostHog enforces " +
+					"its own limits on window length and count, and reports them on apply. Omit the attribute, " +
+					"or set it to an empty list, to disable quiet hours.",
+				Validators: []validator.Set{},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"start": schema.StringAttribute{
@@ -439,8 +433,8 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 
 	diags.Append(notNotifyingWarnings(resp)...)
 
-	// The API echoes back only the filter keys that are set, so an absent key maps
-	// to null rather than an empty collection.
+	// The API omits filter keys that are not set, so an absent key means null rather than
+	// an empty collection.
 	var severityLevels, serviceNames []string
 	var filterGroup map[string]any
 	if resp.Filters != nil {
@@ -498,10 +492,8 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	return diags
 }
 
-// blockedWindowsToSet converts the API's schedule_restriction into the flattened
-// blocked_windows set. A null or empty restriction means quiet hours are off, but a
-// set the user explicitly configured as empty stays empty — mirroring
-// core.TagsToSetPreserveEmpty, so an empty config does not read back as null.
+// blockedWindowsToSet keeps an explicitly empty set empty. Flipping it to null would show
+// as drift on every plan, the same reason core.TagsToSetPreserveEmpty exists.
 func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSchedule, current types.Set) (types.Set, diag.Diagnostics) {
 	objectType := types.ObjectType{AttrTypes: blockedWindowAttrTypes}
 	if schedule == nil || len(schedule.BlockedWindows) == 0 {
@@ -521,10 +513,9 @@ func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSche
 	return types.SetValueFrom(ctx, objectType, windows)
 }
 
-// nonEmptyJSONObjectValidator rejects filter_group_json values that are well-formed JSON
-// but not a usable filter group. jsontypes.Normalized only checks well-formedness, so
-// without this `jsonencode({})`, `"null"`, and JSON arrays all fail at apply time — the
-// last with a raw Go unmarshal error.
+// nonEmptyJSONObjectValidator rejects JSON that parses but is not a filter group.
+// jsontypes.Normalized only checks that the string is well-formed, so without this an
+// empty object, a bare null or an array reaches the API and fails mid-apply.
 type nonEmptyJSONObjectValidator struct{}
 
 func (v nonEmptyJSONObjectValidator) Description(_ context.Context) string {
@@ -559,8 +550,8 @@ func (v nonEmptyJSONObjectValidator) ValidateString(ctx context.Context, req val
 	}
 }
 
-// ModifyResourcePlan enforces the invariants PostHog documents but only checks server-side,
-// so a bad config fails at plan time with an actionable message instead of mid-apply.
+// ModifyResourcePlan rejects configurations PostHog would reshape or refuse, so they fail
+// at plan time with a message naming the problem.
 func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
@@ -586,9 +577,9 @@ func (o LogsAlertOps) ModifyResourcePlan(ctx context.Context, req resource.Modif
 	}
 }
 
-// validateLogsAlertPlan is split out from ModifyResourcePlan so the invariants can be unit
-// tested directly against a model, including the unknown-value cases. It takes both plan
-// and config because neither alone identifies the effective value; see resolveInt64.
+// validateLogsAlertPlan is separate from ModifyResourcePlan so it can be unit tested
+// against a model. It needs both plan and config because neither alone gives the effective
+// value of an Optional+Computed attribute; see util.ResolveInt64.
 func validateLogsAlertPlan(ctx context.Context, plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 	diags.Append(validateCanEverFire(plan, config)...)
@@ -601,8 +592,8 @@ func validateLogsAlertPlan(ctx context.Context, plan, config LogsAlertTFModel) d
 func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	datapoints, datapointsKnown := resolveInt64(plan.DatapointsToAlarm, config.DatapointsToAlarm, defaultDatapointsToAlarm)
-	periods, periodsKnown := resolveInt64(plan.EvaluationPeriods, config.EvaluationPeriods, defaultEvaluationPeriods)
+	datapoints, datapointsKnown := util.ResolveInt64(plan.DatapointsToAlarm, config.DatapointsToAlarm, defaultDatapointsToAlarm)
+	periods, periodsKnown := util.ResolveInt64(plan.EvaluationPeriods, config.EvaluationPeriods, defaultEvaluationPeriods)
 	if datapointsKnown && periodsKnown && datapoints > periods {
 		diags.AddAttributeError(
 			path.Root("datapoints_to_alarm"),
@@ -616,8 +607,8 @@ func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 	}
 
 	// A log count is never negative, so "below 0" is unsatisfiable.
-	operator, operatorKnown := resolveString(plan.ThresholdOperator, config.ThresholdOperator, defaultThresholdOperator)
-	count, countKnown := resolveInt64(plan.ThresholdCount, config.ThresholdCount, defaultThresholdCount)
+	operator, operatorKnown := util.ResolveString(plan.ThresholdOperator, config.ThresholdOperator, defaultThresholdOperator)
+	count, countKnown := util.ResolveInt64(plan.ThresholdCount, config.ThresholdCount, defaultThresholdCount)
 	if operatorKnown && countKnown && operator == thresholdOperatorBelow && count == 0 {
 		diags.AddAttributeError(
 			path.Root("threshold_count"),
@@ -635,14 +626,13 @@ func validateCanEverFire(plan, config LogsAlertTFModel) diag.Diagnostics {
 func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	enabled, enabledKnown := resolveBool(plan.Enabled, config.Enabled, defaultEnabled)
+	enabled, enabledKnown := util.ResolveBool(plan.Enabled, config.Enabled, defaultEnabled)
 	if !enabledKnown || !enabled {
 		return diags
 	}
-	// An unresolved filter could turn out to be non-empty, so it counts as a filter and
-	// the rule is left to the API: isEmptySet is false for an unknown set, and an unknown
-	// filter_group_json is not null.
-	if isEmptySet(plan.SeverityLevels) && isEmptySet(plan.ServiceNames) && plan.FilterGroupJSON.IsNull() {
+	// An unresolved filter might turn out to be non-empty, so it counts as one and the API
+	// gets the final say.
+	if util.IsEmptySet(plan.SeverityLevels) && util.IsEmptySet(plan.ServiceNames) && plan.FilterGroupJSON.IsNull() {
 		diags.AddError(
 			"Log alert has no filters",
 			"An enabled log alert needs at least one of severity_levels, service_names, or filter_group_json. "+
@@ -650,52 +640,6 @@ func validateHasFilters(plan, config LogsAlertTFModel) diag.Diagnostics {
 		)
 	}
 	return diags
-}
-
-// resolveInt64 reports the value PostHog will end up with, and whether it is knowable yet.
-// The plan already carries the effective value whenever it is known — including on update,
-// where Terraform copies the prior state into the plan for an Optional+Computed attribute
-// the config omits, so an omitted attribute keeps its last applied value. The plan is
-// unknown only on create, or when the config references something not yet resolvable; a
-// null config means the attribute was omitted on create, so the server default applies.
-func resolveInt64(plan, config types.Int64, def int64) (int64, bool) {
-	if !plan.IsUnknown() && !plan.IsNull() {
-		return plan.ValueInt64(), true
-	}
-	if config.IsNull() {
-		return def, true
-	}
-	return 0, false
-}
-
-func resolveString(plan, config types.String, def string) (string, bool) {
-	if !plan.IsUnknown() && !plan.IsNull() {
-		return plan.ValueString(), true
-	}
-	if config.IsNull() {
-		return def, true
-	}
-	return "", false
-}
-
-func resolveBool(plan, config types.Bool, def bool) (bool, bool) {
-	if !plan.IsUnknown() && !plan.IsNull() {
-		return plan.ValueBool(), true
-	}
-	if config.IsNull() {
-		return def, true
-	}
-	return false, false
-}
-
-// isEmptySet reports whether a set contributes no values. An unknown set is not empty — its
-// elements are simply not resolvable yet — and Elements() returns nothing for unknown, so
-// the IsUnknown check has to come first.
-func isEmptySet(v types.Set) bool {
-	if v.IsUnknown() {
-		return false
-	}
-	return v.IsNull() || len(v.Elements()) == 0
 }
 
 // validateBlockedWindows enforces the ≥30-minute span rule, plus the two config shapes
@@ -740,31 +684,9 @@ func validateBlockedWindows(ctx context.Context, windows types.Set) diag.Diagnos
 
 		label := fmt.Sprintf("%s-%s", w.Start.ValueString(), w.End.ValueString())
 
-		// An identical start and end covers no time at all rather than a whole day, so it
-		// gets its own message — the wrap correction below would otherwise report 1440
-		// minutes while complaining the window is too short.
+		// A window with the same start and end blocks no time. Skip it. Treating it as a
+		// span would read 00:00-00:00 as a whole day. PostHog rejects it on apply.
 		if start == end {
-			diags.AddAttributeError(
-				path.Root("blocked_windows"),
-				"Quiet-hours window covers no time",
-				fmt.Sprintf(
-					"Window %s has the same start and end time, so it blocks nothing. Set an end at least %d minutes "+
-						"after the start.", label, minBlockedWindowMinutes,
-				),
-			)
-			continue
-		}
-
-		span := end - start
-		if span < 0 {
-			span += minutesPerDay
-		}
-		if span < minBlockedWindowMinutes {
-			diags.AddAttributeError(
-				path.Root("blocked_windows"),
-				"Quiet-hours window is too short",
-				fmt.Sprintf("Window %s spans %d minutes; PostHog requires at least %d.", label, span, minBlockedWindowMinutes),
-			)
 			continue
 		}
 

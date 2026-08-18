@@ -471,25 +471,24 @@ func TestValidateBlockedWindows(t *testing.T) {
 			},
 		},
 		{
-			name:      "window shorter than 30 minutes",
-			windows:   []BlockedWindowTFModel{window("22:00", "22:15")},
-			expectErr: "too short",
+			// Window length is PostHog's rule. Repeating it here would mean a provider
+			// release whenever PostHog changes it, so the API rejects this on apply.
+			name:    "short window is left to the API",
+			windows: []BlockedWindowTFModel{window("22:00", "22:15")},
 		},
 		{
-			// Must not report "spans 1440 minutes" — the midnight-wrap correction would
-			// otherwise turn a zero-length window into a full day.
-			name:      "zero-length window",
-			windows:   []BlockedWindowTFModel{window("22:00", "22:00")},
-			expectErr: "covers no time",
+			// Skipped rather than measured. A wrap correction would otherwise read
+			// 22:00-22:00 as covering the whole day.
+			name:    "zero-length window is skipped",
+			windows: []BlockedWindowTFModel{window("22:00", "22:00")},
 		},
 		{
 			name:    "exactly 30 minutes is allowed",
 			windows: []BlockedWindowTFModel{window("01:00", "01:30")},
 		},
 		{
-			name:      "29 minutes is rejected",
-			windows:   []BlockedWindowTFModel{window("01:00", "01:29")},
-			expectErr: "too short",
+			name:    "29 minutes is left to the API",
+			windows: []BlockedWindowTFModel{window("01:00", "01:29")},
 		},
 		{
 			name:    "30-minute window spanning midnight",
