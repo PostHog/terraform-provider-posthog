@@ -838,6 +838,53 @@ func TestLogsAlert_ServerEnforcedWindowLimits(t *testing.T) {
 	}
 }
 
+// TestLogsAlert_DestinationsCannotBeHogFunctions pins the reason the docs send people to
+// the PostHog UI for notifications. PostHog builds each destination as a hog function
+// internally, which reads like something posthog_hog_function could create, but the API
+// refuses one filtering on a managed alert event. If PostHog ever opens this up, this test
+// fails and the documentation can change with it.
+func TestLogsAlert_DestinationsCannotBeHogFunctions(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+resource "posthog_logs_alert" "test" {
+  name            = %[1]q
+  severity_levels = ["error"]
+}
+
+resource "posthog_hog_function" "delivery" {
+  name        = "%[1]s-slack"
+  type        = "internal_destination"
+  enabled     = true
+  template_id = "template-slack"
+
+  filters_json = jsonencode({
+    events     = [{ id = "$logs_alert_firing", type = "events" }]
+    properties = [{ key = "alert_id", value = posthog_logs_alert.test.id, operator = "exact", type = "event" }]
+  })
+
+  inputs_json = jsonencode({
+    slack_workspace = { value = 1 }
+    channel         = { value = "#alerts" }
+    text            = { value = "fires" }
+  })
+}
+`, rName),
+				// Terraform hard-wraps the response body, so stop before the break.
+				ExpectError: regexp.MustCompile(`managed through the alert`),
+			},
+		},
+	})
+}
+
 // testAccCheckLogsAlertQuietHoursCleared asserts PostHog holds no blocked windows for the
 // alert. Checking state alone would pass even if the PATCH never reached the server.
 func testAccCheckLogsAlertQuietHoursCleared(resourceName string) resource.TestCheckFunc {
