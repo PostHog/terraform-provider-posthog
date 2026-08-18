@@ -180,11 +180,7 @@ func (v blockedWindowsValidator) ValidateSet(ctx context.Context, req validator.
 	blocked := 0
 	var covered [alertMinutesPerDay]bool
 	for _, span := range spans {
-		// Clamped rather than trusted. Every span here came through the strict parser, but
-		// indexing a fixed array on parsed input is worth one bound rather than a panic if
-		// that ever stops holding.
-		start := max(span.start, 0)
-		for m := start; m < span.end && m < alertMinutesPerDay; m++ {
+		for m := span.start; m < span.end && m < alertMinutesPerDay; m++ {
 			if !covered[m] {
 				covered[m] = true
 				blocked++

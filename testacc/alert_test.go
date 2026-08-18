@@ -864,6 +864,45 @@ func TestAlert_ScheduleRestrictionDrift(t *testing.T) {
 					"end":   "04:00",
 				}),
 			},
+			// Drop quiet hours from the configuration, then have PostHog gain some out of
+			// band. This is the shape the CHANGELOG upgrade note describes: a config with
+			// no schedule_restriction against a server that has one. It is the only drift
+			// direction where the state field goes from null to populated on refresh.
+			{
+				Config: testAccAlertBasic(rName),
+				Check:  resource.TestCheckNoResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#"),
+			},
+			{
+				PreConfig: func() {
+					alert, _, err := client.GetAlert(context.Background(), projectID, alertID)
+					if err != nil {
+						t.Fatalf("reading alert %s: %v", alertID, err)
+					}
+					if _, _, err := client.UpdateAlert(context.Background(), projectID, alertID, httpclient.AlertRequest{
+						Insight:         alert.Insight.ID,
+						Threshold:       alert.Threshold,
+						Condition:       alert.Condition,
+						Config:          alert.Config,
+						SubscribedUsers: []int64{},
+						ScheduleRestriction: &httpclient.AlertScheduleRestriction{
+							BlockedWindows: []httpclient.AlertBlockedWindow{{Start: "08:00", End: "09:00"}},
+						},
+					}); err != nil {
+						t.Fatalf("adding quiet hours to %s out of band: %v", alertID, err)
+					}
+				},
+				Config:             testAccAlertBasic(rName),
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Applying removes them again, which is what the upgrade note promises.
+			{
+				Config: testAccAlertBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_alert.test", "schedule_restriction.blocked_windows.#"),
+					testAccCheckAlertQuietHoursCleared("posthog_alert.test"),
+				),
+			},
 		},
 	})
 }
