@@ -2,7 +2,6 @@ package resource
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -77,12 +76,9 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 type blockedWindowsValidator struct{}
 
 func (v blockedWindowsValidator) Description(context.Context) string {
-	return fmt.Sprintf(
-		"blocked windows must not overlap or touch, must each span at least %d minutes, and must not be "+
-			"reshaped by PostHog: a window crossing midnight has to be the only one, two windows meeting at "+
-			"midnight are only allowed alongside a third, and they may not cover the whole day",
-		core.MinQuietHoursWindowMinutes,
-	)
+	return "blocked windows must not be reshaped by PostHog: they may not overlap or touch, a window " +
+		"crossing midnight has to be the only one, and two windows meeting at midnight are only allowed " +
+		"alongside a third"
 }
 
 func (v blockedWindowsValidator) MarkdownDescription(ctx context.Context) string {
@@ -231,21 +227,17 @@ func (o AlertOps) Schema() schema.Schema {
 				Attributes: map[string]schema.Attribute{
 					"blocked_windows": schema.SetNestedAttribute{
 						Required: true,
-						MarkdownDescription: fmt.Sprintf(
-							"Blocked time windows, half-open `[start, end)`, each spanning at least %d minutes. "+
-								"Windows must not overlap or touch, except that one may end at `00:00` where another "+
-								"starts. A window may wrap midnight (`end` before `start`), but only as the sole "+
-								"window, and two windows meeting at midnight are only allowed alongside a third. "+
-								"The windows may not cover the whole day, since the alert would never run. "+
-								"Between 1 and %d windows; remove `schedule_restriction` to disable quiet hours.",
-							core.MinQuietHoursWindowMinutes, core.MaxQuietHoursWindows,
-						),
+						MarkdownDescription: "Blocked time windows, half-open `[start, end)`. Windows must not " +
+							"overlap or touch, except that one may end at `00:00` where another starts. A window " +
+							"may wrap midnight (`end` before `start`), but only as the sole window, and two windows " +
+							"meeting at midnight are only allowed alongside a third. PostHog enforces its own " +
+							"limits on window length and count and reports them on apply. Remove " +
+							"`schedule_restriction` to disable quiet hours.",
 						Validators: []validator.Set{
 							// An empty set is not the same as no quiet hours: PostHog
 							// normalizes it to null, which would not match the configured
 							// (non-null) block and would fail the apply.
 							setvalidator.SizeAtLeast(1),
-							setvalidator.SizeAtMost(core.MaxQuietHoursWindows),
 							blockedWindowsValidator{},
 						},
 						NestedObject: schema.NestedAttributeObject{

@@ -15,19 +15,18 @@ import (
 // windows themselves mean the same thing and hit the same server-side handling, so the
 // rules live here once.
 //
-// PostHog does not store the windows it is given. It lays them on a single 24-hour
-// timeline, merges anything that touches or overlaps, and re-derives windows from the
-// merged result. A configuration it would reshape reads back different from the plan,
-// which Terraform reports as "Provider produced inconsistent result after apply" rather
-// than as recoverable drift. Every rule below exists to reject one such shape at plan
-// time, and each was confirmed against a live PostHog instance.
-const (
-	MinutesPerDay = 24 * 60
-	// MinQuietHoursWindowMinutes is the shortest window PostHog accepts.
-	MinQuietHoursWindowMinutes = 30
-	// MaxQuietHoursWindows is the most windows PostHog stores for one alert.
-	MaxQuietHoursWindows = 5
-)
+// Only one class of rule lives here: the shapes PostHog accepts and silently reshapes.
+// It does not store the windows it is given - it lays them on a single 24-hour timeline,
+// merges anything that touches or overlaps, and re-derives windows from the merged result.
+// Such a configuration reads back different from the plan, which Terraform reports as
+// "Provider produced inconsistent result after apply" rather than as recoverable drift.
+// There is no server error to surface for these, so the provider has to catch them.
+//
+// Limits the API enforces itself - the 30-minute minimum, the 5-window cap, and refusing
+// windows that cover the whole day - are deliberately NOT repeated here. Duplicating a
+// server constant means a provider release every time PostHog changes one, and rejecting
+// a configuration the server would accept. The API rejects those directly.
+const MinutesPerDay = 24 * 60
 
 // QuietHoursTimePattern is the single definition of the HH:MM grammar. Schema validators
 // and the parser below both check against it, so the layers cannot disagree about what a
@@ -84,22 +83,10 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 			continue
 		}
 
-		length := end - start
-		if length < 0 {
-			length += MinutesPerDay
-		}
-		if length < MinQuietHoursWindowMinutes {
-			diags.AddAttributeError(
-				attrPath,
-				"Quiet-hours window is too short",
-				fmt.Sprintf(
-					"Window %s spans %d minutes. PostHog requires each window to span at least %d minutes. "+
-						"PostHog can produce such a window itself when it splits a window crossing midnight, so "+
-						"an imported alert may carry one it will not accept back. Widen or drop it: the alert "+
-						"cannot be applied as stored.",
-					w.label(), length, MinQuietHoursWindowMinutes,
-				),
-			)
+		// Equal bounds block no time at all. PostHog rejects them ("Start and end must
+		// differ"), and treating them as a span here would read 00:00-00:00 as a whole-day
+		// block and produce reshape diagnostics for a window the API will refuse anyway.
+		if start == end {
 			continue
 		}
 
@@ -118,14 +105,6 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 		}
 	}
 
-	// Checked before overlap and reported alone: a whole-day block always overlaps too,
-	// and "combine them into one window" is the wrong advice here, since doing so yields a
-	// zero-length window that fails again for an unrelated reason.
-	if covered := quietHoursCoverageError(spans, attrPath); covered.HasError() {
-		diags.Append(covered...)
-		return diags
-	}
-
 	diags.Append(quietHoursOverlapErrors(spans, windows, attrPath)...)
 
 	// A window written as crossing midnight always expands to two spans, and PostHog only
@@ -134,13 +113,10 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 		diags.AddAttributeError(
 			attrPath,
 			"Quiet-hours window crossing midnight must be the only window",
-			fmt.Sprintf(
-				"A window whose end is before its start crosses midnight, and PostHog stores it as one window "+
-					"per side of midnight unless it is the only window configured. Either make it the only "+
-					"window, or split it yourself into a window ending at 00:00 and one starting at 00:00. "+
-					"Splitting costs a window slot, so it needs you to be under the limit of %d.",
-				MaxQuietHoursWindows,
-			),
+			"A window whose end is before its start crosses midnight, and PostHog stores it as one window "+
+				"per side of midnight unless it is the only window configured. Either make it the only "+
+				"window, or split it yourself into a window ending at 00:00 and one starting at 00:00. "+
+				"Splitting costs a window slot, so PostHog's cap on the number of windows applies.",
 		)
 		return diags
 	}
@@ -171,33 +147,6 @@ func ValidateQuietHoursWindows(windows []QuietHoursWindow, attrPath path.Path) d
 		)
 	}
 
-	return diags
-}
-
-// quietHoursCoverageError reports windows that between them block the whole day. PostHog
-// refuses that outright, and the overlap message would otherwise advise combining the
-// windows, which produces a zero-length window that fails again for another reason.
-func quietHoursCoverageError(spans []span, attrPath path.Path) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	blocked := 0
-	var covered [MinutesPerDay]bool
-	for _, s := range spans {
-		for m := s.start; m < s.end && m < MinutesPerDay; m++ {
-			if !covered[m] {
-				covered[m] = true
-				blocked++
-			}
-		}
-	}
-	if blocked >= MinutesPerDay {
-		diags.AddAttributeError(
-			attrPath,
-			"Quiet-hours windows cover the whole day",
-			"These windows block every minute of the day, so the alert could never run. PostHog rejects "+
-				"this. Leave at least one gap when the alert is allowed to be evaluated.",
-		)
-	}
 	return diags
 }
 

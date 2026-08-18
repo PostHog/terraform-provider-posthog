@@ -667,10 +667,6 @@ func TestLogsAlert_RejectsInvalidConfigs(t *testing.T) {
 			body:      `blocked_windows = [{ start = "01:00", end = "02:00" }, { start = "02:00", end = "03:00" }]`,
 			wantError: regexp.MustCompile(`overlap`),
 		},
-		"window shorter than thirty minutes": {
-			body:      `blocked_windows = [{ start = "02:00", end = "02:15" }]`,
-			wantError: regexp.MustCompile(`Quiet-hours window is too short`),
-		},
 		"crossing window alongside another": {
 			body:      `blocked_windows = [{ start = "22:00", end = "07:00" }, { start = "12:00", end = "13:00" }]`,
 			wantError: regexp.MustCompile(`must be the only window`),
@@ -684,16 +680,6 @@ func TestLogsAlert_RejectsInvalidConfigs(t *testing.T) {
 			// Terraform hard-wraps diagnostics and the break lands mid-sentence, so match
 			// only the fragment that cannot straddle it.
 			wantError: regexp.MustCompile(`24-hour time in HH:MM format`),
-		},
-		"more than five windows": {
-			body: `blocked_windows = [
-    { start = "00:00", end = "01:00" }, { start = "02:00", end = "03:00" },
-    { start = "04:00", end = "05:00" }, { start = "06:00", end = "07:00" },
-    { start = "08:00", end = "09:00" }, { start = "10:00", end = "11:00" },
-  ]`,
-			// Terraform hard-wraps diagnostics, so the pattern stops before the line
-			// break that falls between the count and "elements".
-			wantError: regexp.MustCompile(`set must contain at most 5`),
 		},
 	}
 
@@ -805,6 +791,51 @@ resource "posthog_logs_alert" "test" {
 			},
 		},
 	})
+}
+
+// TestLogsAlert_ServerEnforcedWindowLimits pins the rules the provider deliberately does
+// NOT duplicate. Window length and count are PostHog's constants, so these configs must
+// reach the API and be rejected by it. Unlike the insight-alert endpoint, this one reports
+// which rule was broken, which is what makes delegating cheap here.
+func TestLogsAlert_ServerEnforcedWindowLimits(t *testing.T) {
+	skipIfNotAcceptance(t)
+	skipIfNoLogsAlerting(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	tests := map[string]struct {
+		windows   string
+		wantError *regexp.Regexp
+	}{
+		"window shorter than PostHog allows": {
+			windows:   `{ start = "02:00", end = "02:15" },`,
+			wantError: regexp.MustCompile(`must span at least 30 minutes`),
+		},
+		"more windows than PostHog stores": {
+			windows: `
+    { start = "00:00", end = "01:00" }, { start = "02:00", end = "03:00" },
+    { start = "04:00", end = "05:00" }, { start = "06:00", end = "07:00" },
+    { start = "08:00", end = "09:00" }, { start = "10:00", end = "11:00" },`,
+			// Terraform hard-wraps the body, so stop before the break.
+			wantError: regexp.MustCompile(`At most 5 blocked`),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 func() { testAccPreCheck(t) },
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				CheckDestroy:             testAccCheckLogsAlertDestroy,
+				Steps: []resource.TestStep{
+					{
+						Config:      testAccLogsAlertWithBlockedWindows(rName, test.windows),
+						ExpectError: test.wantError,
+					},
+				},
+			})
+		})
+	}
 }
 
 // testAccCheckLogsAlertQuietHoursCleared asserts PostHog holds no blocked windows for the

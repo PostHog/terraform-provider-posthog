@@ -299,15 +299,14 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			},
 			"blocked_windows": schema.SetNestedAttribute{
 				Optional: true,
-				MarkdownDescription: "Quiet hours: up to 5 time windows during which the alert is not evaluated. Times " +
-					"use the project timezone. Each window must span at least 30 minutes, and windows must not " +
-					"overlap or touch each other. A window may cross midnight (for example `22:00` to `06:00`), but " +
-					"only as the sole window: PostHog stores blocked windows on a single merged 24-hour timeline, " +
-					"and a crossing window alongside another one is stored as two windows rather than one. Omit the " +
-					"attribute, or set it to an empty list, to disable quiet hours.",
-				Validators: []validator.Set{
-					setvalidator.SizeAtMost(core.MaxQuietHoursWindows),
-				},
+				MarkdownDescription: "Quiet hours: time windows during which the alert is not evaluated. Times " +
+					"use the project timezone. Windows must not overlap or touch each other. A window may cross " +
+					"midnight (for example `22:00` to `06:00`), but only as the sole window: PostHog stores " +
+					"blocked windows on a single merged 24-hour timeline, and a crossing window alongside another " +
+					"one is stored as two windows rather than one. PostHog enforces its own limits on window " +
+					"length and count and reports them on apply. Omit the attribute, or set it to an empty list, " +
+					"to disable quiet hours.",
+				Validators: []validator.Set{},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"start": schema.StringAttribute{

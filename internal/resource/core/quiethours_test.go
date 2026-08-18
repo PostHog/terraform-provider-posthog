@@ -42,11 +42,9 @@ func TestQuietHoursMinutes(t *testing.T) {
 // confirmed against PostHog's own normalizer and, for the rejections, against the live API.
 func TestValidateQuietHoursWindows(t *testing.T) {
 	const (
-		tooShort  = "Quiet-hours window is too short"
 		overlaps  = "Quiet-hours windows overlap"
 		crossesMN = "Quiet-hours window crossing midnight must be the only window"
 		meetsAtMN = "Quiet-hours windows meeting at midnight are stored as one"
-		fullDay   = "Quiet-hours windows cover the whole day"
 	)
 
 	w := func(pairs ...[2]string) []QuietHoursWindow {
@@ -71,30 +69,39 @@ func TestValidateQuietHoursWindows(t *testing.T) {
 		"crossing window measured across midnight":  {windows: w([2]string{"23:50", "00:30"})},
 		"unrecognised times are left to the schema": {windows: w([2]string{"nonsense", "06:00"}, [2]string{"05:00", "09:00"})},
 
-		"too short":              {windows: w([2]string{"02:00", "02:15"}), wantSummaries: []string{tooShort}},
-		"zero length":            {windows: w([2]string{"02:00", "02:00"}), wantSummaries: []string{tooShort}},
+		// Window length and count are PostHog's to enforce, so a short window is not a
+		// finding here. The API rejects it with its own message on apply.
+		"short window is left to the API": {windows: w([2]string{"02:00", "02:15"})},
+		// Equal bounds block no time. Skipped rather than treated as a span, since
+		// 00:00-00:00 would otherwise read as a whole-day block.
+		"zero length is skipped": {windows: w([2]string{"02:00", "02:00"})},
 		"touching":               {windows: w([2]string{"00:00", "06:00"}, [2]string{"06:00", "09:00"}), wantSummaries: []string{overlaps}},
 		"overlapping":            {windows: w([2]string{"00:00", "06:00"}, [2]string{"05:00", "09:00"}), wantSummaries: []string{overlaps}},
 		"contained":              {windows: w([2]string{"00:00", "09:00"}, [2]string{"02:00", "03:00"}), wantSummaries: []string{overlaps}},
 		"crossing plus daytime":  {windows: w([2]string{"22:00", "07:00"}, [2]string{"12:00", "13:00"}), wantSummaries: []string{crossesMN}},
 		"midnight pair alone":    {windows: w([2]string{"00:00", "06:00"}, [2]string{"22:00", "00:00"}), wantSummaries: []string{meetsAtMN}},
 		"midnight pair reversed": {windows: w([2]string{"22:00", "00:00"}, [2]string{"00:00", "06:00"}), wantSummaries: []string{meetsAtMN}},
-		"whole day":              {windows: w([2]string{"00:00", "12:00"}, [2]string{"12:00", "00:00"}), wantSummaries: []string{fullDay}},
+		// A whole-day block necessarily touches, and PostHog refuses it outright, so the
+		// overlap rule is enough to stop it reaching the API in a reshapeable form.
+		"whole day still caught as a reshape": {
+			windows:       w([2]string{"00:00", "12:00"}, [2]string{"12:00", "00:00"}),
+			wantSummaries: []string{overlaps, meetsAtMN},
+		},
 
 		// Both fire: the crossing window overlaps the morning one, and it is not alone.
 		"crossing window overlaps morning": {
 			windows:       w([2]string{"22:00", "07:00"}, [2]string{"06:00", "08:00"}),
 			wantSummaries: []string{overlaps, crossesMN},
 		},
-		// A skipped window can fabricate the two-span shape the meets-at-midnight rule
-		// keys off, so that rule alone waits for a complete timeline.
-		"short window hides only the midnight rule": {
+		// Short windows now take part in the timeline like any other, so they overlap
+		// normally rather than being skipped and leaving a partial picture.
+		"short window overlaps its neighbour": {
 			windows:       w([2]string{"02:00", "02:10"}, [2]string{"00:00", "06:00"}, [2]string{"22:00", "00:00"}),
-			wantSummaries: []string{tooShort},
+			wantSummaries: []string{overlaps},
 		},
 		"short window does not hide an overlap": {
 			windows:       w([2]string{"02:00", "02:10"}, [2]string{"08:00", "12:00"}, [2]string{"11:00", "14:00"}),
-			wantSummaries: []string{tooShort, overlaps},
+			wantSummaries: []string{overlaps},
 		},
 	}
 
