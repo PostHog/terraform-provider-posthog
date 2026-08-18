@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -680,4 +681,47 @@ func TestLogsAlertMapResponseToModel_MapsBlockedWindows(t *testing.T) {
 		End:   types.StringValue("23:30"),
 	})
 	assert.Equal(t, expected, model.BlockedWindows)
+}
+
+// snooze_until is managed only when the configuration declares it. A snooze an operator
+// sets in the PostHog UI must not be pulled into state, because the next apply would then
+// revert it.
+func TestLogsAlertMapResponseToModel_SnoozeUntil(t *testing.T) {
+	t.Run("adopted when declared", func(t *testing.T) {
+		model := LogsAlertTFModel{SnoozeUntil: types.StringValue("2026-01-01T00:00:00Z")}
+
+		diags := LogsAlertOps{}.MapResponseToModel(context.Background(), httpclient.LogsAlert{
+			ID:          "019dbe94-cec8-781b-9470-4a970cd69ebf",
+			SnoozeUntil: util.StringPtr("2026-02-01T09:00:00Z"),
+		}, &model)
+		require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
+
+		assert.Equal(t, types.StringValue("2026-02-01T09:00:00Z"), model.SnoozeUntil)
+	})
+
+	t.Run("left null when the config never declared it", func(t *testing.T) {
+		model := LogsAlertTFModel{}
+
+		diags := LogsAlertOps{}.MapResponseToModel(context.Background(), httpclient.LogsAlert{
+			ID:          "019dbe94-cec8-781b-9470-4a970cd69ebf",
+			SnoozeUntil: util.StringPtr("2026-02-01T09:00:00Z"),
+		}, &model)
+		require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
+
+		assert.True(t, model.SnoozeUntil.IsNull(),
+			"an out-of-band snooze must not be adopted, or the next apply would revert it")
+	})
+}
+
+// An undeclared snooze is omitted from the request entirely, so the server keeps its own.
+func TestLogsAlertBuildCreateRequest_SnoozeUntil(t *testing.T) {
+	req, diags := LogsAlertOps{}.BuildCreateRequest(context.Background(), LogsAlertTFModel{
+		SeverityLevels: stringSet(t, "error"),
+	})
+	require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
+	assert.Nil(t, req.SnoozeUntil)
+
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "snooze_until")
 }

@@ -35,6 +35,11 @@ var hhmmPattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 // PostHog trims names server-side (verified against a live instance), so a name with
 // surrounding whitespace reads back different from the config and fails every apply
 // without ever self-healing, since the config keeps the whitespace.
+// rfc3339Pattern is deliberately loose about the offset: the API echoes timestamps back
+// normalised to UTC, and the response mapper only writes them into state when the
+// practitioner declared one, so exact-format round-tripping is not required here.
+var rfc3339Pattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
+
 var nonBlankPattern = regexp.MustCompile(`^\S(.*\S)?$`)
 
 const (
@@ -126,6 +131,7 @@ type LogsAlertTFModel struct {
 	DatapointsToAlarm types.Int64          `tfsdk:"datapoints_to_alarm"`
 	CooldownMinutes   types.Int64          `tfsdk:"cooldown_minutes"`
 	BlockedWindows    types.Set            `tfsdk:"blocked_windows"`
+	SnoozeUntil       types.String         `tfsdk:"snooze_until"`
 	State             types.String         `tfsdk:"state"`
 }
 
@@ -147,19 +153,13 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"count crosses the threshold.\n\n" +
 			"At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the " +
 			"alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
-			"~> **Log alerts are gated behind a feature flag.** The API returns `403` with " +
-			"`This action requires feature flag 'logs-alerting' to be enabled for your organization` until " +
-			"PostHog enables it for you. A `403` on the first apply means the flag is off, not that the " +
-			"credentials or configuration are wrong.\n\n" +
-			"~> **Notification destinations are not managed by this resource.** PostHog attaches Slack, webhook, " +
-			"and Microsoft Teams destinations through a separate endpoint that the alert API does not read back, " +
-			"so Terraform cannot track them without reporting permanent drift. Attach destinations from the " +
-			"PostHog UI. An alert with no destination still evaluates, but notifies nobody. This also means any " +
-			"change that replaces the resource — notably changing `project_id` — creates a new alert with no " +
-			"destinations attached, which you must re-attach manually.\n\n" +
-			"~> An alert whose `state` is `broken` or `snoozed` has stopped notifying. Terraform does not manage " +
-			"either condition, so `terraform plan` stays clean while the alert is silent; reset or unsnooze it " +
-			"from the PostHog UI.\n\n" +
+			"~> **An alert with no destination still evaluates, but notifies nobody.** Delivery is not a field " +
+			"on this resource. When the alert fires PostHog emits the internal event `$logs_alert_firing`, and " +
+			"routing that to Slack, a webhook or Microsoft Teams is a separate `posthog_hog_function` of " +
+			"`type = \"internal_destination\"` filtered to this alert's id. That is the same pattern insight " +
+			"alerts use, so notifications are manageable as code today: see " +
+			"`examples/alert-notifications/logs-alert.tf`. Destinations attached from the PostHog UI are hog " +
+			"functions too, so Terraform does not adopt them unless you declare them.\n\n" +
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
 			"retains its last applied value rather than restoring the documented default — set it explicitly to " +
@@ -336,11 +336,23 @@ func (o LogsAlertOps) Schema() schema.Schema {
 					},
 				},
 			},
+			"snooze_until": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "RFC 3339 timestamp until which the alert is silenced, for example " +
+					"`2026-01-31T09:00:00Z`. Useful for planned work when you want a window of silence in " +
+					"version control rather than in someone's memory.\n\n" +
+					"Managed only when you set it. Leave it out and Terraform never sends it, so a snooze an " +
+					"operator sets in the PostHog UI is left alone rather than being reverted on the next apply.",
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(rfc3339Pattern, "must be an RFC 3339 timestamp, for example 2026-01-31T09:00:00Z"),
+				},
+			},
 			"state": schema.StringAttribute{
 				Computed: true,
-				MarkdownDescription: "Current evaluation state of the alert: `not_firing`, `firing`, `snoozed`, or " +
-					"`broken`. `broken` means PostHog stopped evaluating the alert after repeated failed checks — it " +
-					"notifies nobody until it is reset from the PostHog UI.",
+				MarkdownDescription: "Current evaluation state of the alert, as PostHog reports it: `not_firing`, " +
+					"`firing`, `pending_resolve`, `errored`, `snoozed` or `broken`. A `broken` alert has stopped " +
+					"evaluating after repeated failed checks and notifies nobody; clearing that is a PostHog UI " +
+					"action, so the provider warns about it on refresh rather than managing it.",
 			},
 		},
 	}
@@ -379,6 +391,7 @@ func (o LogsAlertOps) BuildCreateRequest(ctx context.Context, model LogsAlertTFM
 	}
 	req.Filters.FilterGroup = filterGroup
 
+	req.SnoozeUntil = util.StringPtrFromValue(model.SnoozeUntil)
 	req.ThresholdCount = util.Int64PtrFromValue(model.ThresholdCount)
 	req.ThresholdOperator = util.StringPtrFromValue(model.ThresholdOperator)
 	req.WindowMinutes = util.Int64PtrFromValue(model.WindowMinutes)
@@ -416,6 +429,13 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.Enabled = core.PtrToBool(resp.Enabled)
 	model.State = core.PtrToStringNullIfEmptyTrimmed(resp.State)
+
+	// Only reflected when the configuration declares it. Adopting a snooze set in the
+	// PostHog UI would make the next apply revert it, which is the operator's call to make,
+	// not Terraform's.
+	if !model.SnoozeUntil.IsNull() && !model.SnoozeUntil.IsUnknown() {
+		model.SnoozeUntil = core.PtrToStringNullIfEmptyTrimmed(resp.SnoozeUntil)
+	}
 
 	diags.Append(notNotifyingWarnings(resp)...)
 

@@ -4,7 +4,7 @@
 
 ### Features
 
-- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (notification destinations are attached in the PostHog UI)
+- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (notification destinations and snoozing are managed as code; see `examples/alert-notifications/logs-alert.tf`)
 
 ## 1.0.0
 

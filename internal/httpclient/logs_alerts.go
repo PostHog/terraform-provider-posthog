@@ -17,6 +17,7 @@ type LogsAlert struct {
 	DatapointsToAlarm   *int64             `json:"datapoints_to_alarm,omitempty"`
 	CooldownMinutes     *int64             `json:"cooldown_minutes,omitempty"`
 	ScheduleRestriction *LogsAlertSchedule `json:"schedule_restriction,omitempty"`
+	SnoozeUntil         *string            `json:"snooze_until,omitempty"`
 	State               *string            `json:"state,omitempty"`
 	CreatedAt           *string            `json:"created_at,omitempty"`
 	UpdatedAt           *string            `json:"updated_at,omitempty"`
@@ -36,6 +37,9 @@ type LogsAlertRequest struct {
 	DatapointsToAlarm   *int64             `json:"datapoints_to_alarm,omitempty"`
 	CooldownMinutes     *int64             `json:"cooldown_minutes,omitempty"`
 	ScheduleRestriction *LogsAlertSchedule `json:"schedule_restriction"`
+	// Sent only when configured. Omitting it leaves whatever snooze an operator set in
+	// the PostHog UI untouched, which is the point: Terraform manages this only if asked.
+	SnoozeUntil *string `json:"snooze_until,omitempty"`
 }
 
 // LogsAlertFilters omits no fields: the API accepts null for each key and treats the
