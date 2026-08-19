@@ -156,9 +156,17 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 				},
 			},
 			"webhook_url": schema.StringAttribute{
-				Optional: true,
+				Optional:  true,
+				Sensitive: true,
 				MarkdownDescription: "URL to POST the notification to. Required when `type` is `webhook` or " +
-					"`teams`. For `teams`, this is the Microsoft Teams incoming webhook URL.",
+					"`teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive " +
+					"because the secret is in the URL: whoever holds it can post to the channel.\n\n" +
+					"Write-only: PostHog redacts it to scheme and host when reading, so Terraform keeps " +
+					"whatever you configured and never reports drift on it. A URL edited in the PostHog UI " +
+					"goes unnoticed.\n\n" +
+					"An imported destination has it unset, because the real URL cannot be read back. The " +
+					"first plan after importing a `webhook` or `teams` destination therefore replaces it, " +
+					"which is what puts the configured URL into state.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -227,12 +235,13 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 		model.Type = types.StringValue(resp.Type)
 		model.SlackWorkspaceID = util.PtrToInt64(resp.SlackWorkspaceID)
 		model.SlackChannelID = core.PtrToStringNullIfEmptyTrimmed(resp.SlackChannelID)
-		model.WebhookURL = core.PtrToStringNullIfEmptyTrimmed(resp.WebhookURL)
 	}
 
-	// slack_channel_name is deliberately absent. PostHog only uses it to build the display
-	// name and never stores it, so touching it here would null out the configured value and
-	// show drift on every plan.
+	// slack_channel_name and webhook_url are deliberately absent. PostHog only uses the
+	// channel name to build the display name and never stores it, and it redacts the webhook
+	// URL to scheme and host on read. Neither can be compared to what was configured, so
+	// mapping either one would show drift on every plan and could send the masked URL back
+	// as if it were real.
 
 	return diags
 }
@@ -353,6 +362,9 @@ func (o LogsAlertDestinationOps) Create(ctx context.Context, client httpclient.P
 func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.LogsAlertDestination, httpclient.HTTPStatusCode, error) {
 	destinations, status, err := client.ListLogsAlertDestinations(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
 	if err != nil {
+		if status == http.StatusNotFound {
+			status, err = classifyDestinationsNotFound(ctx, client, model, err)
+		}
 		return httpclient.LogsAlertDestination{}, status, err
 	}
 
@@ -369,10 +381,40 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 		"log alert destination %s not found on alert %s", model.GetID(), model.GetAlertID())
 }
 
+// classifyDestinationsNotFound decides what a 404 from the destinations list means. Only a
+// deleted alert may keep the 404 status, because the generic resource drops any 404 from
+// state: a PostHog too old to serve the list endpoint answers the same way, and taking that
+// for a deletion would forget a live destination and then create a duplicate.
+func classifyDestinationsNotFound(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel, listErr error) (httpclient.HTTPStatusCode, error) {
+	_, alertStatus, alertErr := client.GetLogsAlert(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
+	if alertErr == nil {
+		return 0, fmt.Errorf(
+			"alert %s exists, but listing its destinations answered 404, so this PostHog does not "+
+				"serve GET .../logs/alerts/<alert>/destinations/. Instances older than that endpoint "+
+				"can create and delete destinations but not read them back. Upgrade PostHog, or stop "+
+				"managing this destination with Terraform (terraform state rm). Underlying error: %w",
+			model.GetAlertID(), listErr)
+	}
+
+	if alertStatus == http.StatusNotFound {
+		// The alert is gone, and PostHog deletes an alert's destinations with it.
+		return http.StatusNotFound, listErr
+	}
+
+	return alertStatus, fmt.Errorf(
+		"listing destinations for alert %s answered 404, and checking whether the alert still exists "+
+			"failed, so Terraform cannot tell a deleted destination from an unavailable endpoint. "+
+			"Alert lookup error: %w", model.GetAlertID(), alertErr)
+}
+
 func (o LogsAlertDestinationOps) Update(_ context.Context, _ httpclient.PosthogClient, _ LogsAlertDestinationTFModel, _ httpclient.LogsAlertDestinationRequest) (httpclient.LogsAlertDestination, httpclient.HTTPStatusCode, error) {
 	return httpclient.LogsAlertDestination{}, 0, fmt.Errorf("log alert destinations do not support updates; this is a bug if you see this error")
 }
 
+// Delete needs no counterpart to classifyDestinationsNotFound. The delete endpoint has been
+// there for as long as the create endpoint, so an instance Terraform created a destination on
+// serves it, and the only 404 it returns is for a missing alert. PostHog deletes an alert's
+// destinations with the alert, so treating that 404 as "already deleted" is correct.
 func (o LogsAlertDestinationOps) Delete(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteLogsAlertDestination(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), hogFunctionIDsFromState(model))
 }

@@ -89,6 +89,11 @@ func (c *PosthogClient) DeleteLogsAlert(ctx context.Context, projectID, id strin
 // The Slack and webhook fields are only populated for the type that uses them. There is no
 // slack_channel_name: PostHog accepts one on create to build the destination's display name
 // but never stores it, so no endpoint returns it.
+//
+// WebhookURL comes back redacted to scheme and host, such as "https://example.com/…", because
+// the full URL is a bearer credential and reading destinations only needs the logs:read scope.
+// The stored URL is untouched, so the redaction is a read-response mask and never a value to
+// send back.
 type LogsAlertDestination struct {
 	HogFunctionIDs   []string `json:"hog_function_ids"`
 	Type             string   `json:"type,omitempty"`
@@ -117,10 +122,12 @@ func logsAlertDestinationsPath(projectID, alertID string) string {
 	return fmt.Sprintf("/api/projects/%s/logs/alerts/%s/destinations/", projectID, alertID)
 }
 
-// ListLogsAlertDestinations returns every destination group attached to an alert. The
-// endpoint answers with a bare JSON array rather than the usual paginated envelope.
+// ListLogsAlertDestinations returns every destination group attached to an alert. It follows
+// every page: a destination has no id to fetch it by, so the caller finds its own by scanning
+// the list, and stopping at the first page would report a destination on a later page as
+// deleted.
 func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID, alertID string) ([]LogsAlertDestination, HTTPStatusCode, error) {
-	return doGet[[]LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID))
+	return listAllWithStatus[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID))
 }
 
 // CreateLogsAlertDestination creates one destination group. The response carries only the

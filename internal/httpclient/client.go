@@ -213,13 +213,22 @@ func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCod
 
 // listAll fetches all pages from a paginated endpoint, following Next links until exhausted.
 func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, error) {
+	all, _, err := listAllWithStatus[T](c, ctx, initialPath)
+	return all, err
+}
+
+// listAllWithStatus is listAll for callers that need the status of the request that failed,
+// such as a resource read that turns a 404 into "deleted outside Terraform".
+func listAllWithStatus[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, HTTPStatusCode, error) {
 	var all []T
+	var status HTTPStatusCode
 	path := initialPath
 
 	for path != "" {
-		page, _, err := doGet[PaginatedResponse[T]](c, ctx, path)
+		page, pageStatus, err := doGet[PaginatedResponse[T]](c, ctx, path)
+		status = pageStatus
 		if err != nil {
-			return nil, err
+			return nil, status, err
 		}
 
 		all = append(all, page.Results...)
@@ -243,5 +252,5 @@ func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) (
 		}
 	}
 
-	return all, nil
+	return all, status, nil
 }

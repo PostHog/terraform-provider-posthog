@@ -79,7 +79,11 @@ resource "posthog_logs_alert_destination" "checkout_errors_teams" {
 
 Write-only: PostHog uses it to build the display name and never stores it, so nothing can read it back. Terraform keeps whatever you configured and never reports drift on it, and an imported destination has it unset. Changing it forces replacement, which is the only way to change the display name.
 - `slack_workspace_id` (Number) ID of the Slack integration to post through, as created by connecting Slack to the project in the PostHog UI. Required when `type` is `slack`.
-- `webhook_url` (String) URL to POST the notification to. Required when `type` is `webhook` or `teams`. For `teams`, this is the Microsoft Teams incoming webhook URL.
+- `webhook_url` (String, Sensitive) URL to POST the notification to. Required when `type` is `webhook` or `teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive because the secret is in the URL: whoever holds it can post to the channel.
+
+Write-only: PostHog redacts it to scheme and host when reading, so Terraform keeps whatever you configured and never reports drift on it. A URL edited in the PostHog UI goes unnoticed.
+
+An imported destination has it unset, because the real URL cannot be read back. The first plan after importing a `webhook` or `teams` destination therefore replaces it, which is what puts the configured URL into state.
 
 ### Read-Only
 
@@ -102,4 +106,9 @@ terraform import posthog_logs_alert_destination.example 12345/your-logs-alert-uu
 
 # slack_channel_name is write-only, so an imported Slack destination has it unset. Add it to
 # your configuration to name the destination in the PostHog UI, which replaces it.
+
+# webhook_url is write-only too: the read redacts it to scheme and host, so an imported
+# webhook or teams destination has it unset. The first plan after the import replaces the
+# destination to put the configured URL into state. Import Slack destinations to adopt them
+# in place; a webhook or teams destination cannot be adopted without that replacement.
 ```

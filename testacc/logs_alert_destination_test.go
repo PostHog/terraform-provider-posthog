@@ -114,6 +114,45 @@ func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCh
 	}
 }
 
+// testAccCheckLogsAlertDestinationWebhookURLRedacted asserts PostHog masks the URL on read
+// while Terraform keeps the configured one in state. That gap is why the provider never maps
+// webhook_url back, so it is worth pinning against the live API rather than a fake.
+func testAccCheckLogsAlertDestinationWebhookURLRedacted(resourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", resourceName)
+		}
+
+		client := httpclient.NewDefaultClient(
+			os.Getenv("POSTHOG_HOST"),
+			os.Getenv("POSTHOG_API_KEY"),
+			"test",
+		)
+
+		alertID := rs.Primary.Attributes["alert_id"]
+		destinations, _, err := client.ListLogsAlertDestinations(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), alertID)
+		if err != nil {
+			return fmt.Errorf("listing destinations for alert %s: %w", alertID, err)
+		}
+
+		stateIDs := strings.Split(rs.Primary.ID, ",")
+		for _, destination := range destinations {
+			if !slices.ContainsFunc(destination.HogFunctionIDs, func(id string) bool { return slices.Contains(stateIDs, id) }) {
+				continue
+			}
+			if destination.WebhookURL == nil {
+				return fmt.Errorf("destination %s returned no webhook_url", rs.Primary.ID)
+			}
+			if *destination.WebhookURL == rs.Primary.Attributes["webhook_url"] {
+				return fmt.Errorf("PostHog returned the full webhook URL for destination %s, expected it redacted", rs.Primary.ID)
+			}
+			return nil
+		}
+		return fmt.Errorf("logs alert destination %s not found on alert %s", rs.Primary.ID, alertID)
+	}
+}
+
 // testAccCheckLogsAlertDestinationsDistinct asserts two destinations on one alert own
 // separate hog functions. Two of the same type share a template id, so a read that groups by
 // template alone would hand both resources the same id.
@@ -162,10 +201,11 @@ func TestLogsAlertDestination_Webhook(t *testing.T) {
 					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "hog_function_ids.#"),
 					resource.TestCheckResourceAttrPair(logsAlertDestinationAddress, "alert_id", "posthog_logs_alert.test", "id"),
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
+					testAccCheckLogsAlertDestinationWebhookURLRedacted(logsAlertDestinationAddress),
 				),
 			},
 			// Nothing changed, so nothing should be planned. A read that mishandles the
-			// group would show drift here.
+			// group, or that adopts the redacted webhook_url, would show drift here.
 			{
 				Config:   testAccLogsAlertDestinationWebhook(rName, "https://example.com/hooks/first"),
 				PlanOnly: true,
@@ -360,6 +400,10 @@ func TestLogsAlertDestination_ReplaceOnChange(t *testing.T) {
 // TestLogsAlertDestination_Import covers the project_id/alert_id/hog_function_id form
 // documented in examples/resources/posthog_logs_alert_destination/import.sh. The import
 // names one hog function and the read has to find the whole group behind it.
+//
+// An imported webhook or teams destination has webhook_url unset, because the read redacts
+// it. The first plan after such an import replaces the destination, which is what puts the
+// configured URL into state.
 func TestLogsAlertDestination_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -389,10 +433,10 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					return fmt.Sprintf("%s/%s/%s", getProjectID(), rs.Primary.Attributes["alert_id"], hogFunctionID), nil
 				},
 				ImportStateVerify: true,
-				// slack_channel_name is write-only, so an imported destination cannot have
-				// one. This config sets no channel name either, but the ignore documents why
-				// a comparison would be wrong.
-				ImportStateVerifyIgnore: []string{"slack_channel_name"},
+				// Both are write-only. PostHog never stores slack_channel_name, and it
+				// redacts webhook_url to scheme and host on read, so neither can be compared
+				// against what the create step configured.
+				ImportStateVerifyIgnore: []string{"slack_channel_name", "webhook_url"},
 				ImportStateCheck: func(states []*terraform.InstanceState) error {
 					if len(states) != 1 {
 						return fmt.Errorf("expected 1 imported state, got %d", len(states))
@@ -401,6 +445,11 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					// whole group, so the imported id must list more than what was given.
 					if got := states[0].Attributes["hog_function_ids.#"]; got == "" || got == "0" {
 						return fmt.Errorf("imported destination has no hog_function_ids")
+					}
+					// The redacted URL must not land in state: it would read as the real one,
+					// and the next apply would offer it back to PostHog.
+					if got, ok := states[0].Attributes["webhook_url"]; ok {
+						return fmt.Errorf("imported destination has webhook_url %q, expected it unset", got)
 					}
 					return nil
 				},
