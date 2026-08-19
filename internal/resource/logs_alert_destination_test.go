@@ -21,8 +21,6 @@ const (
 	testLogsAlertDestinationAlertID   = "019dbe94-cec8-781b-9470-4a970cd69ebf"
 )
 
-// slackDestination is the model a valid Slack configuration produces, as the starting point
-// for cases that drop or add one attribute.
 func slackDestination() LogsAlertDestinationTFModel {
 	return LogsAlertDestinationTFModel{
 		AlertID:          types.StringValue(testLogsAlertDestinationAlertID),
@@ -82,8 +80,6 @@ func TestLogsAlertDestinationBuildCreateRequest(t *testing.T) {
 	}
 }
 
-// There is no update endpoint, and every attribute forces replacement, so an update path
-// that ever runs is a provider bug rather than something to send to the API.
 func TestLogsAlertDestinationUpdateIsRefused(t *testing.T) {
 	_, diags := LogsAlertDestinationOps{}.BuildUpdateRequest(context.Background(), slackDestination(), slackDestination())
 	require.True(t, diags.HasError(), "expected an update to be refused")
@@ -92,8 +88,23 @@ func TestLogsAlertDestinationUpdateIsRefused(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A create response carries only the hog function ids, so everything the practitioner
-// configured has to survive being mapped through it.
+func TestLogsAlertDestinationID_DoesNotDependOnTheOrderPostHogReturnsTheIDsIn(t *testing.T) {
+	responseOrder := []string{"hf-2", "hf-1", "hf-3"}
+
+	assert.Equal(t, "hf-1,hf-2,hf-3", logsAlertDestinationID(responseOrder))
+	assert.Equal(t, logsAlertDestinationID([]string{"hf-3", "hf-1", "hf-2"}), logsAlertDestinationID(responseOrder))
+	assert.Equal(t, []string{"hf-2", "hf-1", "hf-3"}, responseOrder, "building the id must not reorder the response")
+}
+
+func TestLogsAlertDestinationID_RoundTripsThroughHogFunctionIDsFromState(t *testing.T) {
+	hogFunctionIDs := []string{"019dbe94-cec8-781b-9470-4a970cd69ebf", "019dbe94-cec8-7000-8000-000000000001"}
+
+	model := LogsAlertDestinationTFModel{}
+	require.NoError(t, model.SetID(logsAlertDestinationID(hogFunctionIDs)))
+
+	assert.ElementsMatch(t, hogFunctionIDs, hogFunctionIDsFromState(model))
+}
+
 func TestLogsAlertDestinationMapResponseToModel_CreateKeepsConfiguredValues(t *testing.T) {
 	model := slackDestination()
 	model.SlackChannelName = types.StringValue("#alerts")
@@ -103,8 +114,6 @@ func TestLogsAlertDestinationMapResponseToModel_CreateKeepsConfiguredValues(t *t
 	diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), resp, &model)
 
 	require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
-	// The id sorts the ids so it does not depend on the order PostHog returns them in. The
-	// attribute keeps the response order, which a set makes immaterial.
 	assert.Equal(t, types.StringValue("hf-1,hf-2"), model.ID)
 	assert.Equal(t, stringSet(t, "hf-2", "hf-1"), model.HogFunctionIDs)
 	assert.Equal(t, types.StringValue(destinationTypeSlack), model.Type)
@@ -113,7 +122,6 @@ func TestLogsAlertDestinationMapResponseToModel_CreateKeepsConfiguredValues(t *t
 	assert.Equal(t, types.StringValue("#alerts"), model.SlackChannelName)
 }
 
-// A read returns the whole group, and is the only response that can correct drift.
 func TestLogsAlertDestinationMapResponseToModel_ReadAdoptsServerValues(t *testing.T) {
 	model := slackDestination()
 
@@ -131,13 +139,9 @@ func TestLogsAlertDestinationMapResponseToModel_ReadAdoptsServerValues(t *testin
 	assert.Equal(t, types.StringValue("C9999999999"), model.SlackChannelID)
 }
 
-// webhook_url cannot round-trip: the read redacts it to scheme and host. Adopting the
-// redacted value would show drift on every plan, and the next apply would offer the mask to
-// PostHog as if it were the real URL.
-func TestLogsAlertDestinationMapResponseToModel_NeverAdoptsRedactedWebhookURL(t *testing.T) {
+func TestLogsAlertDestinationMapResponseToModel_NeverAdoptsTheRedactedWebhookURL(t *testing.T) {
 	tests := map[string]types.String{
-		"configured": types.StringValue("https://example.com/hook?token=s3cret"),
-		// An imported destination has no configured value, and nothing can supply one.
+		"configured":      types.StringValue("https://example.com/hook?token=s3cret"),
 		"unset on import": types.StringNull(),
 	}
 
@@ -149,9 +153,9 @@ func TestLogsAlertDestinationMapResponseToModel_NeverAdoptsRedactedWebhookURL(t 
 			}
 
 			resp := httpclient.LogsAlertDestination{
-				HogFunctionIDs: []string{"hf-1"},
-				Type:           destinationTypeWebhook,
-				WebhookURL:     util.StringPtr("https://example.com/…"),
+				HogFunctionIDs:     []string{"hf-1"},
+				Type:               destinationTypeWebhook,
+				RedactedWebhookURL: util.StringPtr("https://example.com/…"),
 			}
 
 			diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), resp, &model)
@@ -162,10 +166,7 @@ func TestLogsAlertDestinationMapResponseToModel_NeverAdoptsRedactedWebhookURL(t 
 	}
 }
 
-// slack_channel_name is write-only: PostHog uses it to build the display name and never
-// stores it, so no response can return it. Mapping it would null out the configured value
-// and every plan would show drift.
-func TestLogsAlertDestinationMapResponseToModel_LeavesSlackChannelNameAlone(t *testing.T) {
+func TestLogsAlertDestinationMapResponseToModel_KeepsTheWriteOnlySlackChannelName(t *testing.T) {
 	tests := map[string]struct {
 		channelName types.String
 		resp        httpclient.LogsAlertDestination
@@ -183,8 +184,7 @@ func TestLogsAlertDestinationMapResponseToModel_LeavesSlackChannelNameAlone(t *t
 				SlackChannelID:   util.StringPtr("C0123456789"),
 			},
 		},
-		// An imported destination has no configured value, and nothing can supply one.
-		"unset, read response": {
+		"unset on import, read response": {
 			channelName: types.StringNull(),
 			resp: httpclient.LogsAlertDestination{
 				HogFunctionIDs:   []string{"hf-1"},
@@ -208,9 +208,7 @@ func TestLogsAlertDestinationMapResponseToModel_LeavesSlackChannelNameAlone(t *t
 	}
 }
 
-// Without ids there is no identity to write into state, and the resource would be silently
-// forgotten and then created a second time.
-func TestLogsAlertDestinationMapResponseToModel_RejectsEmptyGroup(t *testing.T) {
+func TestLogsAlertDestinationMapResponseToModel_RejectsADestinationWithNoIdentity(t *testing.T) {
 	model := slackDestination()
 
 	diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), httpclient.LogsAlertDestination{}, &model)
@@ -225,18 +223,15 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 		WebhookURL: types.StringValue("https://example.com/hook"),
 	}
 
-	// Every attribute this validates is Optional or Required, never Computed, so Terraform
-	// puts the same values in the plan and the config. Cases that need them to differ set
-	// both fields explicitly.
 	tests := map[string]struct {
-		model     LogsAlertDestinationTFModel
-		expectErr string
+		planAndConfig LogsAlertDestinationTFModel
+		expectErr     string
 	}{
 		"slack with workspace and channel": {
-			model: slackDestination(),
+			planAndConfig: slackDestination(),
 		},
 		"slack missing workspace": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := slackDestination()
 				m.SlackWorkspaceID = types.Int64Null()
 				return m
@@ -244,7 +239,7 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 			expectErr: "Missing Slack destination settings",
 		},
 		"slack missing channel": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := slackDestination()
 				m.SlackChannelID = types.StringNull()
 				return m
@@ -252,7 +247,7 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 			expectErr: "Missing Slack destination settings",
 		},
 		"slack with a webhook url": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := slackDestination()
 				m.WebhookURL = types.StringValue("https://example.com/hook")
 				return m
@@ -260,24 +255,24 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 			expectErr: "Attribute does not apply to this destination type",
 		},
 		"webhook with a url": {
-			model: webhookDestination,
+			planAndConfig: webhookDestination,
 		},
 		"webhook missing its url": {
-			model:     LogsAlertDestinationTFModel{Type: types.StringValue(destinationTypeWebhook)},
-			expectErr: "Missing destination URL",
+			planAndConfig: LogsAlertDestinationTFModel{Type: types.StringValue(destinationTypeWebhook)},
+			expectErr:     "Missing destination URL",
 		},
 		"teams with a url": {
-			model: LogsAlertDestinationTFModel{
+			planAndConfig: LogsAlertDestinationTFModel{
 				Type:       types.StringValue(destinationTypeTeams),
 				WebhookURL: types.StringValue("https://outlook.office.com/webhook/abc"),
 			},
 		},
 		"teams missing its url": {
-			model:     LogsAlertDestinationTFModel{Type: types.StringValue(destinationTypeTeams)},
-			expectErr: "Missing destination URL",
+			planAndConfig: LogsAlertDestinationTFModel{Type: types.StringValue(destinationTypeTeams)},
+			expectErr:     "Missing destination URL",
 		},
 		"webhook with a slack workspace": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := webhookDestination
 				m.SlackWorkspaceID = types.Int64Value(1)
 				return m
@@ -285,7 +280,7 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 			expectErr: "Attribute does not apply to this destination type",
 		},
 		"webhook with a slack channel": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := webhookDestination
 				m.SlackChannelID = types.StringValue("C0123456789")
 				return m
@@ -293,20 +288,18 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 			expectErr: "Attribute does not apply to this destination type",
 		},
 		"webhook with a slack channel name": {
-			model: func() LogsAlertDestinationTFModel {
+			planAndConfig: func() LogsAlertDestinationTFModel {
 				m := webhookDestination
 				m.SlackChannelName = types.StringValue("#alerts")
 				return m
 			}(),
 			expectErr: "Attribute does not apply to this destination type",
 		},
-		// Cannot conclude anything: the reference may resolve to any type.
-		"unresolved type skips every check": {
-			model: LogsAlertDestinationTFModel{Type: types.StringUnknown()},
+		"a type that may still resolve to anything skips every check": {
+			planAndConfig: LogsAlertDestinationTFModel{Type: types.StringUnknown()},
 		},
-		// Same for the URL itself, which may resolve to a value.
-		"unresolved webhook url is left to the API": {
-			model: LogsAlertDestinationTFModel{
+		"a webhook url that may still resolve to a value is left to the API": {
+			planAndConfig: LogsAlertDestinationTFModel{
 				Type:       types.StringValue(destinationTypeWebhook),
 				WebhookURL: types.StringUnknown(),
 			},
@@ -315,7 +308,7 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			diags := validateLogsAlertDestinationPlan(test.model, test.model)
+			diags := validateLogsAlertDestinationPlan(test.planAndConfig, test.planAndConfig)
 
 			if test.expectErr == "" {
 				assert.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
@@ -335,8 +328,6 @@ func logsAlertDestinationsPath() string {
 	return logsAlertPath() + "destinations/"
 }
 
-// destinationInState is the state a read starts from: where to look, and the hog function ids
-// that identify the destination among the alert's.
 func destinationInState(id string) LogsAlertDestinationTFModel {
 	return LogsAlertDestinationTFModel{
 		BaseStringIdentifiable: core.BaseStringIdentifiable{ID: types.StringValue(id)},
@@ -356,9 +347,6 @@ func writeDestinationPage(t *testing.T, w http.ResponseWriter, next any, destina
 	}))
 }
 
-// The read scans the alert's destinations for its own hog functions, so it has to see every
-// page. Stopping at the first would report a destination on a later page as deleted, and
-// Terraform would drop a live destination from state.
 func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -383,9 +371,22 @@ func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
 	assert.Equal(t, []string{"hf-2", "hf-3"}, destination.HogFunctionIDs)
 }
 
-// A 404 from the destinations list is ambiguous: every non-2xx is an error, so a PostHog
-// without the endpoint answers exactly like a deleted alert. Only the deletion may reach the
-// generic resource as a 404, which is what removes the resource from state.
+func TestLogsAlertDestinationRead_ReportsADestinationMissingFromALiveAlertAsDeleted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
+		writeDestinationPage(t, w, nil,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-9"}, Type: destinationTypeWebhook})
+	}))
+	defer server.Close()
+
+	client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+
+	_, status, err := LogsAlertDestinationOps{}.Read(context.Background(), client, destinationInState("hf-1"))
+
+	require.Error(t, err)
+	assert.Equal(t, http.StatusNotFound, int(status), "a destination gone from a live alert must be removed from state")
+}
+
 func TestLogsAlertDestinationRead_TellsAMissingEndpointFromADeletedAlert(t *testing.T) {
 	tests := map[string]struct {
 		alertStatus int
@@ -400,8 +401,7 @@ func TestLogsAlertDestinationRead_TellsAMissingEndpointFromADeletedAlert(t *test
 			alertStatus: http.StatusOK,
 			wantMessage: "does not serve GET",
 		},
-		// Nothing can be concluded, so erroring is the only safe answer.
-		"alert lookup itself failed": {
+		"alert lookup itself failed, so nothing can be concluded": {
 			alertStatus: http.StatusInternalServerError,
 			wantMessage: "cannot tell a deleted destination from an unavailable endpoint",
 		},
@@ -436,8 +436,25 @@ func TestLogsAlertDestinationRead_TellsAMissingEndpointFromADeletedAlert(t *test
 	}
 }
 
-// The id is the whole group, so a destroy hands PostHog every hog function it created.
-func TestHogFunctionIDsFromState(t *testing.T) {
+func TestLogsAlertDestinationDelete_TreatsA404AsAlreadyDeletedWithoutLookingTheAlertUp(t *testing.T) {
+	var requestedPaths []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+
+	status, err := LogsAlertDestinationOps{}.Delete(context.Background(), client, destinationInState("hf-1,hf-2"))
+
+	require.Error(t, err)
+	assert.Equal(t, http.StatusNotFound, int(status), "a 404 from delete means the destination is already gone")
+	assert.Equal(t, []string{logsAlertDestinationsPath() + "delete"}, requestedPaths)
+}
+
+func TestHogFunctionIDsFromState_RecoversTheWholeGroupFromTheID(t *testing.T) {
 	model := LogsAlertDestinationTFModel{}
 	require.NoError(t, model.SetID("hf-1,hf-2,hf-3"))
 
@@ -448,8 +465,7 @@ func TestSharesHogFunction(t *testing.T) {
 	group := []string{"hf-1", "hf-2", "hf-3", "hf-4"}
 
 	assert.True(t, sharesHogFunction(group, group), "the same group matches itself")
-	// An import names a single hog function id, which still has to find its group.
-	assert.True(t, sharesHogFunction(group, []string{"hf-3"}), "one shared id identifies the group")
+	assert.True(t, sharesHogFunction(group, []string{"hf-3"}), "one shared id identifies the group, which is what lets an import name a single id")
 	assert.False(t, sharesHogFunction(group, []string{"hf-9"}), "a different destination must not match")
 	assert.False(t, sharesHogFunction(group, nil), "nothing in state matches nothing")
 }

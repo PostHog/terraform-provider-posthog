@@ -174,9 +174,7 @@ func TestLogsAlertDestinationImportParser(t *testing.T) {
 			importID: "123/alert-456",
 			wantErr:  true,
 		},
-		// The project cannot fall back to the provider default here: a destination is
-		// identified by a hog function id, which is meaningless without its alert.
-		"one part is invalid": {
+		"a bare hog function id cannot fall back to the default project": {
 			importID: "hf-789",
 			wantErr:  true,
 		},

@@ -23,9 +23,12 @@ const (
 	logsAlertDestinationSecondAddress = "posthog_logs_alert_destination.second"
 )
 
-// skipIfNoSlackWorkspace skips when no Slack integration is available. A Slack destination
-// needs a workspace connected to the project through PostHog's OAuth flow, which an
-// acceptance test cannot create, so the id has to be supplied.
+var writeOnlyDestinationAttributes = []string{"slack_channel_name", "webhook_url"}
+
+func terraformIDOf(destination httpclient.LogsAlertDestination) string {
+	return strings.Join(slices.Sorted(slices.Values(destination.HogFunctionIDs)), ",")
+}
+
 func skipIfNoSlackWorkspace(t *testing.T) {
 	t.Helper()
 
@@ -45,8 +48,6 @@ func getSlackChannelID() string {
 	return "C0123456789"
 }
 
-// testAccCheckLogsAlertDestinationDestroy verifies the destination is gone from its alert.
-// The alert is usually destroyed in the same run, which answers 404 and counts as destroyed.
 func testAccCheckLogsAlertDestinationDestroy(s *terraform.State) error {
 	client := httpclient.NewDefaultClient(
 		os.Getenv("POSTHOG_HOST"),
@@ -81,8 +82,6 @@ func testAccCheckLogsAlertDestinationDestroy(s *terraform.State) error {
 	return nil
 }
 
-// testAccCheckLogsAlertDestinationExists asserts PostHog holds the destination Terraform
-// recorded. State alone would pass even if the POST never reached the server.
 func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[resourceName]
@@ -103,10 +102,7 @@ func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCh
 		}
 
 		for _, destination := range destinations {
-			// The provider builds the id by sorting the group's hog function ids and joining
-			// them, so rebuilding it here is what proves the two describe the same group.
-			sorted := slices.Sorted(slices.Values(destination.HogFunctionIDs))
-			if strings.Join(sorted, ",") == rs.Primary.ID {
+			if terraformIDOf(destination) == rs.Primary.ID {
 				return nil
 			}
 		}
@@ -114,9 +110,6 @@ func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCh
 	}
 }
 
-// testAccCheckLogsAlertDestinationWebhookURLRedacted asserts PostHog masks the URL on read
-// while Terraform keeps the configured one in state. That gap is why the provider never maps
-// webhook_url back, so it is worth pinning against the live API rather than a fake.
 func testAccCheckLogsAlertDestinationWebhookURLRedacted(resourceName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[resourceName]
@@ -141,10 +134,10 @@ func testAccCheckLogsAlertDestinationWebhookURLRedacted(resourceName string) res
 			if !slices.ContainsFunc(destination.HogFunctionIDs, func(id string) bool { return slices.Contains(stateIDs, id) }) {
 				continue
 			}
-			if destination.WebhookURL == nil {
+			if destination.RedactedWebhookURL == nil {
 				return fmt.Errorf("destination %s returned no webhook_url", rs.Primary.ID)
 			}
-			if *destination.WebhookURL == rs.Primary.Attributes["webhook_url"] {
+			if *destination.RedactedWebhookURL == rs.Primary.Attributes["webhook_url"] {
 				return fmt.Errorf("PostHog returned the full webhook URL for destination %s, expected it redacted", rs.Primary.ID)
 			}
 			return nil
@@ -153,9 +146,6 @@ func testAccCheckLogsAlertDestinationWebhookURLRedacted(resourceName string) res
 	}
 }
 
-// testAccCheckLogsAlertDestinationsDistinct asserts two destinations on one alert own
-// separate hog functions. Two of the same type share a template id, so a read that groups by
-// template alone would hand both resources the same id.
 func testAccCheckLogsAlertDestinationsDistinct(firstName, secondName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		first, ok := s.RootModule().Resources[firstName]
@@ -177,8 +167,6 @@ func testAccCheckLogsAlertDestinationsDistinct(firstName, secondName string) res
 	}
 }
 
-// TestLogsAlertDestination_Webhook covers the create, read and delete cycle for the type
-// that needs no external integration.
 func TestLogsAlertDestination_Webhook(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -196,16 +184,12 @@ func TestLogsAlertDestination_Webhook(t *testing.T) {
 					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "type", "webhook"),
 					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "webhook_url", "https://example.com/hooks/first"),
 					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "id"),
-					// PostHog builds one hog function per alert transition, so a destination
-					// is always a group rather than a single function.
 					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "hog_function_ids.#"),
 					resource.TestCheckResourceAttrPair(logsAlertDestinationAddress, "alert_id", "posthog_logs_alert.test", "id"),
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
 					testAccCheckLogsAlertDestinationWebhookURLRedacted(logsAlertDestinationAddress),
 				),
 			},
-			// Nothing changed, so nothing should be planned. A read that mishandles the
-			// group, or that adopts the redacted webhook_url, would show drift here.
 			{
 				Config:   testAccLogsAlertDestinationWebhook(rName, "https://example.com/hooks/first"),
 				PlanOnly: true,
@@ -214,8 +198,6 @@ func TestLogsAlertDestination_Webhook(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_Teams covers the third type, which shares the webhook shape but
-// is a distinct type server-side.
 func TestLogsAlertDestination_Teams(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -243,8 +225,6 @@ func TestLogsAlertDestination_Teams(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_Slack needs a Slack workspace connected to the project, which
-// only an operator can set up, so it is skipped unless one is supplied.
 func TestLogsAlertDestination_Slack(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -269,9 +249,6 @@ func TestLogsAlertDestination_Slack(t *testing.T) {
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
 				),
 			},
-			// slack_channel_name is write-only: PostHog never stores it, so a read cannot
-			// return it. If the response mapper touched the attribute this plan would not be
-			// empty, and would stay non-empty on every subsequent plan.
 			{
 				Config:   config,
 				PlanOnly: true,
@@ -280,10 +257,8 @@ func TestLogsAlertDestination_Slack(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_TwoOfSameType pins that one alert can hold two webhook
-// destinations and that both are removed again on destroy. It fails at destroy against
-// current PostHog master and goes green with the backend fix on branch
-// fix/alert-destination-delete-grouping.
+// Fails at destroy against current PostHog master. It goes green with the backend fix on
+// branch fix/alert-destination-delete-grouping.
 func TestLogsAlertDestination_TwoOfSameType(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -312,7 +287,6 @@ func TestLogsAlertDestination_TwoOfSameType(t *testing.T) {
 					testAccCheckLogsAlertDestinationsDistinct(logsAlertDestinationFirstAddress, logsAlertDestinationSecondAddress),
 				),
 			},
-			// A read that folded the two same-type groups into one would show drift here.
 			{
 				Config:   config,
 				PlanOnly: true,
@@ -321,9 +295,6 @@ func TestLogsAlertDestination_TwoOfSameType(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_ReplaceOnChange pins the consequence of there being no update
-// endpoint: changing any attribute destroys and recreates the destination, which gives it a
-// new set of hog functions and so a new id.
 func TestLogsAlertDestination_ReplaceOnChange(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -342,9 +313,7 @@ func TestLogsAlertDestination_ReplaceOnChange(t *testing.T) {
 			before: testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
 			after:  testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/second"),
 		},
-		// Switching type also swaps which attributes apply, so this is the case most likely
-		// to expose a stale attribute surviving the replace.
-		"webhook to teams": {
+		"switching type, which also swaps which attributes apply": {
 			before: testAccLogsAlertDestinationWebhook(rName, "https://example.com/hooks/first"),
 			after:  testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
 		},
@@ -397,13 +366,6 @@ func TestLogsAlertDestination_ReplaceOnChange(t *testing.T) {
 	}
 }
 
-// TestLogsAlertDestination_Import covers the project_id/alert_id/hog_function_id form
-// documented in examples/resources/posthog_logs_alert_destination/import.sh. The import
-// names one hog function and the read has to find the whole group behind it.
-//
-// An imported webhook or teams destination has webhook_url unset, because the read redacts
-// it. The first plan after such an import replaces the destination, which is what puts the
-// configured URL into state.
 func TestLogsAlertDestination_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -428,26 +390,18 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					if !ok {
 						return "", fmt.Errorf("resource not found: %s", logsAlertDestinationAddress)
 					}
-					// One hog function id out of the group, which is all the import ID names.
-					hogFunctionID := strings.Split(rs.Primary.ID, ",")[0]
-					return fmt.Sprintf("%s/%s/%s", getProjectID(), rs.Primary.Attributes["alert_id"], hogFunctionID), nil
+					oneHogFunctionIDOfTheGroup := strings.Split(rs.Primary.ID, ",")[0]
+					return fmt.Sprintf("%s/%s/%s", getProjectID(), rs.Primary.Attributes["alert_id"], oneHogFunctionIDOfTheGroup), nil
 				},
-				ImportStateVerify: true,
-				// Both are write-only. PostHog never stores slack_channel_name, and it
-				// redacts webhook_url to scheme and host on read, so neither can be compared
-				// against what the create step configured.
-				ImportStateVerifyIgnore: []string{"slack_channel_name", "webhook_url"},
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: writeOnlyDestinationAttributes,
 				ImportStateCheck: func(states []*terraform.InstanceState) error {
 					if len(states) != 1 {
 						return fmt.Errorf("expected 1 imported state, got %d", len(states))
 					}
-					// The import names one hog function; the read rewrites the id to the
-					// whole group, so the imported id must list more than what was given.
 					if got := states[0].Attributes["hog_function_ids.#"]; got == "" || got == "0" {
 						return fmt.Errorf("imported destination has no hog_function_ids")
 					}
-					// The redacted URL must not land in state: it would read as the real one,
-					// and the next apply would offer it back to PostHog.
 					if got, ok := states[0].Attributes["webhook_url"]; ok {
 						return fmt.Errorf("imported destination has webhook_url %q, expected it unset", got)
 					}
@@ -458,9 +412,6 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_ExternalDeletion deletes the destination outside Terraform, as
-// someone would from the PostHog UI. The read must treat it as gone and plan a fresh create
-// rather than erroring, and the alert it hangs off must survive.
 func TestLogsAlertDestination_ExternalDeletion(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -516,10 +467,6 @@ func TestLogsAlertDestination_ExternalDeletion(t *testing.T) {
 	})
 }
 
-// TestLogsAlertDestination_RejectsInvalidConfigs checks that the type and its settings are
-// matched at plan time, before any API call. The rules themselves are covered by the unit
-// tables; what this adds is that ModifyResourcePlan and the schema validators are wired into
-// the registered resource, and that each message is the one a practitioner sees.
 func TestLogsAlertDestination_RejectsInvalidConfigs(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -583,7 +530,6 @@ func TestLogsAlertDestination_RejectsInvalidConfigs(t *testing.T) {
 	}
 }
 
-// testAccLogsAlertDestinationConfig wraps a destination body in the alert it hangs off.
 func testAccLogsAlertDestinationConfig(name, body string) string {
 	return fmt.Sprintf(`
 resource "posthog_logs_alert" "test" {
@@ -612,7 +558,6 @@ func testAccLogsAlertDestinationSlack(name, channelID, channelName string) strin
 		getSlackWorkspaceID(), channelID, channelName))
 }
 
-// testAccLogsAlertDestinationTwoWebhooks puts two webhook destinations on one alert.
 func testAccLogsAlertDestinationTwoWebhooks(name, firstURL, secondURL string) string {
 	return fmt.Sprintf(`
 resource "posthog_logs_alert" "test" {

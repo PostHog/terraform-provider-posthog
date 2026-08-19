@@ -157,10 +157,6 @@ type AlertIDSetter interface {
 
 // LogsAlertDestinationImportParser returns an import parser for log alert destinations.
 // Import format: "project_id/alert_id/hog_function_id".
-//
-// A destination has no id of its own, so the third part is any one of the hog function ids
-// in the group. The read finds the group that owns it and rewrites the id to the whole
-// group, so importing with one id and importing with all of them end in the same state.
 func LogsAlertDestinationImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 	return func(importID string, _ ProviderDefaults) (TFModel, error) {
 		var model TFModel

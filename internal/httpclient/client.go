@@ -149,8 +149,6 @@ func doPost[T any](c *PosthogClient, ctx context.Context, path string, body any)
 	return result, status, nil
 }
 
-// doPostNoContent posts without decoding the response, for endpoints that answer with an
-// empty body or one the caller has no use for.
 func doPostNoContent(c *PosthogClient, ctx context.Context, path string, body any) (HTTPStatusCode, error) {
 	_, status, err := c.doRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
@@ -217,8 +215,6 @@ func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) (
 	return all, err
 }
 
-// listAllWithStatus is listAll for callers that need the status of the request that failed,
-// such as a resource read that turns a 404 into "deleted outside Terraform".
 func listAllWithStatus[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, HTTPStatusCode, error) {
 	var all []T
 	var status HTTPStatusCode

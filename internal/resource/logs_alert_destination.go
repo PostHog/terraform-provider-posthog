@@ -23,16 +23,14 @@ import (
 	"github.com/posthog/terraform-provider/internal/util"
 )
 
-// The destination types PostHog accepts. Named so the schema validator, the request builder
-// and the plan-time check cannot drift apart.
 const (
 	destinationTypeSlack   = "slack"
 	destinationTypeWebhook = "webhook"
 	destinationTypeTeams   = "teams"
 )
 
-// hogFunctionIDSeparator joins the hog function ids of a destination group into the
-// Terraform id. A UUID never contains a comma, so the join is reversible.
+var destinationTypes = []string{destinationTypeSlack, destinationTypeWebhook, destinationTypeTeams}
+
 const hogFunctionIDSeparator = ","
 
 func NewLogsAlertDestination() resource.Resource {
@@ -58,7 +56,8 @@ func (m LogsAlertDestinationTFModel) GetAlertID() string {
 	return m.AlertID.ValueString()
 }
 
-// SetAlertID satisfies core.AlertIDSetter so the import parser can populate alert_id.
+var _ core.AlertIDSetter = (*LogsAlertDestinationTFModel)(nil)
+
 func (m *LogsAlertDestinationTFModel) SetAlertID(alertID string) {
 	m.AlertID = types.StringValue(alertID)
 }
@@ -111,7 +110,7 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 					"Teams). A `slack` destination needs `slack_workspace_id` and `slack_channel_id`; `webhook` " +
 					"and `teams` need `webhook_url`.",
 				Validators: []validator.String{
-					stringvalidator.OneOf(destinationTypeSlack, destinationTypeWebhook, destinationTypeTeams),
+					stringvalidator.OneOf(destinationTypes...),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -206,11 +205,30 @@ func (o LogsAlertDestinationOps) BuildUpdateRequest(_ context.Context, _, _ Logs
 	return httpclient.LogsAlertDestinationRequest{}, diags
 }
 
+type writeOnlyDestinationAttributes struct {
+	SlackChannelName types.String
+	WebhookURL       types.String
+}
+
+func writeOnlyAttributesOf(model LogsAlertDestinationTFModel) writeOnlyDestinationAttributes {
+	return writeOnlyDestinationAttributes{
+		SlackChannelName: model.SlackChannelName,
+		WebhookURL:       model.WebhookURL,
+	}
+}
+
+func (w writeOnlyDestinationAttributes) restoreTo(model *LogsAlertDestinationTFModel) {
+	model.SlackChannelName = w.SlackChannelName
+	model.WebhookURL = w.WebhookURL
+}
+
+func destinationIncludesConfiguration(resp httpclient.LogsAlertDestination) bool {
+	return resp.Type != ""
+}
+
 func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp httpclient.LogsAlertDestination, model *LogsAlertDestinationTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	// Without the ids there is no identity to write into state, and the next refresh would
-	// drop the resource and the one after it would create a second destination.
 	if len(resp.HogFunctionIDs) == 0 {
 		diags.AddError(
 			"Log alert destination has no hog functions",
@@ -219,6 +237,8 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 		)
 		return diags
 	}
+
+	writeOnly := writeOnlyAttributesOf(*model)
 
 	model.ID = types.StringValue(logsAlertDestinationID(resp.HogFunctionIDs))
 
@@ -229,33 +249,23 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 	}
 	model.HogFunctionIDs = hogFunctionIDs
 
-	// A create response carries only the hog function ids, so the configured values are left
-	// alone. A read returns the whole group and is the only response that can correct drift.
-	if resp.Type != "" {
+	if destinationIncludesConfiguration(resp) {
 		model.Type = types.StringValue(resp.Type)
 		model.SlackWorkspaceID = util.PtrToInt64(resp.SlackWorkspaceID)
 		model.SlackChannelID = core.PtrToStringNullIfEmptyTrimmed(resp.SlackChannelID)
 	}
 
-	// slack_channel_name and webhook_url are deliberately absent. PostHog only uses the
-	// channel name to build the display name and never stores it, and it redacts the webhook
-	// URL to scheme and host on read. Neither can be compared to what was configured, so
-	// mapping either one would show drift on every plan and could send the masked URL back
-	// as if it were real.
+	writeOnly.restoreTo(model)
 
 	return diags
 }
 
-// logsAlertDestinationID builds the resource id from a destination group. Sorted so the
-// same group always yields the same id whatever order the API returns the ids in.
 func logsAlertDestinationID(hogFunctionIDs []string) string {
 	sorted := slices.Clone(hogFunctionIDs)
 	slices.Sort(sorted)
 	return strings.Join(sorted, hogFunctionIDSeparator)
 }
 
-// ModifyResourcePlan rejects configurations PostHog would refuse, so they fail at plan time
-// with a message naming the problem.
 func (o LogsAlertDestinationOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
@@ -269,73 +279,109 @@ func (o LogsAlertDestinationOps) ModifyResourcePlan(ctx context.Context, req res
 	resp.Diagnostics.Append(validateLogsAlertDestinationPlan(plan, config)...)
 }
 
-// validateLogsAlertDestinationPlan checks that the configured attributes match the
-// destination type. It is separate from ModifyResourcePlan so it can be unit tested against
-// a model.
-//
-// The schema rejects 0 and the empty string as configured values, so the zero value each
-// util.Resolve call falls back to means the attribute was omitted. An attribute that is not
-// resolvable yet is skipped rather than guessed at, and the API gets the final say.
+type effectiveValue[T comparable] struct {
+	value T
+	known bool
+}
+
+func effectiveString(plan, config types.String) effectiveValue[string] {
+	value, known := util.ResolveString(plan, config, "")
+	return effectiveValue[string]{value: value, known: known}
+}
+
+func effectiveInt64(plan, config types.Int64) effectiveValue[int64] {
+	value, known := util.ResolveInt64(plan, config, 0)
+	return effectiveValue[int64]{value: value, known: known}
+}
+
+func (e effectiveValue[T]) isSet() bool {
+	var unset T
+	return e.known && e.value != unset
+}
+
+func (e effectiveValue[T]) isOmitted() bool {
+	var unset T
+	return e.known && e.value == unset
+}
+
+type destinationPlanAttributes struct {
+	slackWorkspaceID effectiveValue[int64]
+	slackChannelID   effectiveValue[string]
+	slackChannelName effectiveValue[string]
+	webhookURL       effectiveValue[string]
+}
+
+func resolveDestinationPlanAttributes(plan, config LogsAlertDestinationTFModel) destinationPlanAttributes {
+	return destinationPlanAttributes{
+		slackWorkspaceID: effectiveInt64(plan.SlackWorkspaceID, config.SlackWorkspaceID),
+		slackChannelID:   effectiveString(plan.SlackChannelID, config.SlackChannelID),
+		slackChannelName: effectiveString(plan.SlackChannelName, config.SlackChannelName),
+		webhookURL:       effectiveString(plan.WebhookURL, config.WebhookURL),
+	}
+}
+
 func validateLogsAlertDestinationPlan(plan, config LogsAlertDestinationTFModel) diag.Diagnostics {
+	destinationType := effectiveString(plan.Type, config.Type)
+	if !destinationType.isSet() {
+		return nil
+	}
+
+	attributes := resolveDestinationPlanAttributes(plan, config)
+	if destinationType.value == destinationTypeSlack {
+		return attributes.slackDestinationErrors()
+	}
+	return attributes.webhookOrTeamsDestinationErrors(destinationType.value)
+}
+
+func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	destinationType, typeKnown := util.ResolveString(plan.Type, config.Type, "")
-	if !typeKnown || destinationType == "" {
-		return diags
+	if a.slackWorkspaceID.isOmitted() {
+		diags.AddAttributeError(
+			path.Root("slack_workspace_id"),
+			"Missing Slack destination settings",
+			`type = "slack" requires slack_workspace_id, the ID of the Slack integration connected to `+
+				`this project.`,
+		)
+	}
+	if a.slackChannelID.isOmitted() {
+		diags.AddAttributeError(
+			path.Root("slack_channel_id"),
+			"Missing Slack destination settings",
+			`type = "slack" requires slack_channel_id, the ID of the channel to post into, such as `+
+				`C0123456789.`,
+		)
+	}
+	if a.webhookURL.isSet() {
+		diags.Append(destinationAttributeDoesNotApply("webhook_url", destinationTypeSlack)...)
 	}
 
-	workspaceID, workspaceKnown := util.ResolveInt64(plan.SlackWorkspaceID, config.SlackWorkspaceID, 0)
-	channelID, channelKnown := util.ResolveString(plan.SlackChannelID, config.SlackChannelID, "")
-	channelName, channelNameKnown := util.ResolveString(plan.SlackChannelName, config.SlackChannelName, "")
-	webhookURL, webhookKnown := util.ResolveString(plan.WebhookURL, config.WebhookURL, "")
+	return diags
+}
 
-	if destinationType == destinationTypeSlack {
-		if workspaceKnown && workspaceID == 0 {
-			diags.AddAttributeError(
-				path.Root("slack_workspace_id"),
-				"Missing Slack destination settings",
-				`type = "slack" requires slack_workspace_id, the ID of the Slack integration connected to `+
-					`this project.`,
-			)
-		}
-		if channelKnown && channelID == "" {
-			diags.AddAttributeError(
-				path.Root("slack_channel_id"),
-				"Missing Slack destination settings",
-				`type = "slack" requires slack_channel_id, the ID of the channel to post into, such as `+
-					`C0123456789.`,
-			)
-		}
-		if webhookKnown && webhookURL != "" {
-			diags.Append(destinationAttributeDoesNotApply("webhook_url", destinationType)...)
-		}
-		return diags
-	}
+func (a destinationPlanAttributes) webhookOrTeamsDestinationErrors(destinationType string) diag.Diagnostics {
+	var diags diag.Diagnostics
 
-	// webhook and teams. Any other value is rejected by the schema before this runs.
-	if webhookKnown && webhookURL == "" {
+	if a.webhookURL.isOmitted() {
 		diags.AddAttributeError(
 			path.Root("webhook_url"),
 			"Missing destination URL",
 			fmt.Sprintf("type = %q requires webhook_url, the URL to POST the notification to.", destinationType),
 		)
 	}
-	if workspaceKnown && workspaceID != 0 {
+	if a.slackWorkspaceID.isSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_workspace_id", destinationType)...)
 	}
-	if channelKnown && channelID != "" {
+	if a.slackChannelID.isSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_channel_id", destinationType)...)
 	}
-	if channelNameKnown && channelName != "" {
+	if a.slackChannelName.isSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_channel_name", destinationType)...)
 	}
 
 	return diags
 }
 
-// destinationAttributeDoesNotApply reports an attribute that belongs to a different
-// destination type. PostHog ignores it rather than failing, so a config that sets a Slack
-// channel on a webhook destination would otherwise apply cleanly and notify the wrong place.
 func destinationAttributeDoesNotApply(attribute, destinationType string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -357,8 +403,6 @@ func (o LogsAlertDestinationOps) Create(ctx context.Context, client httpclient.P
 	return client.CreateLogsAlertDestination(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), req)
 }
 
-// Read finds this destination among the alert's destinations. The API lists them all and
-// offers no way to fetch one, since a destination has no id to fetch it by.
 func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.LogsAlertDestination, httpclient.HTTPStatusCode, error) {
 	destinations, status, err := client.ListLogsAlertDestinations(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
 	if err != nil {
@@ -375,16 +419,10 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 		}
 	}
 
-	// The alert is still there but this destination is not, so report it the way every
-	// deleted resource is reported and let the generic resource drop it from state.
 	return httpclient.LogsAlertDestination{}, http.StatusNotFound, fmt.Errorf(
 		"log alert destination %s not found on alert %s", model.GetID(), model.GetAlertID())
 }
 
-// classifyDestinationsNotFound decides what a 404 from the destinations list means. Only a
-// deleted alert may keep the 404 status, because the generic resource drops any 404 from
-// state: a PostHog too old to serve the list endpoint answers the same way, and taking that
-// for a deletion would forget a live destination and then create a duplicate.
 func classifyDestinationsNotFound(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel, listErr error) (httpclient.HTTPStatusCode, error) {
 	_, alertStatus, alertErr := client.GetLogsAlert(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
 	if alertErr == nil {
@@ -397,7 +435,6 @@ func classifyDestinationsNotFound(ctx context.Context, client httpclient.Posthog
 	}
 
 	if alertStatus == http.StatusNotFound {
-		// The alert is gone, and PostHog deletes an alert's destinations with it.
 		return http.StatusNotFound, listErr
 	}
 
@@ -411,25 +448,14 @@ func (o LogsAlertDestinationOps) Update(_ context.Context, _ httpclient.PosthogC
 	return httpclient.LogsAlertDestination{}, 0, fmt.Errorf("log alert destinations do not support updates; this is a bug if you see this error")
 }
 
-// Delete needs no counterpart to classifyDestinationsNotFound. The delete endpoint has been
-// there for as long as the create endpoint, so an instance Terraform created a destination on
-// serves it, and the only 404 it returns is for a missing alert. PostHog deletes an alert's
-// destinations with the alert, so treating that 404 as "already deleted" is correct.
 func (o LogsAlertDestinationOps) Delete(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteLogsAlertDestination(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), hogFunctionIDsFromState(model))
 }
 
-// hogFunctionIDsFromState recovers the group from the id. The id is built by joining those
-// same ids, so this is exact, and it works during an import where hog_function_ids has not
-// been read yet.
 func hogFunctionIDsFromState(model LogsAlertDestinationTFModel) []string {
 	return strings.Split(model.GetID(), hogFunctionIDSeparator)
 }
 
-// sharesHogFunction reports whether two groups have a hog function in common. One shared id
-// is enough to identify a destination, because the ids are UUIDs owned by a single group.
-// Matching on one rather than on the whole set is what lets an import name a single id, and
-// keeps the resource attached if PostHog ever changes how many hog functions it builds.
 func sharesHogFunction(destinationIDs, stateIDs []string) bool {
 	return slices.ContainsFunc(destinationIDs, func(id string) bool {
 		return slices.Contains(stateIDs, id)
