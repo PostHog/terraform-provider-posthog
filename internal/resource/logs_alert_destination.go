@@ -282,64 +282,39 @@ func (o LogsAlertDestinationOps) ModifyResourcePlan(ctx context.Context, req res
 	resp.Diagnostics.Append(validateLogsAlertDestinationPlan(plan, config)...)
 }
 
-type effectiveValue[T comparable] struct {
-	value T
-	known bool
-}
-
-func effectiveString(plan, config types.String) effectiveValue[string] {
-	value, known := util.ResolveString(plan, config, "")
-	return effectiveValue[string]{value: value, known: known}
-}
-
-func effectiveInt64(plan, config types.Int64) effectiveValue[int64] {
-	value, known := util.ResolveInt64(plan, config, 0)
-	return effectiveValue[int64]{value: value, known: known}
-}
-
-func (e effectiveValue[T]) isSet() bool {
-	var unset T
-	return e.known && e.value != unset
-}
-
-func (e effectiveValue[T]) isOmitted() bool {
-	var unset T
-	return e.known && e.value == unset
-}
-
 type destinationPlanAttributes struct {
-	slackWorkspaceID effectiveValue[int64]
-	slackChannelID   effectiveValue[string]
-	slackChannelName effectiveValue[string]
-	webhookURL       effectiveValue[string]
+	slackWorkspaceID util.EffectiveValue[int64]
+	slackChannelID   util.EffectiveValue[string]
+	slackChannelName util.EffectiveValue[string]
+	webhookURL       util.EffectiveValue[string]
 }
 
 func resolveDestinationPlanAttributes(plan, config LogsAlertDestinationTFModel) destinationPlanAttributes {
 	return destinationPlanAttributes{
-		slackWorkspaceID: effectiveInt64(plan.SlackWorkspaceID, config.SlackWorkspaceID),
-		slackChannelID:   effectiveString(plan.SlackChannelID, config.SlackChannelID),
-		slackChannelName: effectiveString(plan.SlackChannelName, config.SlackChannelName),
-		webhookURL:       effectiveString(plan.WebhookURL, config.WebhookURL),
+		slackWorkspaceID: util.EffectiveInt64(plan.SlackWorkspaceID, config.SlackWorkspaceID),
+		slackChannelID:   util.EffectiveString(plan.SlackChannelID, config.SlackChannelID),
+		slackChannelName: util.EffectiveString(plan.SlackChannelName, config.SlackChannelName),
+		webhookURL:       util.EffectiveString(plan.WebhookURL, config.WebhookURL),
 	}
 }
 
 func validateLogsAlertDestinationPlan(plan, config LogsAlertDestinationTFModel) diag.Diagnostics {
-	destinationType := effectiveString(plan.Type, config.Type)
-	if !destinationType.isSet() {
+	destinationType := util.EffectiveString(plan.Type, config.Type)
+	if !destinationType.IsSet() {
 		return nil
 	}
 
 	attributes := resolveDestinationPlanAttributes(plan, config)
-	if destinationType.value == destinationTypeSlack {
+	if destinationType.Value == destinationTypeSlack {
 		return attributes.slackDestinationErrors()
 	}
-	return attributes.webhookOrTeamsDestinationErrors(destinationType.value)
+	return attributes.webhookOrTeamsDestinationErrors(destinationType.Value)
 }
 
 func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	if a.slackWorkspaceID.isOmitted() {
+	if a.slackWorkspaceID.IsOmitted() {
 		diags.AddAttributeError(
 			path.Root("slack_workspace_id"),
 			"Missing Slack destination settings",
@@ -347,7 +322,7 @@ func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
 				`this project.`,
 		)
 	}
-	if a.slackChannelID.isOmitted() {
+	if a.slackChannelID.IsOmitted() {
 		diags.AddAttributeError(
 			path.Root("slack_channel_id"),
 			"Missing Slack destination settings",
@@ -355,7 +330,7 @@ func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
 				`C0123456789.`,
 		)
 	}
-	if a.webhookURL.isSet() {
+	if a.webhookURL.IsSet() {
 		diags.Append(destinationAttributeDoesNotApply("webhook_url", destinationTypeSlack)...)
 	}
 
@@ -365,20 +340,20 @@ func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
 func (a destinationPlanAttributes) webhookOrTeamsDestinationErrors(destinationType string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	if a.webhookURL.isOmitted() {
+	if a.webhookURL.IsOmitted() {
 		diags.AddAttributeError(
 			path.Root("webhook_url"),
 			"Missing destination URL",
 			fmt.Sprintf("type = %q requires webhook_url, the URL to POST the notification to.", destinationType),
 		)
 	}
-	if a.slackWorkspaceID.isSet() {
+	if a.slackWorkspaceID.IsSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_workspace_id", destinationType)...)
 	}
-	if a.slackChannelID.isSet() {
+	if a.slackChannelID.IsSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_channel_id", destinationType)...)
 	}
-	if a.slackChannelName.isSet() {
+	if a.slackChannelName.IsSet() {
 		diags.Append(destinationAttributeDoesNotApply("slack_channel_name", destinationType)...)
 	}
 
