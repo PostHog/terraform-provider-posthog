@@ -247,6 +247,11 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 	}
 	model.HogFunctionIDs = hogFunctionIDs
 
+	// The create response returns only hog_function_ids, so an empty Type marks a create and we
+	// keep the caller's configured values. A populated Type marks a read or import, where we adopt
+	// the server's canonical values. The shared MapResponseToModel signature carries no operation
+	// flag, so this emptiness check stands in for it. Write-only attributes are always restored
+	// from the model below, since PostHog never returns them.
 	if destinationIncludesConfiguration(resp) {
 		model.Type = types.StringValue(resp.Type)
 		model.SlackWorkspaceID = util.PtrToInt64(resp.SlackWorkspaceID)
