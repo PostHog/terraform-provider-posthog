@@ -81,8 +81,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 			"(firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id " +
 			"of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by " +
 			"commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or " +
-			"delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, " +
-			"then uses the alert destinations API to create and delete each managed group.",
+			"delete them. Terraform reads, creates, and deletes each managed group through the alert's " +
+			"dedicated destinations API.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true,

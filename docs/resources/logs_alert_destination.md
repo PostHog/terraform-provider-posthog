@@ -5,7 +5,7 @@ subcategory: ""
 description: |-
   Manage where a log alert https://posthog.com/docs/logs/alerts sends its notifications. A posthog_logs_alert with no destination still evaluates and reports its state, but notifies nobody.
   ~> Every attribute forces replacement. PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
-  Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's id is the group's hog_function_ids, sorted and joined by commas. Those hog functions are owned by the alert: posthog_hog_function cannot create, update, or delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, then uses the alert destinations API to create and delete each managed group.
+  Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's id is the group's hog_function_ids, sorted and joined by commas. Those hog functions are owned by the alert: posthog_hog_function cannot create, update, or delete them. Terraform reads, creates, and deletes each managed group through the alert's dedicated destinations API.
 ---
 
 # posthog_logs_alert_destination (Resource)
@@ -14,7 +14,7 @@ Manage where a [log alert](https://posthog.com/docs/logs/alerts) sends its notif
 
 ~> **Every attribute forces replacement.** PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
 
-Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, then uses the alert destinations API to create and delete each managed group.
+Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or delete them. Terraform reads, creates, and deletes each managed group through the alert's dedicated destinations API.
 
 ## Example Usage
 
