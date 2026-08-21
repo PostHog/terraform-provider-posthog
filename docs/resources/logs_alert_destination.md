@@ -37,8 +37,8 @@ resource "posthog_logs_alert_destination" "checkout_errors_slack" {
   slack_workspace_id = 1
   slack_channel_id   = "C0123456789"
 
-  # Display name only, used to label the destination in the PostHog UI. PostHog never
-  # stores it, so Terraform cannot read it back and will not report drift on it.
+  # Display name only: PostHog uses it at creation to build the destination's label in the UI.
+  # The read API never returns it, so Terraform keeps the configured value and reports no drift.
   slack_channel_name = "#checkout-alerts"
 }
 
