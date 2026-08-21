@@ -159,8 +159,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 				MarkdownDescription: "URL to POST the notification to. Required when `type` is `webhook` or " +
 					"`teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive " +
 					"because the secret is in the URL: whoever holds it can post to the channel.\n\n" +
-					"PostHog returns the URL through the generic Hog Function API. Terraform stores it as a " +
-					"sensitive value, detects changes made outside Terraform, and adopts it during import.",
+					"PostHog redacts the URL when reading destinations. Terraform preserves the configured " +
+					"sensitive value, so URL changes made outside Terraform are not detectable.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -202,16 +202,19 @@ func (o LogsAlertDestinationOps) BuildUpdateRequest(_ context.Context, _, _ Logs
 
 type writeOnlyDestinationAttributes struct {
 	SlackChannelName types.String
+	WebhookURL       types.String
 }
 
 func writeOnlyAttributesOf(model LogsAlertDestinationTFModel) writeOnlyDestinationAttributes {
 	return writeOnlyDestinationAttributes{
 		SlackChannelName: model.SlackChannelName,
+		WebhookURL:       model.WebhookURL,
 	}
 }
 
 func (w writeOnlyDestinationAttributes) restoreTo(model *LogsAlertDestinationTFModel) {
 	model.SlackChannelName = w.SlackChannelName
+	model.WebhookURL = w.WebhookURL
 }
 
 func destinationIncludesConfiguration(resp httpclient.LogsAlertDestination) bool {
@@ -245,7 +248,6 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 		model.Type = types.StringValue(resp.Type)
 		model.SlackWorkspaceID = util.PtrToInt64(resp.SlackWorkspaceID)
 		model.SlackChannelID = core.PtrToStringNullIfEmptyTrimmed(resp.SlackChannelID)
-		model.WebhookURL = core.PtrToStringNullIfEmptyTrimmed(resp.WebhookURL)
 	}
 
 	writeOnly.restoreTo(model)
@@ -403,10 +405,24 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 	}
 
 	stateIDs := hogFunctionIDsFromState(model)
+	matches := make([]httpclient.LogsAlertDestination, 0, 1)
 	for _, destination := range destinations {
 		if sharesHogFunction(destination.HogFunctionIDs, stateIDs) {
-			return destination, status, nil
+			matches = append(matches, destination)
 		}
+	}
+	if len(matches) > 1 {
+		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
+			"log alert destination %s is split across %d server groups; refusing to abandon active HogFunctions",
+			model.GetID(), len(matches))
+	}
+	if len(matches) == 1 {
+		if !slices.ContainsFunc(stateIDs, func(id string) bool { return !slices.Contains(matches[0].HogFunctionIDs, id) }) {
+			return matches[0], status, nil
+		}
+		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
+			"log alert destination %s is only partially present in its server group; refusing to rewrite state",
+			model.GetID())
 	}
 
 	return httpclient.LogsAlertDestination{}, http.StatusNotFound, fmt.Errorf(

@@ -8,5 +8,5 @@ terraform import posthog_logs_alert_destination.example 12345/your-logs-alert-uu
 # slack_channel_name is write-only, so an imported Slack destination has it unset. Add it to
 # your configuration to name the destination in the PostHog UI, which replaces it.
 
-# PostHog returns webhook_url through the generic Hog Function API, so webhook and teams
-# destinations are adopted in place. Terraform stores the imported URL as sensitive state.
+# PostHog redacts webhook_url on read, so imported webhook and teams destinations have it
+# unset. Add the real URL to configuration after import; the first plan replaces the destination.

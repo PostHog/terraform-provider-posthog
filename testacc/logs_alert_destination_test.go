@@ -23,7 +23,7 @@ const (
 	logsAlertDestinationSecondAddress = "posthog_logs_alert_destination.second"
 )
 
-var writeOnlyDestinationAttributes = []string{"slack_channel_name"}
+var writeOnlyDestinationAttributes = []string{"slack_channel_name", "webhook_url"}
 
 func terraformIDOf(destination httpclient.LogsAlertDestination) string {
 	return strings.Join(slices.Sorted(slices.Values(destination.HogFunctionIDs)), ",")
@@ -365,8 +365,8 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					if got := states[0].Attributes["hog_function_ids.#"]; got == "" || got == "0" {
 						return fmt.Errorf("imported destination has no hog_function_ids")
 					}
-					if got := states[0].Attributes["webhook_url"]; got != "https://example.com/hooks/first" {
-						return fmt.Errorf("imported destination has webhook_url %q", got)
+					if got, ok := states[0].Attributes["webhook_url"]; ok {
+						return fmt.Errorf("imported destination has webhook_url %q, expected it unset", got)
 					}
 					return nil
 				},

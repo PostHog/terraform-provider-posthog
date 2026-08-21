@@ -16,43 +16,29 @@ const (
 	testLogsAlertProjectID     = "123"
 	testLogsAlertID            = "019dbe94-cec8-781b-9470-4a970cd69ebf"
 	testLogsAlertDestinationsP = "/api/projects/123/logs/alerts/019dbe94-cec8-781b-9470-4a970cd69ebf/destinations/"
-	testHogFunctionsP          = "/api/projects/123/hog_functions/"
 )
 
-func writeHogFunctionPage(t *testing.T, w http.ResponseWriter, next any, hogFunctions ...HogFunction) {
+func writeDestinationPage(t *testing.T, w http.ResponseWriter, next any, destinations ...LogsAlertDestination) {
 	t.Helper()
 	writeJSONResponse(t, w, map[string]any{
-		"count":    len(hogFunctions),
+		"count":    len(destinations),
 		"next":     next,
 		"previous": nil,
-		"results":  hogFunctions,
+		"results":  destinations,
 	})
 }
 
 func absoluteNextPageURL(server *httptest.Server, query string) string {
-	return server.URL + testHogFunctionsP + "?" + query
+	return server.URL + testLogsAlertDestinationsP + "?" + query
 }
 
 func TestListLogsAlertDestinations_PopulatesOnlyTheFieldsOfEachDestinationType(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, testHogFunctionsP, r.URL.Path)
-		assert.Equal(t, "internal_destination", r.URL.Query().Get("type"))
-		assert.Equal(t, "true", r.URL.Query().Get("full"))
-		assert.Contains(t, r.URL.Query().Get("filter_groups"), testLogsAlertID)
-
-		writeHogFunctionPage(t, w, nil,
-			HogFunction{ID: "hf-2", TemplateID: util.StringPtr("template-slack"), Inputs: map[string]interface{}{
-				"slack_workspace": map[string]interface{}{"value": float64(1)},
-				"channel":         map[string]interface{}{"value": "C0123456789"},
-			}},
-			HogFunction{ID: "hf-1", TemplateID: util.StringPtr("template-slack"), Inputs: map[string]interface{}{
-				"slack_workspace": map[string]interface{}{"value": float64(1)},
-				"channel":         map[string]interface{}{"value": "C0123456789"},
-			}},
-			HogFunction{ID: "hf-3", TemplateID: util.StringPtr("template-webhook"), Inputs: map[string]interface{}{
-				"url": map[string]interface{}{"value": "https://example.com/…"},
-			}},
+		assert.Equal(t, testLogsAlertDestinationsP, r.URL.Path)
+		writeDestinationPage(t, w, nil,
+			LogsAlertDestination{HogFunctionIDs: []string{"hf-2", "hf-1"}, Type: "slack", SlackWorkspaceID: util.Int64Ptr(1), SlackChannelID: util.StringPtr("C0123456789")},
+			LogsAlertDestination{HogFunctionIDs: []string{"hf-3"}, Type: "webhook", RedactedWebhookURL: util.StringPtr("https://example.com/…")},
 		)
 	}))
 	defer server.Close()
@@ -65,29 +51,25 @@ func TestListLogsAlertDestinations_PopulatesOnlyTheFieldsOfEachDestinationType(t
 	require.Len(t, destinations, 2)
 	assert.Equal(t, []string{"hf-2", "hf-1"}, destinations[0].HogFunctionIDs)
 	assert.Equal(t, int64(1), *destinations[0].SlackWorkspaceID)
-	assert.Nil(t, destinations[0].WebhookURL)
-	assert.Equal(t, "https://example.com/…", *destinations[1].WebhookURL)
+	assert.Nil(t, destinations[0].RedactedWebhookURL)
+	assert.Equal(t, "https://example.com/…", *destinations[1].RedactedWebhookURL)
 	assert.Nil(t, destinations[1].SlackChannelID)
 }
 
 func TestListLogsAlertDestinations_ReturnsDestinationsFromEveryPage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, testHogFunctionsP, r.URL.Path)
+		assert.Equal(t, testLogsAlertDestinationsP, r.URL.Path)
 
 		if r.URL.Query().Get("offset") == "" {
-			writeHogFunctionPage(t, w, absoluteNextPageURL(server, "limit=1&offset=1"),
-				HogFunction{ID: "hf-1", TemplateID: util.StringPtr("template-webhook"), Inputs: map[string]interface{}{
-					"url": map[string]interface{}{"value": "https://first.example.com/…"},
-				}})
+			writeDestinationPage(t, w, absoluteNextPageURL(server, "limit=1&offset=1"),
+				LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: "webhook", RedactedWebhookURL: util.StringPtr("https://first.example.com/…")})
 			return
 		}
 
 		assert.Equal(t, "1", r.URL.Query().Get("offset"))
-		writeHogFunctionPage(t, w, nil,
-			HogFunction{ID: "hf-2", TemplateID: util.StringPtr("template-microsoft-teams"), Inputs: map[string]interface{}{
-				"webhookUrl": map[string]interface{}{"value": "https://second.example.com/…"},
-			}})
+		writeDestinationPage(t, w, nil,
+			LogsAlertDestination{HogFunctionIDs: []string{"hf-2"}, Type: "teams", RedactedWebhookURL: util.StringPtr("https://second.example.com/…")})
 	}))
 	defer server.Close()
 

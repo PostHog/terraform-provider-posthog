@@ -139,18 +139,21 @@ func TestLogsAlertDestinationMapResponseToModel_ReadAdoptsServerValues(t *testin
 	assert.Equal(t, types.StringValue("C9999999999"), model.SlackChannelID)
 }
 
-func TestLogsAlertDestinationMapResponseToModel_AdoptsTheReturnedWebhookURL(t *testing.T) {
-	model := LogsAlertDestinationTFModel{Type: types.StringValue(destinationTypeWebhook)}
+func TestLogsAlertDestinationMapResponseToModel_PreservesTheConfiguredWebhookURL(t *testing.T) {
+	model := LogsAlertDestinationTFModel{
+		Type:       types.StringValue(destinationTypeWebhook),
+		WebhookURL: types.StringValue("https://example.com/configured"),
+	}
 	resp := httpclient.LogsAlertDestination{
-		HogFunctionIDs: []string{"hf-1"},
-		Type:           destinationTypeWebhook,
-		WebhookURL:     util.StringPtr("https://example.com/from-api"),
+		HogFunctionIDs:     []string{"hf-1"},
+		Type:               destinationTypeWebhook,
+		RedactedWebhookURL: util.StringPtr("https://example.com/…"),
 	}
 
 	diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), resp, &model)
 
 	require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
-	assert.Equal(t, types.StringValue("https://example.com/from-api"), model.WebhookURL)
+	assert.Equal(t, types.StringValue("https://example.com/configured"), model.WebhookURL)
 }
 
 func TestLogsAlertDestinationMapResponseToModel_KeepsTheWriteOnlySlackChannelName(t *testing.T) {
@@ -315,10 +318,6 @@ func logsAlertDestinationsPath() string {
 	return logsAlertPath() + "destinations/"
 }
 
-func hogFunctionsPath() string {
-	return fmt.Sprintf("/api/projects/%s/hog_functions/", testLogsAlertDestinationProjectID)
-}
-
 func destinationInState(id string) LogsAlertDestinationTFModel {
 	return LogsAlertDestinationTFModel{
 		BaseStringIdentifiable: core.BaseStringIdentifiable{ID: types.StringValue(id)},
@@ -327,36 +326,29 @@ func destinationInState(id string) LogsAlertDestinationTFModel {
 	}
 }
 
-func writeHogFunctionPage(t *testing.T, w http.ResponseWriter, next any, hogFunctions ...httpclient.HogFunction) {
+func writeDestinationPage(t *testing.T, w http.ResponseWriter, next any, destinations ...httpclient.LogsAlertDestination) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
-		"count":    len(hogFunctions),
+		"count":    len(destinations),
 		"next":     next,
 		"previous": nil,
-		"results":  hogFunctions,
+		"results":  destinations,
 	}))
 }
 
 func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, hogFunctionsPath(), r.URL.Path)
+		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
 
 		if r.URL.Query().Get("offset") == "" {
-			writeHogFunctionPage(t, w, server.URL+hogFunctionsPath()+"?limit=1&offset=1",
-				httpclient.HogFunction{ID: "hf-1", TemplateID: util.StringPtr("template-webhook"), Inputs: map[string]interface{}{
-					"url": map[string]interface{}{"value": "https://example.com/first"},
-				}})
+			writeDestinationPage(t, w, server.URL+logsAlertDestinationsPath()+"?limit=1&offset=1",
+				httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: destinationTypeWebhook})
 			return
 		}
-		writeHogFunctionPage(t, w, nil,
-			httpclient.HogFunction{ID: "hf-2", TemplateID: util.StringPtr("template-microsoft-teams"), Inputs: map[string]interface{}{
-				"webhookUrl": map[string]interface{}{"value": "https://example.com/teams"},
-			}},
-			httpclient.HogFunction{ID: "hf-3", TemplateID: util.StringPtr("template-microsoft-teams"), Inputs: map[string]interface{}{
-				"webhookUrl": map[string]interface{}{"value": "https://example.com/teams"},
-			}})
+		writeDestinationPage(t, w, nil,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-2", "hf-3"}, Type: destinationTypeTeams})
 	}))
 	defer server.Close()
 
@@ -371,11 +363,9 @@ func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
 
 func TestLogsAlertDestinationRead_ReportsADestinationMissingFromALiveAlertAsDeleted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, hogFunctionsPath(), r.URL.Path)
-		writeHogFunctionPage(t, w, nil,
-			httpclient.HogFunction{ID: "hf-9", TemplateID: util.StringPtr("template-webhook"), Inputs: map[string]interface{}{
-				"url": map[string]interface{}{"value": "https://example.com/other"},
-			}})
+		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
+		writeDestinationPage(t, w, nil,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-9"}, Type: destinationTypeWebhook})
 	}))
 	defer server.Close()
 
@@ -385,6 +375,22 @@ func TestLogsAlertDestinationRead_ReportsADestinationMissingFromALiveAlertAsDele
 
 	require.Error(t, err)
 	assert.Equal(t, http.StatusNotFound, int(status), "a destination gone from a live alert must be removed from state")
+}
+
+func TestLogsAlertDestinationRead_RefusesAGroupSplitAcrossConfigurations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
+		writeDestinationPage(t, w, nil,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: destinationTypeWebhook},
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-2"}, Type: destinationTypeWebhook})
+	}))
+	defer server.Close()
+
+	client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+	_, status, err := LogsAlertDestinationOps{}.Read(context.Background(), client, destinationInState("hf-1,hf-2"))
+
+	require.ErrorContains(t, err, "split across 2 server groups")
+	assert.NotEqual(t, http.StatusNotFound, int(status))
 }
 
 func TestLogsAlertDestinationDelete_TreatsA404AsAlreadyDeletedWithoutLookingTheAlertUp(t *testing.T) {

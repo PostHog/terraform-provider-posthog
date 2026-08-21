@@ -3,6 +3,7 @@ package httpclient
 import (
 	"context"
 	"fmt"
+	"net/url"
 )
 
 type LogsAlert struct {
@@ -82,11 +83,11 @@ func (c *PosthogClient) DeleteLogsAlert(ctx context.Context, projectID, id strin
 }
 
 type LogsAlertDestination struct {
-	HogFunctionIDs   []string `json:"hog_function_ids"`
-	Type             string   `json:"type,omitempty"`
-	SlackWorkspaceID *int64   `json:"slack_workspace_id,omitempty"`
-	SlackChannelID   *string  `json:"slack_channel_id,omitempty"`
-	WebhookURL       *string  `json:"webhook_url,omitempty"`
+	HogFunctionIDs     []string `json:"hog_function_ids"`
+	Type               string   `json:"type,omitempty"`
+	SlackWorkspaceID   *int64   `json:"slack_workspace_id,omitempty"`
+	SlackChannelID     *string  `json:"slack_channel_id,omitempty"`
+	RedactedWebhookURL *string  `json:"webhook_url,omitempty"`
 }
 
 type LogsAlertDestinationRequest struct {
@@ -106,96 +107,53 @@ func logsAlertDestinationsPath(projectID, alertID string) string {
 }
 
 func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID, alertID string) ([]LogsAlertDestination, HTTPStatusCode, error) {
-	hogFunctions, status, err := c.ListLogsAlertHogFunctions(ctx, projectID, alertID)
-	if err != nil {
-		return nil, status, err
-	}
-	return groupLogsAlertDestinations(hogFunctions), status, nil
-}
-
-func groupLogsAlertDestinations(hogFunctions []HogFunction) []LogsAlertDestination {
-	groups := make(map[string]int)
-	destinations := make([]LogsAlertDestination, 0)
-
-	for _, hogFunction := range hogFunctions {
-		destination, key := logsAlertDestinationFromHogFunction(hogFunction)
-		if index, exists := groups[key]; exists {
-			destinations[index].HogFunctionIDs = append(destinations[index].HogFunctionIDs, hogFunction.ID)
-			continue
-		}
-
-		groups[key] = len(destinations)
-		destinations = append(destinations, destination)
-	}
-
-	return destinations
-}
-
-func logsAlertDestinationFromHogFunction(hogFunction HogFunction) (LogsAlertDestination, string) {
-	templateID := ""
-	if hogFunction.TemplateID != nil {
-		templateID = *hogFunction.TemplateID
-	} else if hogFunction.Template != nil {
-		templateID = hogFunction.Template.ID
-	}
-
-	destination := LogsAlertDestination{HogFunctionIDs: []string{hogFunction.ID}}
-	switch templateID {
-	case "template-slack":
-		destination.Type = "slack"
-		destination.SlackWorkspaceID = inputInt64(hogFunction.Inputs, "slack_workspace")
-		destination.SlackChannelID = inputString(hogFunction.Inputs, "channel")
-		return destination, fmt.Sprintf("%s:%d:%s", templateID, inputInt64Value(hogFunction.Inputs, "slack_workspace"), inputStringValue(hogFunction.Inputs, "channel"))
-	case "template-microsoft-teams":
-		destination.Type = "teams"
-		destination.WebhookURL = inputString(hogFunction.Inputs, "webhookUrl")
-		return destination, templateID + ":" + inputStringValue(hogFunction.Inputs, "webhookUrl")
-	case "template-webhook":
-		destination.Type = "webhook"
-		destination.WebhookURL = inputString(hogFunction.Inputs, "url")
-		return destination, templateID + ":" + inputStringValue(hogFunction.Inputs, "url")
-	default:
-		return destination, hogFunction.ID
-	}
-}
-
-func inputValue(inputs map[string]interface{}, key string) any {
-	input, ok := inputs[key].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	return input["value"]
-}
-
-func inputString(inputs map[string]interface{}, key string) *string {
-	value := inputStringValue(inputs, key)
-	if value == "" {
-		return nil
-	}
-	return &value
-}
-
-func inputStringValue(inputs map[string]interface{}, key string) string {
-	value, _ := inputValue(inputs, key).(string)
-	return value
-}
-
-func inputInt64(inputs map[string]interface{}, key string) *int64 {
-	value := inputInt64Value(inputs, key)
-	if value == 0 {
-		return nil
-	}
-	return &value
-}
-
-func inputInt64Value(inputs map[string]interface{}, key string) int64 {
-	value, _ := inputValue(inputs, key).(float64)
-	return int64(value)
+	return listAllWithStatus[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID))
 }
 
 func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest) (LogsAlertDestination, error) {
-	result, _, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
+	result, status, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
+	if err != nil && (status == 0 || (status >= 200 && status < 300)) {
+		if recovered, ok := c.recoverCreatedLogsAlertDestination(ctx, projectID, alertID, input); ok {
+			return recovered, nil
+		}
+	}
 	return result, err
+}
+
+func (c *PosthogClient) recoverCreatedLogsAlertDestination(
+	ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest,
+) (LogsAlertDestination, bool) {
+	destinations, _, err := c.ListLogsAlertDestinations(ctx, projectID, alertID)
+	if err != nil {
+		return LogsAlertDestination{}, false
+	}
+	matches := make([]LogsAlertDestination, 0, 1)
+	for _, destination := range destinations {
+		if logsAlertDestinationMatchesRequest(destination, input) {
+			matches = append(matches, destination)
+		}
+	}
+	if len(matches) != 1 {
+		return LogsAlertDestination{}, false
+	}
+	return matches[0], true
+}
+
+func logsAlertDestinationMatchesRequest(destination LogsAlertDestination, input LogsAlertDestinationRequest) bool {
+	if destination.Type != input.Type {
+		return false
+	}
+	if input.Type == "slack" {
+		return destination.SlackWorkspaceID != nil && input.SlackWorkspaceID != nil &&
+			*destination.SlackWorkspaceID == *input.SlackWorkspaceID && destination.SlackChannelID != nil &&
+			input.SlackChannelID != nil && *destination.SlackChannelID == *input.SlackChannelID
+	}
+	if destination.RedactedWebhookURL == nil || input.WebhookURL == nil {
+		return false
+	}
+	returnedURL, returnedErr := url.Parse(*destination.RedactedWebhookURL)
+	requestedURL, requestedErr := url.Parse(*input.WebhookURL)
+	return returnedErr == nil && requestedErr == nil && returnedURL.Scheme == requestedURL.Scheme && returnedURL.Host == requestedURL.Host
 }
 
 func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
