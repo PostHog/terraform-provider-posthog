@@ -396,7 +396,9 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 	}
 	if len(matches) > 1 {
 		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
-			"log alert destination %s is split across %d server groups; refusing to abandon active HogFunctions",
+			"log alert destination %s is split across %d server groups; refusing to abandon active HogFunctions. "+
+				"Resolve the grouping in the PostHog UI, or remove this resource from state with "+
+				"'terraform state rm' and re-import the intended group",
 			model.GetID(), len(matches))
 	}
 	if len(matches) == 1 {
@@ -408,7 +410,9 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 			return matches[0], status, nil
 		}
 		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
-			"log alert destination %s is only partially present in its server group; refusing to rewrite state",
+			"log alert destination %s is only partially present in its server group; refusing to rewrite state. "+
+				"Resolve the grouping in the PostHog UI, or remove this resource from state with "+
+				"'terraform state rm' and re-import the intended group",
 			model.GetID())
 	}
 
