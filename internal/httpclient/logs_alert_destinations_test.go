@@ -166,3 +166,18 @@ func TestListLogsAlertDestinations_ReturnsTheNotFoundStatusToTheCaller(t *testin
 	require.Error(t, err)
 	assert.Equal(t, HTTPStatusCode(http.StatusNotFound), status)
 }
+
+func TestDeleteLogsAlertDestination_ReturnsTheNotFoundStatusToTheCaller(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, testLogsAlertDestinationsP+"delete", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestPosthogClient(server)
+	status, err := client.DeleteLogsAlertDestination(context.Background(), testLogsAlertProjectID, testLogsAlertID, []string{"hf-1"})
+
+	require.Error(t, err)
+	assert.Equal(t, HTTPStatusCode(http.StatusNotFound), status)
+}
