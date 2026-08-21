@@ -76,7 +76,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 			"~> **Every attribute forces replacement.** PostHog has no update endpoint for destinations, so " +
 			"changing a channel or a URL destroys the destination and creates a new one. There is a short " +
 			"window during the apply where the alert has no destination and would notify nobody if it fired.\n\n" +
-			"PostHog implements one destination as a group of hog functions, one per alert transition " +
+			"Each resource represents one user-visible destination. PostHog implements that destination as a " +
+			"group of hog functions, one per alert transition " +
 			"(firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id " +
 			"of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by " +
 			"commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or " +

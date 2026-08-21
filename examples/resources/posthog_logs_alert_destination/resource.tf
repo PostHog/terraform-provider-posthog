@@ -35,5 +35,6 @@ resource "posthog_logs_alert_destination" "checkout_errors_teams" {
   webhook_url = "https://example.webhook.office.com/webhookb2/00000000-0000-0000-0000-000000000000"
 }
 
-# An alert can hold several destinations. Each one is a separate resource, and changing any
-# attribute of one replaces it: PostHog has no update endpoint for destinations.
+# An alert can hold several destinations. Each Terraform resource aggregates the lifecycle
+# hog functions for one user-visible destination. Changing any attribute replaces that destination
+# because PostHog has no destination update endpoint.
