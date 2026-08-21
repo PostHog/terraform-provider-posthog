@@ -393,6 +393,22 @@ func TestLogsAlertDestinationRead_RefusesAGroupSplitAcrossConfigurations(t *test
 	assert.NotEqual(t, http.StatusNotFound, int(status))
 }
 
+func TestLogsAlertDestinationRead_RefusesAGroupWidenedWithExtraIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeDestinationPage(t, w, nil,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1", "hf-2"}, Type: destinationTypeWebhook})
+	}))
+	defer server.Close()
+
+	model := destinationInState("hf-1")
+	model.Type = types.StringValue(destinationTypeWebhook)
+	client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+	_, status, err := LogsAlertDestinationOps{}.Read(context.Background(), client, model)
+
+	require.ErrorContains(t, err, "partially present")
+	assert.NotEqual(t, http.StatusNotFound, int(status))
+}
+
 func TestLogsAlertDestinationDelete_TreatsA404AsAlreadyDeletedWithoutLookingTheAlertUp(t *testing.T) {
 	var requestedPaths []string
 

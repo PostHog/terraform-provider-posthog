@@ -417,7 +417,11 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 			model.GetID(), len(matches))
 	}
 	if len(matches) == 1 {
-		if !slices.ContainsFunc(stateIDs, func(id string) bool { return !slices.Contains(matches[0].HogFunctionIDs, id) }) {
+		allStateIDsPresent := !slices.ContainsFunc(stateIDs, func(id string) bool {
+			return !slices.Contains(matches[0].HogFunctionIDs, id)
+		})
+		isImport := model.Type.IsNull()
+		if allStateIDsPresent && (isImport || len(stateIDs) == len(matches[0].HogFunctionIDs)) {
 			return matches[0], status, nil
 		}
 		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(

@@ -3,7 +3,6 @@ package httpclient
 import (
 	"context"
 	"fmt"
-	"net/url"
 )
 
 type LogsAlert struct {
@@ -111,49 +110,8 @@ func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID
 }
 
 func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest) (LogsAlertDestination, error) {
-	result, status, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
-	if err != nil && (status == 0 || (status >= 200 && status < 300)) {
-		if recovered, ok := c.recoverCreatedLogsAlertDestination(ctx, projectID, alertID, input); ok {
-			return recovered, nil
-		}
-	}
+	result, _, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
 	return result, err
-}
-
-func (c *PosthogClient) recoverCreatedLogsAlertDestination(
-	ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest,
-) (LogsAlertDestination, bool) {
-	destinations, _, err := c.ListLogsAlertDestinations(ctx, projectID, alertID)
-	if err != nil {
-		return LogsAlertDestination{}, false
-	}
-	matches := make([]LogsAlertDestination, 0, 1)
-	for _, destination := range destinations {
-		if logsAlertDestinationMatchesRequest(destination, input) {
-			matches = append(matches, destination)
-		}
-	}
-	if len(matches) != 1 {
-		return LogsAlertDestination{}, false
-	}
-	return matches[0], true
-}
-
-func logsAlertDestinationMatchesRequest(destination LogsAlertDestination, input LogsAlertDestinationRequest) bool {
-	if destination.Type != input.Type {
-		return false
-	}
-	if input.Type == "slack" {
-		return destination.SlackWorkspaceID != nil && input.SlackWorkspaceID != nil &&
-			*destination.SlackWorkspaceID == *input.SlackWorkspaceID && destination.SlackChannelID != nil &&
-			input.SlackChannelID != nil && *destination.SlackChannelID == *input.SlackChannelID
-	}
-	if destination.RedactedWebhookURL == nil || input.WebhookURL == nil {
-		return false
-	}
-	returnedURL, returnedErr := url.Parse(*destination.RedactedWebhookURL)
-	requestedURL, requestedErr := url.Parse(*input.WebhookURL)
-	return returnedErr == nil && requestedErr == nil && returnedURL.Scheme == requestedURL.Scheme && returnedURL.Host == requestedURL.Host
 }
 
 func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
