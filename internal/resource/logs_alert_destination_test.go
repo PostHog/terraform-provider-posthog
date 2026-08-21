@@ -140,20 +140,36 @@ func TestLogsAlertDestinationMapResponseToModel_ReadAdoptsServerValues(t *testin
 }
 
 func TestLogsAlertDestinationMapResponseToModel_PreservesTheConfiguredWebhookURL(t *testing.T) {
-	model := LogsAlertDestinationTFModel{
-		Type:       types.StringValue(destinationTypeWebhook),
-		WebhookURL: types.StringValue("https://example.com/configured"),
-	}
-	resp := httpclient.LogsAlertDestination{
-		HogFunctionIDs:     []string{"hf-1"},
-		Type:               destinationTypeWebhook,
-		RedactedWebhookURL: util.StringPtr("https://example.com/…"),
+	tests := map[string]struct {
+		resp httpclient.LogsAlertDestination
+	}{
+		"read response redacts the url": {
+			resp: httpclient.LogsAlertDestination{
+				HogFunctionIDs:     []string{"hf-1"},
+				Type:               destinationTypeWebhook,
+				RedactedWebhookURL: util.StringPtr("https://example.com/…"),
+			},
+		},
+		"create response omits the type": {
+			resp: httpclient.LogsAlertDestination{
+				HogFunctionIDs: []string{"hf-1"},
+			},
+		},
 	}
 
-	diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), resp, &model)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := LogsAlertDestinationTFModel{
+				Type:       types.StringValue(destinationTypeWebhook),
+				WebhookURL: types.StringValue("https://example.com/configured"),
+			}
 
-	require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
-	assert.Equal(t, types.StringValue("https://example.com/configured"), model.WebhookURL)
+			diags := LogsAlertDestinationOps{}.MapResponseToModel(context.Background(), test.resp, &model)
+
+			require.False(t, diags.HasError(), "unexpected diagnostics: %v", diags)
+			assert.Equal(t, types.StringValue("https://example.com/configured"), model.WebhookURL)
+		})
+	}
 }
 
 func TestLogsAlertDestinationMapResponseToModel_KeepsTheWriteOnlySlackChannelName(t *testing.T) {
