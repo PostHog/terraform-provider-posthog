@@ -2,7 +2,9 @@ package httpclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 type HogFunction struct {
@@ -19,11 +21,34 @@ type HogFunction struct {
 	Mappings       []map[string]interface{} `json:"mappings,omitempty"`
 	IconURL        *string                  `json:"icon_url,omitempty"`
 	Template       *HogFunctionTemplate     `json:"template,omitempty"`
+	TemplateID     *string                  `json:"template_id,omitempty"`
 	ExecutionOrder *int                     `json:"execution_order,omitempty"`
 	CreatedAt      *string                  `json:"created_at,omitempty"`
 	CreatedBy      map[string]interface{}   `json:"created_by,omitempty"`
 	UpdatedAt      *string                  `json:"updated_at,omitempty"`
 	Status         *HogFunctionStatus       `json:"status,omitempty"`
+}
+
+func (c *PosthogClient) ListLogsAlertHogFunctions(ctx context.Context, projectID, alertID string) ([]HogFunction, HTTPStatusCode, error) {
+	filterGroups, err := json.Marshal([]map[string]any{{
+		"properties": []map[string]any{{
+			"key":      "alert_id",
+			"value":    alertID,
+			"operator": "exact",
+			"type":     "event",
+		}},
+	}})
+	if err != nil {
+		return nil, 0, fmt.Errorf("encode log alert hog function filter: %w", err)
+	}
+
+	query := url.Values{
+		"filter_groups": {string(filterGroups)},
+		"full":          {"true"},
+		"type":          {"internal_destination"},
+	}
+	path := fmt.Sprintf("/api/projects/%s/hog_functions/?%s", projectID, query.Encode())
+	return listAllWithStatus[HogFunction](c, ctx, path)
 }
 
 type HogFunctionRequest struct {

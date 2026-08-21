@@ -5,8 +5,7 @@ subcategory: ""
 description: |-
   Manage where a log alert https://posthog.com/docs/logs/alerts sends its notifications. A posthog_logs_alert with no destination still evaluates and reports its state, but notifies nobody.
   ~> Every attribute forces replacement. PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
-  PostHog implements one destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's id is the group's hog_function_ids, sorted and joined by commas. Those hog functions are owned by the alert: posthog_hog_function cannot create, read or delete them.
-  ~> Managing destinations needs a PostHog instance whose logs alerts API exposes GET .../destinations/. Older instances can only create and delete them, which leaves Terraform unable to refresh what it created.
+  PostHog implements one destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's id is the group's hog_function_ids, sorted and joined by commas. Those hog functions are owned by the alert: posthog_hog_function cannot create, update, or delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, then uses the alert destinations API to create and delete each managed group.
 ---
 
 # posthog_logs_alert_destination (Resource)
@@ -15,9 +14,7 @@ Manage where a [log alert](https://posthog.com/docs/logs/alerts) sends its notif
 
 ~> **Every attribute forces replacement.** PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
 
-PostHog implements one destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, read or delete them.
-
-~> Managing destinations needs a PostHog instance whose logs alerts API exposes `GET .../destinations/`. Older instances can only create and delete them, which leaves Terraform unable to refresh what it created.
+PostHog implements one destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, then uses the alert destinations API to create and delete each managed group.
 
 ## Example Usage
 
@@ -81,9 +78,7 @@ Write-only: PostHog uses it to build the display name and never stores it, so no
 - `slack_workspace_id` (Number) ID of the Slack integration to post through, as created by connecting Slack to the project in the PostHog UI. Required when `type` is `slack`.
 - `webhook_url` (String, Sensitive) URL to POST the notification to. Required when `type` is `webhook` or `teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive because the secret is in the URL: whoever holds it can post to the channel.
 
-Write-only: PostHog redacts it to scheme and host when reading, so Terraform keeps whatever you configured and never reports drift on it. A URL edited in the PostHog UI goes unnoticed.
-
-An imported destination has it unset, because the real URL cannot be read back. The first plan after importing a `webhook` or `teams` destination therefore replaces it, which is what puts the configured URL into state.
+PostHog returns the URL through the generic Hog Function API. Terraform stores it as a sensitive value, detects changes made outside Terraform, and adopts it during import.
 
 ### Read-Only
 
@@ -101,14 +96,12 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 #
 # A destination has no ID of its own: PostHog builds it as a group of hog functions, one per
 # alert transition. Name any one of them and Terraform adopts the whole group. List them
-# with: GET /api/environments/<project_id>/logs/alerts/<alert_id>/destinations/
+# in the PostHog UI or through the project's generic Hog Functions list API.
 terraform import posthog_logs_alert_destination.example 12345/your-logs-alert-uuid/your-hog-function-uuid
 
 # slack_channel_name is write-only, so an imported Slack destination has it unset. Add it to
 # your configuration to name the destination in the PostHog UI, which replaces it.
 
-# webhook_url is write-only too: the read redacts it to scheme and host, so an imported
-# webhook or teams destination has it unset. The first plan after the import replaces the
-# destination to put the configured URL into state. Import Slack destinations to adopt them
-# in place; a webhook or teams destination cannot be adopted without that replacement.
+# PostHog returns webhook_url through the generic Hog Function API, so webhook and teams
+# destinations are adopted in place. Terraform stores the imported URL as sensitive state.
 ```

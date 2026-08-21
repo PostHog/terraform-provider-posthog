@@ -79,11 +79,9 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 			"PostHog implements one destination as a group of hog functions, one per alert transition " +
 			"(firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id " +
 			"of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by " +
-			"commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, read or " +
-			"delete them.\n\n" +
-			"~> Managing destinations needs a PostHog instance whose logs alerts API exposes " +
-			"`GET .../destinations/`. Older instances can only create and delete them, which leaves Terraform " +
-			"unable to refresh what it created.",
+			"commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or " +
+			"delete them. Terraform reads them through the same generic Hog Function list API as the PostHog UI, " +
+			"then uses the alert destinations API to create and delete each managed group.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true,
@@ -160,12 +158,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 				MarkdownDescription: "URL to POST the notification to. Required when `type` is `webhook` or " +
 					"`teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive " +
 					"because the secret is in the URL: whoever holds it can post to the channel.\n\n" +
-					"Write-only: PostHog redacts it to scheme and host when reading, so Terraform keeps " +
-					"whatever you configured and never reports drift on it. A URL edited in the PostHog UI " +
-					"goes unnoticed.\n\n" +
-					"An imported destination has it unset, because the real URL cannot be read back. The " +
-					"first plan after importing a `webhook` or `teams` destination therefore replaces it, " +
-					"which is what puts the configured URL into state.",
+					"PostHog returns the URL through the generic Hog Function API. Terraform stores it as a " +
+					"sensitive value, detects changes made outside Terraform, and adopts it during import.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -207,19 +201,16 @@ func (o LogsAlertDestinationOps) BuildUpdateRequest(_ context.Context, _, _ Logs
 
 type writeOnlyDestinationAttributes struct {
 	SlackChannelName types.String
-	WebhookURL       types.String
 }
 
 func writeOnlyAttributesOf(model LogsAlertDestinationTFModel) writeOnlyDestinationAttributes {
 	return writeOnlyDestinationAttributes{
 		SlackChannelName: model.SlackChannelName,
-		WebhookURL:       model.WebhookURL,
 	}
 }
 
 func (w writeOnlyDestinationAttributes) restoreTo(model *LogsAlertDestinationTFModel) {
 	model.SlackChannelName = w.SlackChannelName
-	model.WebhookURL = w.WebhookURL
 }
 
 func destinationIncludesConfiguration(resp httpclient.LogsAlertDestination) bool {
@@ -253,6 +244,7 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 		model.Type = types.StringValue(resp.Type)
 		model.SlackWorkspaceID = util.PtrToInt64(resp.SlackWorkspaceID)
 		model.SlackChannelID = core.PtrToStringNullIfEmptyTrimmed(resp.SlackChannelID)
+		model.WebhookURL = core.PtrToStringNullIfEmptyTrimmed(resp.WebhookURL)
 	}
 
 	writeOnly.restoreTo(model)
@@ -406,9 +398,6 @@ func (o LogsAlertDestinationOps) Create(ctx context.Context, client httpclient.P
 func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.LogsAlertDestination, httpclient.HTTPStatusCode, error) {
 	destinations, status, err := client.ListLogsAlertDestinations(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
 	if err != nil {
-		if status == http.StatusNotFound {
-			status, err = classifyDestinationsNotFound(ctx, client, model, err)
-		}
 		return httpclient.LogsAlertDestination{}, status, err
 	}
 
@@ -421,27 +410,6 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 
 	return httpclient.LogsAlertDestination{}, http.StatusNotFound, fmt.Errorf(
 		"log alert destination %s not found on alert %s", model.GetID(), model.GetAlertID())
-}
-
-func classifyDestinationsNotFound(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel, listErr error) (httpclient.HTTPStatusCode, error) {
-	_, alertStatus, alertErr := client.GetLogsAlert(ctx, model.GetEffectiveProjectID(), model.GetAlertID())
-	if alertErr == nil {
-		return 0, fmt.Errorf(
-			"alert %s exists, but listing its destinations answered 404, so this PostHog does not "+
-				"serve GET .../logs/alerts/<alert>/destinations/. Instances older than that endpoint "+
-				"can create and delete destinations but not read them back. Upgrade PostHog, or stop "+
-				"managing this destination with Terraform (terraform state rm). Underlying error: %w",
-			model.GetAlertID(), listErr)
-	}
-
-	if alertStatus == http.StatusNotFound {
-		return http.StatusNotFound, listErr
-	}
-
-	return alertStatus, fmt.Errorf(
-		"listing destinations for alert %s answered 404, and checking whether the alert still exists "+
-			"failed, so Terraform cannot tell a deleted destination from an unavailable endpoint. "+
-			"Alert lookup error: %w", model.GetAlertID(), alertErr)
 }
 
 func (o LogsAlertDestinationOps) Update(_ context.Context, _ httpclient.PosthogClient, _ LogsAlertDestinationTFModel, _ httpclient.LogsAlertDestinationRequest) (httpclient.LogsAlertDestination, httpclient.HTTPStatusCode, error) {

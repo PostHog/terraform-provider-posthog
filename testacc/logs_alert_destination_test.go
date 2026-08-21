@@ -23,7 +23,7 @@ const (
 	logsAlertDestinationSecondAddress = "posthog_logs_alert_destination.second"
 )
 
-var writeOnlyDestinationAttributes = []string{"slack_channel_name", "webhook_url"}
+var writeOnlyDestinationAttributes = []string{"slack_channel_name"}
 
 func terraformIDOf(destination httpclient.LogsAlertDestination) string {
 	return strings.Join(slices.Sorted(slices.Values(destination.HogFunctionIDs)), ",")
@@ -110,42 +110,6 @@ func testAccCheckLogsAlertDestinationExists(resourceName string) resource.TestCh
 	}
 }
 
-func testAccCheckLogsAlertDestinationWebhookURLRedacted(resourceName string) resource.TestCheckFunc {
-	return func(s *terraform.State) error {
-		rs, ok := s.RootModule().Resources[resourceName]
-		if !ok {
-			return fmt.Errorf("resource not found: %s", resourceName)
-		}
-
-		client := httpclient.NewDefaultClient(
-			os.Getenv("POSTHOG_HOST"),
-			os.Getenv("POSTHOG_API_KEY"),
-			"test",
-		)
-
-		alertID := rs.Primary.Attributes["alert_id"]
-		destinations, _, err := client.ListLogsAlertDestinations(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), alertID)
-		if err != nil {
-			return fmt.Errorf("listing destinations for alert %s: %w", alertID, err)
-		}
-
-		stateIDs := strings.Split(rs.Primary.ID, ",")
-		for _, destination := range destinations {
-			if !slices.ContainsFunc(destination.HogFunctionIDs, func(id string) bool { return slices.Contains(stateIDs, id) }) {
-				continue
-			}
-			if destination.RedactedWebhookURL == nil {
-				return fmt.Errorf("destination %s returned no webhook_url", rs.Primary.ID)
-			}
-			if *destination.RedactedWebhookURL == rs.Primary.Attributes["webhook_url"] {
-				return fmt.Errorf("PostHog returned the full webhook URL for destination %s, expected it redacted", rs.Primary.ID)
-			}
-			return nil
-		}
-		return fmt.Errorf("logs alert destination %s not found on alert %s", rs.Primary.ID, alertID)
-	}
-}
-
 func testAccCheckLogsAlertDestinationsDistinct(firstName, secondName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		first, ok := s.RootModule().Resources[firstName]
@@ -187,7 +151,6 @@ func TestLogsAlertDestination_Webhook(t *testing.T) {
 					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "hog_function_ids.#"),
 					resource.TestCheckResourceAttrPair(logsAlertDestinationAddress, "alert_id", "posthog_logs_alert.test", "id"),
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
-					testAccCheckLogsAlertDestinationWebhookURLRedacted(logsAlertDestinationAddress),
 				),
 			},
 			{
@@ -402,8 +365,8 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					if got := states[0].Attributes["hog_function_ids.#"]; got == "" || got == "0" {
 						return fmt.Errorf("imported destination has no hog_function_ids")
 					}
-					if got, ok := states[0].Attributes["webhook_url"]; ok {
-						return fmt.Errorf("imported destination has webhook_url %q, expected it unset", got)
+					if got := states[0].Attributes["webhook_url"]; got != "https://example.com/hooks/first" {
+						return fmt.Errorf("imported destination has webhook_url %q", got)
 					}
 					return nil
 				},
