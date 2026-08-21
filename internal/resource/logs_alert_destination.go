@@ -160,7 +160,10 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 					"`teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive " +
 					"because the secret is in the URL: whoever holds it can post to the channel.\n\n" +
 					"PostHog redacts the URL when reading destinations. Terraform preserves the configured " +
-					"sensitive value, so URL changes made outside Terraform are not detectable.",
+					"sensitive value, so URL changes made outside Terraform are not detectable. To rotate " +
+					"the URL, for example after a leak, change it here in your configuration: an out-of-band " +
+					"rotation goes unnoticed, and the next apply would re-create the destination with the " +
+					"previously configured URL.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},

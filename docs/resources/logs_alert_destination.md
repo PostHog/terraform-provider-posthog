@@ -79,7 +79,7 @@ Write-only: PostHog uses it to build the display name and never stores it, so no
 - `slack_workspace_id` (Number) ID of the Slack integration to post through, as created by connecting Slack to the project in the PostHog UI. Required when `type` is `slack`.
 - `webhook_url` (String, Sensitive) URL to POST the notification to. Required when `type` is `webhook` or `teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive because the secret is in the URL: whoever holds it can post to the channel.
 
-PostHog redacts the URL when reading destinations. Terraform preserves the configured sensitive value, so URL changes made outside Terraform are not detectable.
+PostHog redacts the URL when reading destinations. Terraform preserves the configured sensitive value, so URL changes made outside Terraform are not detectable. To rotate the URL, for example after a leak, change it here in your configuration: an out-of-band rotation goes unnoticed, and the next apply would re-create the destination with the previously configured URL.
 
 ### Read-Only
 
