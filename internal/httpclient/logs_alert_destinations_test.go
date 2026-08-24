@@ -16,27 +16,21 @@ const (
 	testLogsAlertProjectID     = "123"
 	testLogsAlertID            = "019dbe94-cec8-781b-9470-4a970cd69ebf"
 	testLogsAlertDestinationsP = "/api/projects/123/logs/alerts/019dbe94-cec8-781b-9470-4a970cd69ebf/destinations/"
+	testLogsAlertP             = "/api/projects/123/logs/alerts/019dbe94-cec8-781b-9470-4a970cd69ebf/"
 )
 
-func writeDestinationPage(t *testing.T, w http.ResponseWriter, next any, destinations ...LogsAlertDestination) {
+// Destinations are read off the alert itself; PostHog exposes no endpoint that lists
+// them on their own.
+func writeAlertWithDestinations(t *testing.T, w http.ResponseWriter, destinations ...LogsAlertDestination) {
 	t.Helper()
-	writeJSONResponse(t, w, map[string]any{
-		"count":    len(destinations),
-		"next":     next,
-		"previous": nil,
-		"results":  destinations,
-	})
-}
-
-func absoluteNextPageURL(server *httptest.Server, query string) string {
-	return server.URL + testLogsAlertDestinationsP + "?" + query
+	writeJSONResponse(t, w, LogsAlert{ID: testLogsAlertID, Destinations: destinations})
 }
 
 func TestListLogsAlertDestinations_PopulatesOnlyTheFieldsOfEachDestinationType(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, testLogsAlertDestinationsP, r.URL.Path)
-		writeDestinationPage(t, w, nil,
+		assert.Equal(t, testLogsAlertP, r.URL.Path)
+		writeAlertWithDestinations(t, w,
 			LogsAlertDestination{HogFunctionIDs: []string{"hf-2", "hf-1"}, Type: "slack", SlackWorkspaceID: util.Int64Ptr(1), SlackChannelID: util.StringPtr("C0123456789")},
 			LogsAlertDestination{HogFunctionIDs: []string{"hf-3"}, Type: "webhook", RedactedWebhookURL: util.StringPtr("https://example.com/…")},
 		)
@@ -54,33 +48,6 @@ func TestListLogsAlertDestinations_PopulatesOnlyTheFieldsOfEachDestinationType(t
 	assert.Nil(t, destinations[0].RedactedWebhookURL)
 	assert.Equal(t, "https://example.com/…", *destinations[1].RedactedWebhookURL)
 	assert.Nil(t, destinations[1].SlackChannelID)
-}
-
-func TestListLogsAlertDestinations_ReturnsDestinationsFromEveryPage(t *testing.T) {
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, testLogsAlertDestinationsP, r.URL.Path)
-
-		if r.URL.Query().Get("offset") == "" {
-			writeDestinationPage(t, w, absoluteNextPageURL(server, "limit=1&offset=1"),
-				LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: "webhook", RedactedWebhookURL: util.StringPtr("https://first.example.com/…")})
-			return
-		}
-
-		assert.Equal(t, "1", r.URL.Query().Get("offset"))
-		writeDestinationPage(t, w, nil,
-			LogsAlertDestination{HogFunctionIDs: []string{"hf-2"}, Type: "teams", RedactedWebhookURL: util.StringPtr("https://second.example.com/…")})
-	}))
-	defer server.Close()
-
-	client := newTestPosthogClient(server)
-	destinations, status, err := client.ListLogsAlertDestinations(context.Background(), testLogsAlertProjectID, testLogsAlertID)
-
-	require.NoError(t, err)
-	assert.Equal(t, HTTPStatusCode(http.StatusOK), status)
-	require.Len(t, destinations, 2)
-	assert.Equal(t, []string{"hf-1"}, destinations[0].HogFunctionIDs)
-	assert.Equal(t, []string{"hf-2"}, destinations[1].HogFunctionIDs)
 }
 
 func TestCreateLogsAlertDestination_ReturnsOnlyTheNewHogFunctionIDs(t *testing.T) {
@@ -155,7 +122,8 @@ func TestDeleteLogsAlertDestination_SendsTheWholeGroupInOneCall(t *testing.T) {
 }
 
 func TestListLogsAlertDestinations_ReturnsTheNotFoundStatusToTheCaller(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, testLogsAlertP, r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()

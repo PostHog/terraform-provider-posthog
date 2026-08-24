@@ -19,8 +19,11 @@ type LogsAlert struct {
 	ScheduleRestriction *LogsAlertSchedule `json:"schedule_restriction,omitempty"`
 	SnoozeUntil         *string            `json:"snooze_until,omitempty"`
 	State               *string            `json:"state,omitempty"`
-	CreatedAt           *string            `json:"created_at,omitempty"`
-	UpdatedAt           *string            `json:"updated_at,omitempty"`
+	// The alert read carries its destinations. PostHog has no endpoint that lists them
+	// on their own, so this is how a managed destination is refreshed and imported.
+	Destinations []LogsAlertDestination `json:"destinations,omitempty"`
+	CreatedAt    *string                `json:"created_at,omitempty"`
+	UpdatedAt    *string                `json:"updated_at,omitempty"`
 }
 
 type LogsAlertRequest struct {
@@ -106,7 +109,11 @@ func logsAlertDestinationsPath(projectID, alertID string) string {
 }
 
 func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID, alertID string) ([]LogsAlertDestination, HTTPStatusCode, error) {
-	return listAllWithStatus[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID))
+	alert, status, err := c.GetLogsAlert(ctx, projectID, alertID)
+	if err != nil {
+		return nil, status, err
+	}
+	return alert.Destinations, status, nil
 }
 
 func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest) (LogsAlertDestination, error) {

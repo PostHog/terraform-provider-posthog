@@ -342,28 +342,22 @@ func destinationInState(id string) LogsAlertDestinationTFModel {
 	}
 }
 
-func writeDestinationPage(t *testing.T, w http.ResponseWriter, next any, destinations ...httpclient.LogsAlertDestination) {
+// Destinations are read off the alert itself; PostHog exposes no endpoint that lists
+// them on their own.
+func writeAlertWithDestinations(t *testing.T, w http.ResponseWriter, destinations ...httpclient.LogsAlertDestination) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
-		"count":    len(destinations),
-		"next":     next,
-		"previous": nil,
-		"results":  destinations,
+	require.NoError(t, json.NewEncoder(w).Encode(httpclient.LogsAlert{
+		ID:           testLogsAlertDestinationAlertID,
+		Destinations: destinations,
 	}))
 }
 
-func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
-
-		if r.URL.Query().Get("offset") == "" {
-			writeDestinationPage(t, w, server.URL+logsAlertDestinationsPath()+"?limit=1&offset=1",
-				httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: destinationTypeWebhook})
-			return
-		}
-		writeDestinationPage(t, w, nil,
+func TestLogsAlertDestinationRead_FindsTheGroupAmongTheAlertsDestinations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, logsAlertPath(), r.URL.Path)
+		writeAlertWithDestinations(t, w,
+			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: destinationTypeWebhook},
 			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-2", "hf-3"}, Type: destinationTypeTeams})
 	}))
 	defer server.Close()
@@ -379,8 +373,8 @@ func TestLogsAlertDestinationRead_FindsADestinationOnALaterPage(t *testing.T) {
 
 func TestLogsAlertDestinationRead_ReportsADestinationMissingFromALiveAlertAsDeleted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
-		writeDestinationPage(t, w, nil,
+		require.Equal(t, logsAlertPath(), r.URL.Path)
+		writeAlertWithDestinations(t, w,
 			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-9"}, Type: destinationTypeWebhook})
 	}))
 	defer server.Close()
@@ -395,8 +389,8 @@ func TestLogsAlertDestinationRead_ReportsADestinationMissingFromALiveAlertAsDele
 
 func TestLogsAlertDestinationRead_RefusesAGroupSplitAcrossConfigurations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, logsAlertDestinationsPath(), r.URL.Path)
-		writeDestinationPage(t, w, nil,
+		require.Equal(t, logsAlertPath(), r.URL.Path)
+		writeAlertWithDestinations(t, w,
 			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1"}, Type: destinationTypeWebhook},
 			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-2"}, Type: destinationTypeWebhook})
 	}))
@@ -411,7 +405,7 @@ func TestLogsAlertDestinationRead_RefusesAGroupSplitAcrossConfigurations(t *test
 
 func TestLogsAlertDestinationRead_RefusesAGroupWidenedWithExtraIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeDestinationPage(t, w, nil,
+		writeAlertWithDestinations(t, w,
 			httpclient.LogsAlertDestination{HogFunctionIDs: []string{"hf-1", "hf-2"}, Type: destinationTypeWebhook})
 	}))
 	defer server.Close()

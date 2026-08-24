@@ -211,20 +211,13 @@ func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCod
 
 // listAll fetches all pages from a paginated endpoint, following Next links until exhausted.
 func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, error) {
-	all, _, err := listAllWithStatus[T](c, ctx, initialPath)
-	return all, err
-}
-
-func listAllWithStatus[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, HTTPStatusCode, error) {
 	var all []T
-	var status HTTPStatusCode
 	path := initialPath
 
 	for path != "" {
-		page, pageStatus, err := doGet[PaginatedResponse[T]](c, ctx, path)
-		status = pageStatus
+		page, _, err := doGet[PaginatedResponse[T]](c, ctx, path)
 		if err != nil {
-			return nil, status, err
+			return nil, err
 		}
 
 		all = append(all, page.Results...)
@@ -248,5 +241,5 @@ func listAllWithStatus[T any](c *PosthogClient, ctx context.Context, initialPath
 		}
 	}
 
-	return all, status, nil
+	return all, nil
 }
