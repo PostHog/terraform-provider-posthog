@@ -220,8 +220,9 @@ func TestLogsAlertDestination_Slack(t *testing.T) {
 	})
 }
 
-// Fails at destroy against current PostHog master. It goes green with the backend fix on
-// branch fix/alert-destination-delete-grouping.
+// Fails at destroy until PostHog/posthog#84509 lands: master groups destinations by
+// template alone, so two webhooks on one alert cannot be deleted separately. Delete this
+// comment once that PR is merged.
 func TestLogsAlertDestination_TwoOfSameType(t *testing.T) {
 	skipIfNotAcceptance(t)
 	skipIfNoLogsAlerting(t)
@@ -471,9 +472,12 @@ func TestLogsAlertDestination_RejectsInvalidConfigs(t *testing.T) {
 				"  slack_channel_name = \"#alerts\"",
 			wantError: regexp.MustCompile(`does not apply to this destination type`),
 		},
-		"unknown type": {
+		// A type the provider does not know is passed through, so PostHog decides. That is
+		// what lets a destination type added to the API work without a provider release,
+		// at the cost of reporting the bad value at apply rather than at plan.
+		"unknown type is rejected by the API, not the provider": {
 			body:      `type = "carrier-pigeon"`,
-			wantError: regexp.MustCompile(`Attribute type value must be one of`),
+			wantError: regexp.MustCompile(`is not a valid choice`),
 		},
 	}
 

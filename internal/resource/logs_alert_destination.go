@@ -29,8 +29,6 @@ const (
 	destinationTypeTeams   = "teams"
 )
 
-var destinationTypes = []string{destinationTypeSlack, destinationTypeWebhook, destinationTypeTeams}
-
 const hogFunctionIDSeparator = ","
 
 func NewLogsAlertDestination() resource.Resource {
@@ -105,12 +103,13 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 			},
 			"type": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Where the notification goes: `slack`, `webhook`, or `teams` (Microsoft " +
-					"Teams). A `slack` destination needs `slack_workspace_id` and `slack_channel_id`; `webhook` " +
-					"and `teams` need `webhook_url`.",
-				Validators: []validator.String{
-					stringvalidator.OneOf(destinationTypes...),
-				},
+				MarkdownDescription: "Where the notification goes. PostHog supports `slack`, `webhook`, and " +
+					"`teams` (Microsoft Teams); see the [alert destinations API]" +
+					"(https://posthog.com/docs/api/logs-alerts) for the current list. A `slack` destination " +
+					"needs `slack_workspace_id` and `slack_channel_id`; `webhook` and `teams` need " +
+					"`webhook_url`. Any other value is sent to PostHog as given, so a destination type added " +
+					"to the API works without a new provider release. Terraform cannot check the settings a " +
+					"type it does not know requires, so PostHog reports those at apply.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -220,6 +219,12 @@ func (w writeOnlyDestinationAttributes) restoreTo(model *LogsAlertDestinationTFM
 	model.WebhookURL = w.WebhookURL
 }
 
+// Where a person fixes a destination Terraform cannot reconcile. Relative, because the
+// provider is configured with an API host that may not be the one they browse.
+func logsAlertNotificationsPath(projectID, alertID string) string {
+	return fmt.Sprintf("/project/%s/logs/alerts/%s?tab=notifications", projectID, alertID)
+}
+
 func destinationIncludesConfiguration(resp httpclient.LogsAlertDestination) bool {
 	return resp.Type != ""
 }
@@ -230,8 +235,12 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 	if len(resp.HogFunctionIDs) == 0 {
 		diags.AddError(
 			"Log alert destination has no hog functions",
-			"PostHog returned a destination with no hog_function_ids, which Terraform cannot track. "+
-				"The destination may exist on the alert; check it in the PostHog UI before applying again.",
+			fmt.Sprintf(
+				"PostHog returned a destination with no hog_function_ids, which Terraform cannot track. "+
+					"The destination may still exist on the alert. Open %s in PostHog to see its current "+
+					"state, then apply again.",
+				logsAlertNotificationsPath(model.GetEffectiveProjectID(), model.GetAlertID()),
+			),
 		)
 		return diags
 	}
@@ -305,10 +314,15 @@ func validateLogsAlertDestinationPlan(plan, config LogsAlertDestinationTFModel) 
 	}
 
 	attributes := resolveDestinationPlanAttributes(plan, config)
-	if destinationType.Value == destinationTypeSlack {
+	switch destinationType.Value {
+	case destinationTypeSlack:
 		return attributes.slackDestinationErrors()
+	case destinationTypeWebhook, destinationTypeTeams:
+		return attributes.webhookOrTeamsDestinationErrors(destinationType.Value)
 	}
-	return attributes.webhookOrTeamsDestinationErrors(destinationType.Value)
+	// A type this provider does not know about. Sending it on lets a destination type added
+	// to the API work without a release, so PostHog validates its settings instead.
+	return nil
 }
 
 func (a destinationPlanAttributes) slackDestinationErrors() diag.Diagnostics {
@@ -397,9 +411,10 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 	if len(matches) > 1 {
 		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
 			"log alert destination %s is split across %d server groups; refusing to abandon active HogFunctions. "+
-				"Resolve the grouping in the PostHog UI, or remove this resource from state with "+
+				"Resolve the grouping at %s, or remove this resource from state with "+
 				"'terraform state rm' and re-import the intended group",
-			model.GetID(), len(matches))
+			model.GetID(), len(matches),
+			logsAlertNotificationsPath(model.GetEffectiveProjectID(), model.GetAlertID()))
 	}
 	if len(matches) == 1 {
 		allStateIDsPresent := !slices.ContainsFunc(stateIDs, func(id string) bool {
@@ -411,9 +426,10 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 		}
 		return httpclient.LogsAlertDestination{}, 0, fmt.Errorf(
 			"log alert destination %s is only partially present in its server group; refusing to rewrite state. "+
-				"Resolve the grouping in the PostHog UI, or remove this resource from state with "+
+				"Resolve the grouping at %s, or remove this resource from state with "+
 				"'terraform state rm' and re-import the intended group",
-			model.GetID())
+			model.GetID(),
+			logsAlertNotificationsPath(model.GetEffectiveProjectID(), model.GetAlertID()))
 	}
 
 	return httpclient.LogsAlertDestination{}, http.StatusNotFound, fmt.Errorf(

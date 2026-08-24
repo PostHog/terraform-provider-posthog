@@ -67,7 +67,7 @@ resource "posthog_logs_alert_destination" "checkout_errors_teams" {
 ### Required
 
 - `alert_id` (String) UUID of the `posthog_logs_alert` this destination notifies for.
-- `type` (String) Where the notification goes: `slack`, `webhook`, or `teams` (Microsoft Teams). A `slack` destination needs `slack_workspace_id` and `slack_channel_id`; `webhook` and `teams` need `webhook_url`.
+- `type` (String) Where the notification goes. PostHog supports `slack`, `webhook`, and `teams` (Microsoft Teams); see the [alert destinations API](https://posthog.com/docs/api/logs-alerts) for the current list. A `slack` destination needs `slack_workspace_id` and `slack_channel_id`; `webhook` and `teams` need `webhook_url`. Any other value is sent to PostHog as given, so a destination type added to the API works without a new provider release. Terraform cannot check the settings a type it does not know requires, so PostHog reports those at apply.
 
 ### Optional
 
