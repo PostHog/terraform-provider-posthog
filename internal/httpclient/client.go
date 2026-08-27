@@ -149,6 +149,14 @@ func doPost[T any](c *PosthogClient, ctx context.Context, path string, body any)
 	return result, status, nil
 }
 
+func doPostNoContent(c *PosthogClient, ctx context.Context, path string, body any) (HTTPStatusCode, error) {
+	_, status, err := c.doRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return status, fmt.Errorf("failed to send POST request: %w", err)
+	}
+	return status, nil
+}
+
 func doGet[T any](c *PosthogClient, ctx context.Context, path string) (T, HTTPStatusCode, error) {
 	var result T
 	respBody, status, err := c.doRequest(ctx, http.MethodGet, path, nil)

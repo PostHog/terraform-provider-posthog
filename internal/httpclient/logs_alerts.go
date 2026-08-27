@@ -19,8 +19,11 @@ type LogsAlert struct {
 	ScheduleRestriction *LogsAlertSchedule `json:"schedule_restriction,omitempty"`
 	SnoozeUntil         *string            `json:"snooze_until,omitempty"`
 	State               *string            `json:"state,omitempty"`
-	CreatedAt           *string            `json:"created_at,omitempty"`
-	UpdatedAt           *string            `json:"updated_at,omitempty"`
+	// The alert read carries its destinations. PostHog has no endpoint that lists them
+	// on their own, so this is how a managed destination is refreshed and imported.
+	Destinations []LogsAlertDestination `json:"destinations,omitempty"`
+	CreatedAt    *string                `json:"created_at,omitempty"`
+	UpdatedAt    *string                `json:"updated_at,omitempty"`
 }
 
 type LogsAlertRequest struct {
@@ -79,4 +82,46 @@ func (c *PosthogClient) UpdateLogsAlert(ctx context.Context, projectID, id strin
 func (c *PosthogClient) DeleteLogsAlert(ctx context.Context, projectID, id string) (HTTPStatusCode, error) {
 	path := fmt.Sprintf("/api/projects/%s/logs/alerts/%s/", projectID, id)
 	return doDelete(c, ctx, path)
+}
+
+type LogsAlertDestination struct {
+	HogFunctionIDs     []string `json:"hog_function_ids"`
+	Type               string   `json:"type,omitempty"`
+	SlackWorkspaceID   *int64   `json:"slack_workspace_id,omitempty"`
+	SlackChannelID     *string  `json:"slack_channel_id,omitempty"`
+	RedactedWebhookURL *string  `json:"webhook_url,omitempty"`
+}
+
+type LogsAlertDestinationRequest struct {
+	Type             string  `json:"type"`
+	SlackWorkspaceID *int64  `json:"slack_workspace_id,omitempty"`
+	SlackChannelID   *string `json:"slack_channel_id,omitempty"`
+	SlackChannelName *string `json:"slack_channel_name,omitempty"`
+	WebhookURL       *string `json:"webhook_url,omitempty"`
+}
+
+type logsAlertDestinationDeleteRequest struct {
+	HogFunctionIDs []string `json:"hog_function_ids"`
+}
+
+func logsAlertDestinationsPath(projectID, alertID string) string {
+	return fmt.Sprintf("/api/projects/%s/logs/alerts/%s/destinations/", projectID, alertID)
+}
+
+func (c *PosthogClient) ListLogsAlertDestinations(ctx context.Context, projectID, alertID string) ([]LogsAlertDestination, HTTPStatusCode, error) {
+	alert, status, err := c.GetLogsAlert(ctx, projectID, alertID)
+	if err != nil {
+		return nil, status, err
+	}
+	return alert.Destinations, status, nil
+}
+
+func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectID, alertID string, input LogsAlertDestinationRequest) (LogsAlertDestination, error) {
+	result, _, err := doPost[LogsAlertDestination](c, ctx, logsAlertDestinationsPath(projectID, alertID), input)
+	return result, err
+}
+
+func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
+	path := logsAlertDestinationsPath(projectID, alertID) + "delete"
+	return doPostNoContent(c, ctx, path, logsAlertDestinationDeleteRequest{HogFunctionIDs: hogFunctionIDs})
 }

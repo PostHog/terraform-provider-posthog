@@ -4,7 +4,8 @@
 
 ### Features
 
-- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing is managed as code; notification destinations are attached in the PostHog UI). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
+- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing and notification destinations are managed as code). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
+- **New Resource:** `posthog_logs_alert_destination` - Slack, webhook, and Microsoft Teams notification destinations for a `posthog_logs_alert`. PostHog has no update endpoint for destinations, so every attribute forces replacement. `slack_channel_name` is write-only: PostHog uses it to label the destination and never stores it, so it is never read back and an imported destination has it unset.
 - **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
 
 ### Internal

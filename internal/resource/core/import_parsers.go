@@ -150,6 +150,52 @@ func RoleMembershipImportParser[TFModel Identifiable]() ImportIDParser[TFModel] 
 	}
 }
 
+// AlertIDSetter is implemented by models that need alert_id set during import.
+type AlertIDSetter interface {
+	SetAlertID(string)
+}
+
+// LogsAlertDestinationImportParser returns an import parser for log alert destinations.
+// Import format: "project_id/alert_id/hog_function_id".
+func LogsAlertDestinationImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
+	return func(importID string, _ ProviderDefaults) (TFModel, error) {
+		var model TFModel
+
+		parts := strings.Split(importID, "/")
+		if len(parts) != 3 {
+			return model, fmt.Errorf(
+				"invalid import ID format %q: expected 'project_id/alert_id/hog_function_id'", importID,
+			)
+		}
+
+		projectID := parts[0]
+		alertID := parts[1]
+		hogFunctionID := parts[2]
+
+		init, ok := any(&model).(ProjectIDInitializer)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement ProjectIDInitializer", model)
+		}
+		init.InitializeProjectID(projectID)
+
+		alertSetter, ok := any(&model).(AlertIDSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement AlertIDSetter", model)
+		}
+		alertSetter.SetAlertID(alertID)
+
+		setter, ok := any(&model).(IDSetter)
+		if !ok {
+			return model, fmt.Errorf("model %T does not implement IDSetter", model)
+		}
+		if err := setter.SetID(hogFunctionID); err != nil {
+			return model, fmt.Errorf("invalid hog function ID %q: %w", hogFunctionID, err)
+		}
+
+		return model, nil
+	}
+}
+
 // AccessControlFieldsSetter is implemented by models that need access control fields set during import.
 type AccessControlFieldsSetter interface {
 	SetAccessControlFields(resourceType, resourceID, targetType, targetID string)

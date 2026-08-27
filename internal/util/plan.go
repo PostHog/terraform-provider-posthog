@@ -57,3 +57,35 @@ func IsEmptySet(v types.Set) bool {
 	}
 	return v.IsNull() || len(v.Elements()) == 0
 }
+
+// EffectiveValue pairs the resolved plan/config value of an attribute with whether that value
+// is knowable, so a cross-field check can tell "set", "omitted", and "not yet known" apart.
+// Construct it with EffectiveString or EffectiveInt64.
+type EffectiveValue[T comparable] struct {
+	Value T
+	known bool
+}
+
+// EffectiveString resolves the effective string value from a plan and config pair.
+func EffectiveString(plan, config types.String) EffectiveValue[string] {
+	value, known := ResolveString(plan, config, "")
+	return EffectiveValue[string]{Value: value, known: known}
+}
+
+// EffectiveInt64 resolves the effective int64 value from a plan and config pair.
+func EffectiveInt64(plan, config types.Int64) EffectiveValue[int64] {
+	value, known := ResolveInt64(plan, config, 0)
+	return EffectiveValue[int64]{Value: value, known: known}
+}
+
+// IsSet reports whether the value is known and not the zero value.
+func (e EffectiveValue[T]) IsSet() bool {
+	var unset T
+	return e.known && e.Value != unset
+}
+
+// IsOmitted reports whether the value is known and the zero value.
+func (e EffectiveValue[T]) IsOmitted() bool {
+	var unset T
+	return e.known && e.Value == unset
+}

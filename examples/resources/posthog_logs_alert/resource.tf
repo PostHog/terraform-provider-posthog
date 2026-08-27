@@ -53,8 +53,9 @@ resource "posthog_logs_alert" "draft" {
 }
 
 # An alert on its own evaluates but notifies nobody. Attach a Slack, webhook or Microsoft
-# Teams destination from the PostHog UI: they go through the alert's own destinations
-# endpoint, which Terraform cannot model, and the generic hog function API refuses to
-# create one for a log alert.
-#
-# Tracked in https://github.com/PostHog/posthog/issues/84149.
+# Teams destination with posthog_logs_alert_destination.
+resource "posthog_logs_alert_destination" "checkout_errors_oncall" {
+  alert_id    = posthog_logs_alert.checkout_errors.id
+  type        = "webhook"
+  webhook_url = "https://example.com/hooks/oncall"
+}

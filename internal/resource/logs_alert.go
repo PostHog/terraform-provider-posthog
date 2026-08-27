@@ -144,20 +144,16 @@ func (o LogsAlertOps) Schema() schema.Schema {
 			"count crosses the threshold.\n\n" +
 			"At least one of `severity_levels`, `service_names`, or `filter_group_json` is required unless the " +
 			"alert is disabled (`enabled = false`). A project may hold at most 20 log alerts.\n\n" +
-			"~> **Notification destinations are not managed by this resource, and cannot be managed as code " +
-			"today.** An alert with no destination still evaluates, but notifies nobody. Slack, webhook and " +
-			"Microsoft Teams destinations are attached through the alert's own `destinations` sub-endpoint, " +
-			"which is not CRUD, so Terraform cannot model it. Attach them from the PostHog UI.\n\n" +
+			"~> **An alert with no destination notifies nobody.** It still evaluates and reports its state, " +
+			"but nothing is sent anywhere. Attach Slack, webhook or Microsoft Teams destinations with " +
+			"`posthog_logs_alert_destination`.\n\n" +
 			"PostHog builds each destination as a hog function internally, but you cannot create one yourself " +
 			"with `posthog_hog_function`: the API refuses any hog function filtering on a managed alert event " +
 			"with `Alert notification destinations are managed through the alert API`. Insight alerts are the " +
 			"one exception, since `$insight_alert_firing` predates the managed API; see " +
 			"`examples/alert-notifications/main.tf` for that chain.\n\n" +
-			"The alert payload reports which destination types are attached, but the provider does not surface " +
-			"it. Managing destinations as code also needs to read each one back, and the hog functions API " +
-			"hides alert-owned destinations from both list and retrieve. Tracked in " +
-			"[PostHog/posthog#84149](https://github.com/PostHog/posthog/issues/84149). Replacing the resource, " +
-			"notably by changing `project_id`, creates a new alert with no destinations attached.\n\n" +
+			"Replacing the alert, notably by changing `project_id`, creates a new alert with no destinations " +
+			"attached, and replaces every `posthog_logs_alert_destination` that points at it.\n\n" +
 			"Removing `severity_levels`, `service_names`, `filter_group_json`, or `blocked_windows` from your " +
 			"configuration clears them server-side. The remaining optional attributes are computed, so removing one " +
 			"retains its last applied value rather than restoring the documented default. Set it explicitly to " +
