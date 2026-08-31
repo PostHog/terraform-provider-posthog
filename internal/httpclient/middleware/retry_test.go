@@ -445,12 +445,22 @@ func TestSleep(t *testing.T) {
 	})
 }
 
+// awaitOrCancel stalls a handler for d, or until the client gives up. Sleeping
+// the full duration would make httptest's Close wait it out after the attempt
+// deadline has already closed the connection.
+func awaitOrCancel(r *http.Request, d time.Duration) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(d):
+	}
+}
+
 func TestRetryTransport_RetriesAfterAttemptTimeout(t *testing.T) {
 	var attempts atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) < 3 {
-			time.Sleep(600 * time.Millisecond)
+			awaitOrCancel(r, 600*time.Millisecond)
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status": "ok"}`))
@@ -475,7 +485,7 @@ func TestRetryTransport_RetriesAfterAttemptTimeout(t *testing.T) {
 
 func TestRetryTransport_AppliesAttemptTimeoutWithoutRetries(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(600 * time.Millisecond)
+		awaitOrCancel(r, 600*time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -503,10 +513,7 @@ func TestRetryTransport_ResponseBodyOutlivesRoundTrip(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := testRetryConfig()
-	config.AttemptTimeout = 5 * time.Second
-
-	transport := NewRetryTransport(http.DefaultTransport, config)
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
 
 	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
 	resp, err := transport.RoundTrip(req)
@@ -522,7 +529,7 @@ func TestRetryTransport_AttemptTimeoutCoversBodyRead(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		time.Sleep(600 * time.Millisecond)
+		awaitOrCancel(r, 600*time.Millisecond)
 		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
@@ -621,8 +628,17 @@ func TestRetryTransport_RetriesTransportErrorsOnlyForIdempotentMethods(t *testin
 	}
 }
 
-func TestNoRetryConfig_KeepsAttemptTimeout(t *testing.T) {
-	assert.Equal(t, DefaultAttemptTimeout, NoRetryConfig().AttemptTimeout)
+func TestNewRetryTransport_DefaultsAttemptTimeout(t *testing.T) {
+	// Every config gets a deadline, including one built without the field.
+	for name, config := range map[string]RetryConfig{
+		"no retries": NoRetryConfig(),
+		"zero value": {MaxRetries: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			transport := NewRetryTransport(http.DefaultTransport, config)
+			assert.Equal(t, DefaultAttemptTimeout, transport.Config.AttemptTimeout)
+		})
+	}
 }
 
 func TestIsIdempotentMethod(t *testing.T) {

@@ -35,7 +35,8 @@ type RetryConfig struct {
 	JitterFactor float64
 	// AttemptTimeout bounds a single attempt, from dialing through reading the
 	// response body. Each attempt gets its own budget, so a request that failed
-	// by timing out still has time left to be retried. 0 disables it.
+	// by timing out still has time left to be retried. Unset takes
+	// DefaultAttemptTimeout.
 	AttemptTimeout time.Duration
 	// RetryableStatusCodes are HTTP status codes that should trigger a retry.
 	// If nil, defaults to 429, 500, 502, 503, 504.
@@ -57,10 +58,8 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// NoRetryConfig disables retries but keeps the per-attempt deadline, which is
-// the only timeout on requests once http.Client.Timeout is unset.
 func NoRetryConfig() RetryConfig {
-	return RetryConfig{MaxRetries: 0, AttemptTimeout: DefaultAttemptTimeout}
+	return RetryConfig{MaxRetries: 0}
 }
 
 type RetryTransport struct {
@@ -72,6 +71,11 @@ func NewRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTranspo
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	// The http.Client carries no Timeout, so this is the only bound on a request.
+	// An unset value takes the default rather than meaning "wait forever".
+	if config.AttemptTimeout <= 0 {
+		config.AttemptTimeout = DefaultAttemptTimeout
+	}
 	return &RetryTransport{
 		Base:   base,
 		Config: config,
@@ -79,12 +83,6 @@ func NewRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTranspo
 }
 
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// If retries are disabled, still go through attempt so the request keeps its
-	// deadline.
-	if t.Config.MaxRetries == 0 {
-		return t.attempt(req)
-	}
-
 	for attempt := 0; ; attempt++ {
 		if err := req.Context().Err(); err != nil {
 			return nil, fmt.Errorf("(attempt: %d) context error: %w", attempt+1, err)
@@ -138,7 +136,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // body's Close and the caller must close the body to release it.
 func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
-	cancel := context.CancelFunc(func() {})
+	cancel := func() {}
+	// NewRetryTransport fills this in. A Config assigned directly could still
+	// leave it at zero, which must not become an instantly expired deadline.
 	if t.Config.AttemptTimeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, t.Config.AttemptTimeout)
 	}
@@ -157,13 +157,9 @@ func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
 	}
 
 	resp, err := t.Base.RoundTrip(reqCopy)
-	if err != nil {
+	if err != nil || resp.Body == nil {
 		cancel()
-		return nil, err
-	}
-	if resp.Body == nil {
-		cancel()
-		return resp, nil
+		return resp, err
 	}
 
 	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
