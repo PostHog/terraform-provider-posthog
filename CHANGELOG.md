@@ -8,12 +8,18 @@
 - **New Resource:** `posthog_logs_alert_destination` - Slack, webhook, and Microsoft Teams notification destinations for a `posthog_logs_alert`. PostHog has no update endpoint for destinations, so every attribute forces replacement. `slack_channel_name` is write-only: PostHog uses it to label the destination and never stores it, so it is never read back and an imported destination has it unset.
 - **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
 
+### Fixes
+
+- **HTTP retries:** a request that fails by timing out is now retried. The 30-second timeout was set on the HTTP client, which bounds the whole retry loop including the waits between attempts, so the first retry of a timed-out request was cancelled before it began and the apply failed with `(attempt: 1) sleeping: context deadline exceeded`. Each attempt now gets its own 30-second budget instead. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+- **HTTP retries:** `POST` and `PATCH` requests are no longer replayed after a 500, 502, 503, 504, or a dropped connection. None of those failures say whether PostHog had already committed the write, so retrying a create could leave behind a second resource that Terraform never records and will not clean up. They are still retried on 429, which PostHog returns before processing the request at all. `GET`, `HEAD`, `PUT`, and `DELETE` are safe to send twice and are unaffected. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+
 ### Internal
 
 - Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
 
+- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have.
 - **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them. Rarely, PostHog stores a shape it will not accept back: splitting an overnight window at midnight can leave a piece shorter than its own minimum, which it then refuses on apply. Widen or drop that window.
 
 ## 1.0.0

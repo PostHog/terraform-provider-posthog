@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -18,6 +19,7 @@ const (
 	DefaultMaxBackoff     = 5 * time.Second
 	DefaultBackoffFactor  = 2.0
 	DefaultJitterFactor   = 0.2 // 20% jitter
+	DefaultAttemptTimeout = 30 * time.Second
 )
 
 type RetryConfig struct {
@@ -31,6 +33,10 @@ type RetryConfig struct {
 	BackoffFactor float64
 	// JitterFactor adds randomness to backoff (0.0-1.0, where 0.2 = ±20%).
 	JitterFactor float64
+	// AttemptTimeout bounds a single attempt, from dialing through reading the
+	// response body. Each attempt gets its own budget, so a request that failed
+	// by timing out still has time left to be retried. 0 disables it.
+	AttemptTimeout time.Duration
 	// RetryableStatusCodes are HTTP status codes that should trigger a retry.
 	// If nil, defaults to 429, 500, 502, 503, 504.
 	RetryableStatusCodes []int
@@ -46,12 +52,15 @@ func DefaultRetryConfig() RetryConfig {
 		MaxBackoff:           DefaultMaxBackoff,
 		BackoffFactor:        DefaultBackoffFactor,
 		JitterFactor:         DefaultJitterFactor,
+		AttemptTimeout:       DefaultAttemptTimeout,
 		RetryableStatusCodes: []int{429, 500, 502, 503, 504},
 	}
 }
 
+// NoRetryConfig disables retries but keeps the per-attempt deadline, which is
+// the only timeout on requests once http.Client.Timeout is unset.
 func NoRetryConfig() RetryConfig {
-	return RetryConfig{MaxRetries: 0}
+	return RetryConfig{MaxRetries: 0, AttemptTimeout: DefaultAttemptTimeout}
 }
 
 type RetryTransport struct {
@@ -70,52 +79,26 @@ func NewRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTranspo
 }
 
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// If retries are disabled, just do the request
+	// If retries are disabled, still go through attempt so the request keeps its
+	// deadline.
 	if t.Config.MaxRetries == 0 {
-		return t.Base.RoundTrip(req)
+		return t.attempt(req)
 	}
 
-	var lastResp *http.Response
-	var lastErr error
-
-	maxAttempts := t.Config.MaxRetries + 1 // +1 for the initial attempt
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; ; attempt++ {
 		if err := req.Context().Err(); err != nil {
 			return nil, fmt.Errorf("(attempt: %d) context error: %w", attempt+1, err)
 		}
 
-		// Clone the request for retry (body needs special handling)
-		reqCopy := req.Clone(req.Context())
-
-		// If there's a body, we need to handle GetBody for retries (due to it being a read-once construct)
-		if req.Body != nil && req.GetBody != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return nil, err
-			}
-			reqCopy.Body = body
-		}
-
-		resp, err := t.Base.RoundTrip(reqCopy)
+		resp, err := t.attempt(req)
 
 		// Success case
 		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return resp, nil
 		}
 
-		// Store last response/error for potential return
-		lastResp = resp
-		lastErr = err
-
-		shouldRetry := false
-		if err != nil {
-			shouldRetry = isRetryableError(err)
-		} else if t.isRetryableStatus(resp.StatusCode) {
-			shouldRetry = true
-		}
-
 		// If not retryable or last attempt, return
-		if !shouldRetry || attempt >= t.Config.MaxRetries {
+		if !t.shouldRetry(req.Method, resp, err) || attempt >= t.Config.MaxRetries {
 			if err != nil {
 				return nil, err
 			}
@@ -142,16 +125,96 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t.Config.OnRetry != nil {
 			t.Config.OnRetry(attempt+1, resp, err)
 		}
+		// Sleep under the caller's context, not the attempt's. An attempt that
+		// timed out leaves its own context expired, which would skip every backoff.
 		if err := sleep(req.Context(), backoff); err != nil {
 			return nil, fmt.Errorf("(attempt: %d) sleeping: %w", attempt+1, err)
 		}
 	}
+}
 
-	// Should not reach here, but handle gracefully
-	if lastErr != nil {
-		return nil, lastErr
+// attempt sends the request once under its own deadline. The deadline covers
+// reading the response body, so on success the cancel func is handed to the
+// body's Close and the caller must close the body to release it.
+func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	cancel := context.CancelFunc(func() {})
+	if t.Config.AttemptTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, t.Config.AttemptTimeout)
 	}
-	return lastResp, nil
+
+	// Clone the request for retry (body needs special handling)
+	reqCopy := req.Clone(ctx)
+
+	// If there's a body, we need to handle GetBody for retries (due to it being a read-once construct)
+	if req.Body != nil && req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		reqCopy.Body = body
+	}
+
+	resp, err := t.Base.RoundTrip(reqCopy)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if resp.Body == nil {
+		cancel()
+		return resp, nil
+	}
+
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// cancelOnCloseBody releases an attempt's context once the caller is done with
+// the response body. The body is read after RoundTrip returns, so the attempt
+// deadline has to outlive the call that created it.
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
+// shouldRetry reports whether the attempt can be replayed. A retryable failure
+// is not enough on its own: for POST and PATCH the request may already have
+// been applied, and replaying it would create a duplicate resource.
+func (t *RetryTransport) shouldRetry(method string, resp *http.Response, err error) bool {
+	if err != nil {
+		// Nothing in the error says whether it happened before or after the
+		// request reached the server, so only replay methods that are safe to
+		// apply twice.
+		return isIdempotentMethod(method) && isRetryableError(err)
+	}
+
+	if !t.isRetryableStatus(resp.StatusCode) {
+		return false
+	}
+
+	// A rate-limited request was rejected before it was processed, so replaying
+	// it is safe for any method. The other retryable statuses can come from a
+	// proxy in front of an app that already committed the write.
+	return resp.StatusCode == http.StatusTooManyRequests || isIdempotentMethod(method)
+}
+
+// isIdempotentMethod reports whether RFC 9110 guarantees that sending the
+// request twice has the same effect as sending it once. POST and PATCH carry no
+// such guarantee.
+func isIdempotentMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *RetryTransport) isRetryableStatus(statusCode int) bool {

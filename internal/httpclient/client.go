@@ -46,8 +46,10 @@ type PaginatedResponse[T any] struct {
 }
 
 func NewDefaultClient(host, apiKey, version string, opts ...ClientOption) PosthogClient {
+	// No Timeout here: it would bound the whole retry loop, including the backoff
+	// sleeps, so a request that failed by timing out could never be retried. The
+	// retry transport gives each attempt its own deadline instead.
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 10,
