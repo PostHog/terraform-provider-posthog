@@ -2,6 +2,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -138,16 +139,19 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			fields["reason"] = reason
 			tflog.Debug(req.Context(), message, fields)
 			if err != nil {
-				return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
+				if exhausted {
+					return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
+				}
+				// Name why it was not sent again. Without this the operator sees
+				// only the timeout and cannot tell that re-running may duplicate
+				// a resource this run already created.
+				return nil, fmt.Errorf("(attempt: %d) not retried, %s: %w", attempt+1, reason, err)
 			}
 			return resp, nil
 		}
 
+		// No body to close before looping: attempt already drained and closed it.
 		backoff := t.nextBackoff(attempt, resp)
-		if resp != nil && resp.Body != nil {
-			// Close the body before retrying so the connection is not leaked.
-			_ = resp.Body.Close()
-		}
 		if t.Config.OnRetry != nil {
 			t.Config.OnRetry(attempt+1, resp, err)
 		}
@@ -162,11 +166,11 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// attempt sends the request once under its own deadline. The deadline covers
-// reading the response body, so on success the cancel func is handed to the
-// body's Close and the caller must close the body to release it.
+// attempt sends the request once under its own deadline, response body
+// included, and returns the body already read into memory.
 func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(req.Context(), t.Config.AttemptTimeout)
+	defer cancel()
 
 	// Clone the request for retry (body needs special handling)
 	reqCopy := req.Clone(ctx)
@@ -175,45 +179,64 @@ func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
 	if req.Body != nil && req.GetBody != nil {
 		body, err := req.GetBody()
 		if err != nil {
-			cancel()
 			return nil, err
 		}
 		reqCopy.Body = body
 	}
 
 	resp, err := t.Base.RoundTrip(reqCopy)
-	if err != nil && ctx.Err() != nil && req.Context().Err() == nil {
-		// Say whose deadline fired. On its own the wrapped error reads as
-		// "context deadline exceeded", which looks like the caller cancelled.
-		err = fmt.Errorf("attempt timed out after %s: %w", t.Config.AttemptTimeout, err)
-	}
-	if err != nil || resp.Body == nil {
-		cancel()
-		return resp, err
+	if err != nil {
+		return nil, t.nameTheDeadline(ctx, req, err)
 	}
 
-	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	// Read the body here rather than leaving it to the caller. RoundTrip returns
+	// as soon as the headers arrive, so a body that stalls would fail outside the
+	// retry loop, where it can be neither retried nor explained. Every response
+	// this client handles is read whole anyway, so nothing is buffered that the
+	// caller was not about to buffer itself.
+	if err := bufferBody(resp); err != nil {
+		return nil, t.nameTheDeadline(ctx, req, err)
+	}
 	return resp, nil
 }
 
-// cancelOnCloseBody releases an attempt's context once the caller is done with
-// the response body. The body is read after RoundTrip returns, so the attempt
-// deadline has to outlive the call that created it.
-type cancelOnCloseBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
+// nameTheDeadline marks an error caused by this attempt's own timeout. Left
+// alone it reads as "context deadline exceeded", which looks to the caller like
+// their own cancellation.
+func (t *RetryTransport) nameTheDeadline(ctx context.Context, req *http.Request, err error) error {
+	if ctx.Err() != nil && req.Context().Err() == nil {
+		return fmt.Errorf("attempt timed out after %s: %w", t.Config.AttemptTimeout, err)
+	}
+	return err
 }
 
-func (b *cancelOnCloseBody) Close() error {
-	err := b.ReadCloser.Close()
-	b.cancel()
-	return err
+// bufferBody replaces the response body with its own contents, so that reading
+// it happens under the attempt's deadline and the connection goes back to the
+// pool straight away.
+func bufferBody(resp *http.Response) error {
+	if resp.Body == nil {
+		return nil
+	}
+
+	streamed := resp.Body
+	defer func() { _ = streamed.Close() }()
+
+	body, err := io.ReadAll(streamed)
+	if err != nil {
+		return err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return nil
 }
 
 // retryDecision is the outcome of decide: whether to send the attempt again,
 // and why.
 type retryDecision struct {
 	retry bool
+	// mayHaveApplied marks the case where the request was not sent again because
+	// a replay could apply it twice. The write may still have landed, and the
+	// caller has to know that before running again.
+	mayHaveApplied bool
 	// reason is written to the debug log, so an operator can tell "ran out of
 	// attempts" apart from "never tried again, because replaying this method
 	// could have created the resource twice".
@@ -244,7 +267,10 @@ func (t *RetryTransport) decide(req *http.Request, resp *http.Response, err erro
 		return retryDecision{retry: true, reason: "rate limited"}
 	}
 	if !safeToReplay(req, err) {
-		return retryDecision{reason: req.Method + " is not safe to replay"}
+		return retryDecision{
+			reason:         req.Method + " may already have been applied",
+			mayHaveApplied: true,
+		}
 	}
 	return retryDecision{retry: true, reason: "retryable failure"}
 }

@@ -526,33 +526,67 @@ func TestRetryTransport_ResponseBodyOutlivesRoundTrip(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err, "the attempt context must stay alive until the body is closed")
+	require.NoError(t, err, "the body is buffered during the attempt, so it reads back fine")
 	assert.Equal(t, `{"status": "ok"}`, string(body))
 }
 
-func TestRetryTransport_AttemptTimeoutCoversBodyRead(t *testing.T) {
+// A body that stalls has to fail the attempt, not the caller's later read.
+// RoundTrip used to return as soon as the headers arrived, so the timeout landed
+// outside the retry loop, where it could be neither retried nor explained.
+func TestRetryTransport_RetriesWhenTheBodyStalls(t *testing.T) {
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		awaitOrCancel(r, 600*time.Millisecond)
+		if attempts.Add(1) < 3 {
+			// Headers arrive, the body never does.
+			awaitOrCancel(r, 3*time.Second)
+			return
+		}
 		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer server.Close()
 
 	config := testRetryConfig()
-	config.AttemptTimeout = 100 * time.Millisecond
-
-	transport := NewRetryTransport(http.DefaultTransport, config)
+	config.AttemptTimeout = 150 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
 
 	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
-	resp, err := transport.RoundTrip(req)
+	resp, err := client.Do(req)
+
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	_, err = io.ReadAll(resp.Body)
-	require.Error(t, err, "a stalled body read must still hit the attempt deadline")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, `{"status": "ok"}`, string(body))
+	assert.Equal(t, int32(3), attempts.Load(), "a stalled body should fail its attempt and be retried")
 }
 
+// The same stall on a create must not be replayed, and the error has to say so:
+// the write may have landed even though the body never arrived.
+func TestRetryTransport_StalledBodyOnCreateSaysItMayHaveApplied(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		awaitOrCancel(r, 3*time.Second)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 150 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL, nil)
+	_, err := client.Do(req)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not retried, POST may already have been applied")
+	assert.ErrorContains(t, err, "attempt timed out after 150ms")
+	assert.Equal(t, int32(1), attempts.Load())
+}
 func TestRetryTransport_RetriesOnlyIdempotentMethods(t *testing.T) {
 	tests := map[string]struct {
 		method           string
@@ -681,7 +715,7 @@ func TestRetryDecision(t *testing.T) {
 		},
 		"post on a retryable status": {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
-			wantReason: "POST is not safe to replay",
+			wantReason: "POST may already have been applied",
 		},
 		"post on a rate limit": {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
@@ -693,7 +727,7 @@ func TestRetryDecision(t *testing.T) {
 		},
 		"post on a transport error": {
 			method: http.MethodPost, err: errors.New("connection reset by peer"),
-			wantReason: "POST is not safe to replay",
+			wantReason: "POST may already have been applied",
 		},
 		"post carrying an idempotency key": {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
@@ -778,6 +812,9 @@ func TestRetryTransport_ErrorNamesAttemptAndDeadline(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorContains(t, err, tt.wantAttempt)
 			assert.ErrorContains(t, err, "attempt timed out after 80ms")
+			if tt.method == http.MethodPost {
+				assert.ErrorContains(t, err, "not retried, POST may already have been applied")
+			}
 			assert.ErrorIs(t, err, context.DeadlineExceeded, "callers still match on the cause")
 		})
 	}
