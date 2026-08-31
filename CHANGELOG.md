@@ -12,9 +12,12 @@
 
 - **HTTP retries:** a request that fails by timing out is now retried. The 30-second timeout was set on the HTTP client, which bounds the whole retry loop including the waits between attempts, so the first retry of a timed-out request was cancelled before it began and the apply failed with `(attempt: 1) sleeping: context deadline exceeded`. Each attempt now gets its own 30-second budget instead. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
 - **HTTP retries:** `POST` and `PATCH` requests are no longer replayed after a 500, 502, 503, 504, or a dropped connection. None of those failures say whether PostHog had already committed the write, so retrying a create could leave behind a second resource that Terraform never records and will not clean up. They are still retried on 429, which PostHog returns before processing the request at all. `GET`, `HEAD`, `PUT`, and `DELETE` are safe to send twice and are unaffected. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+- **HTTP retries:** a failed request now says which deadline expired and how many attempts it took, instead of a bare `context deadline exceeded` that was indistinguishable from cancelling the run yourself. `TF_LOG=DEBUG` also records each retry and the reason the provider stopped, so a request that was deliberately not replayed can be told apart from one that ran out of attempts. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
 
 ### Internal
 
+- `NewRetryTransport` fills in any unset retry tunable, so a hand-built `RetryConfig` cannot end up with no request deadline or a zero backoff that retries with no spacing. `JitterFactor` and `MaxRetries` are left alone, because zero is a meaningful value for both.
+- The `WithNoRetry` and `WithRetryConfig` client options replace an installed retry transport instead of stacking a second one on it. Stacked, the outer transport's per-attempt deadline had to cover the inner transport's whole retry loop, and `WithNoRetry` did not actually disable retries.
 - Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 const (
@@ -55,8 +57,14 @@ func DefaultRetryConfig() RetryConfig {
 		BackoffFactor:        DefaultBackoffFactor,
 		JitterFactor:         DefaultJitterFactor,
 		AttemptTimeout:       DefaultAttemptTimeout,
-		RetryableStatusCodes: []int{429, 500, 502, 503, 504},
+		RetryableStatusCodes: defaultRetryableStatusCodes(),
 	}
+}
+
+// defaultRetryableStatusCodes are rate limiting plus the gateway and server
+// errors that usually clear on their own.
+func defaultRetryableStatusCodes() []int {
+	return []int{429, 500, 502, 503, 504}
 }
 
 func NoRetryConfig() RetryConfig {
@@ -72,10 +80,24 @@ func NewRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTranspo
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	// The http.Client carries no Timeout, so this is the only bound on a request.
-	// An unset value takes the default rather than meaning "wait forever".
+	// Fill in the unset tunables. A zero AttemptTimeout would leave a request
+	// with no bound at all now that the http.Client carries no Timeout, and a
+	// zero backoff would retry with no spacing between attempts. JitterFactor
+	// and MaxRetries are left alone because zero is a meaningful value for both.
 	if config.AttemptTimeout <= 0 {
 		config.AttemptTimeout = DefaultAttemptTimeout
+	}
+	if config.InitialBackoff <= 0 {
+		config.InitialBackoff = DefaultInitialBackoff
+	}
+	if config.MaxBackoff <= 0 {
+		config.MaxBackoff = DefaultMaxBackoff
+	}
+	if config.BackoffFactor <= 0 {
+		config.BackoffFactor = DefaultBackoffFactor
+	}
+	if config.RetryableStatusCodes == nil {
+		config.RetryableStatusCodes = defaultRetryableStatusCodes()
 	}
 	return &RetryTransport{
 		Base:   base,
@@ -96,8 +118,11 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
-		// If not retryable or last attempt, return
-		if !t.shouldRetry(req.Method, resp, err) || attempt >= t.Config.MaxRetries {
+		retry := t.shouldRetry(req.Method, resp, err)
+		if !retry || attempt >= t.Config.MaxRetries {
+			fields := attemptFields(req.Method, attempt+1, resp, err)
+			fields["reason"] = t.giveUpReason(retry, req.Method, resp, err)
+			tflog.Debug(req.Context(), "giving up on request", fields)
 			if err != nil {
 				return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
 			}
@@ -124,6 +149,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t.Config.OnRetry != nil {
 			t.Config.OnRetry(attempt+1, resp, err)
 		}
+		fields := attemptFields(req.Method, attempt+1, resp, err)
+		fields["backoff"] = backoff.String()
+		tflog.Debug(req.Context(), "retrying request", fields)
 		// Sleep under the caller's context, not the attempt's. An attempt that
 		// timed out leaves its own context expired, which would skip every backoff.
 		if err := sleep(req.Context(), backoff); err != nil {
@@ -184,21 +212,53 @@ func (b *cancelOnCloseBody) Close() error {
 // is not enough on its own: for POST and PATCH the request may already have
 // been applied, and replaying it would create a duplicate resource.
 func (t *RetryTransport) shouldRetry(method string, resp *http.Response, err error) bool {
-	if err != nil {
-		// Nothing in the error says whether it happened before or after the
-		// request reached the server, so only replay methods that are safe to
-		// apply twice.
-		return isIdempotentMethod(method) && isRetryableError(err)
-	}
-
-	if !t.isRetryableStatus(resp.StatusCode) {
+	if !t.isRetryableFailure(resp, err) {
 		return false
 	}
 
 	// A rate-limited request was rejected before it was processed, so replaying
-	// it is safe for any method. The other retryable statuses can come from a
-	// proxy in front of an app that already committed the write.
-	return resp.StatusCode == http.StatusTooManyRequests || isIdempotentMethod(method)
+	// it is safe for any method. Every other retryable failure can come from a
+	// proxy in front of an app that already committed the write, and nothing in
+	// the response or the error says which happened.
+	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return isIdempotentMethod(method)
+}
+
+// isRetryableFailure reports whether the failure is one worth another attempt,
+// ignoring whether the method is safe to send twice.
+func (t *RetryTransport) isRetryableFailure(resp *http.Response, err error) bool {
+	if err != nil {
+		return isRetryableError(err)
+	}
+	return t.isRetryableStatus(resp.StatusCode)
+}
+
+// giveUpReason names what ended the loop. Reading TF_LOG=DEBUG, an operator
+// needs to tell "ran out of attempts" apart from "never tried again, because
+// replaying this method could have created the resource twice".
+func (t *RetryTransport) giveUpReason(retry bool, method string, resp *http.Response, err error) string {
+	switch {
+	case retry:
+		return "retries exhausted"
+	case t.isRetryableFailure(resp, err):
+		return method + " is not safe to replay"
+	default:
+		return "failure is not retryable"
+	}
+}
+
+// attemptFields describes an attempt's outcome for the debug log.
+func attemptFields(method string, attempt int, resp *http.Response, err error) map[string]any {
+	fields := map[string]any{"method": method, "attempt": attempt}
+	if resp != nil {
+		fields["status"] = resp.StatusCode
+	}
+	if err != nil {
+		fields["error"] = err.Error()
+	}
+	return fields
 }
 
 // isIdempotentMethod reports whether RFC 9110 guarantees that sending the

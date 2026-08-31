@@ -629,17 +629,91 @@ func TestRetryTransport_RetriesTransportErrorsOnlyForIdempotentMethods(t *testin
 	}
 }
 
-func TestNewRetryTransport_DefaultsAttemptTimeout(t *testing.T) {
-	// Every config gets a deadline, including one built without the field.
+func TestNewRetryTransport_FillsUnsetTunables(t *testing.T) {
+	// A hand-built config must not end up with no deadline, or with a zero
+	// backoff that would retry with no spacing between attempts.
 	for name, config := range map[string]RetryConfig{
 		"no retries": NoRetryConfig(),
 		"zero value": {MaxRetries: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			transport := NewRetryTransport(http.DefaultTransport, config)
-			assert.Equal(t, DefaultAttemptTimeout, transport.Config.AttemptTimeout)
+			got := transport.Config
+
+			assert.Equal(t, DefaultAttemptTimeout, got.AttemptTimeout)
+			assert.Equal(t, DefaultInitialBackoff, got.InitialBackoff)
+			assert.Equal(t, DefaultMaxBackoff, got.MaxBackoff)
+			assert.Equal(t, DefaultBackoffFactor, got.BackoffFactor)
+			assert.Equal(t, defaultRetryableStatusCodes(), got.RetryableStatusCodes)
+			assert.Positive(t, transport.calculateBackoff(0), "retries must be spaced out")
 		})
 	}
+}
+
+func TestNewRetryTransport_KeepsMeaningfulZeroes(t *testing.T) {
+	// Zero is a real choice for both of these, so filling them in would silently
+	// override the caller.
+	got := NewRetryTransport(http.DefaultTransport, RetryConfig{MaxRetries: 0, JitterFactor: 0}).Config
+
+	assert.Zero(t, got.MaxRetries)
+	assert.Zero(t, got.JitterFactor)
+}
+
+func TestGiveUpReason(t *testing.T) {
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+
+	tests := map[string]struct {
+		retry  bool
+		method string
+		resp   *http.Response
+		err    error
+		want   string
+	}{
+		"ran out of attempts": {
+			retry: true, method: http.MethodGet,
+			resp: &http.Response{StatusCode: 500}, want: "retries exhausted",
+		},
+		"post on a retryable status": {
+			method: http.MethodPost,
+			resp:   &http.Response{StatusCode: 502}, want: "POST is not safe to replay",
+		},
+		"post on a transport error": {
+			method: http.MethodPost,
+			err:    errors.New("connection reset by peer"), want: "POST is not safe to replay",
+		},
+		"status is not retryable at all": {
+			method: http.MethodGet,
+			resp:   &http.Response{StatusCode: 404}, want: "failure is not retryable",
+		},
+		"caller cancelled": {
+			method: http.MethodGet,
+			err:    context.Canceled, want: "failure is not retryable",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tt.want, transport.giveUpReason(tt.retry, tt.method, tt.resp, tt.err))
+		})
+	}
+}
+
+func TestRetryTransport_LogsDecisionsWithoutALogger(t *testing.T) {
+	// tflog is a no-op on a context with no provider logger, which is what the
+	// retry tests and any direct RoundTrip caller pass.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
+	resp, err := transport.RoundTrip(req)
+
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
 func TestIsIdempotentMethod(t *testing.T) {
