@@ -192,7 +192,9 @@ func TestRetryTransport_RetryOn429WithRetryAfter(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), attempts.Load())
-	assert.InEpsilon(t, 1*time.Second, elapsed, 0.1, "should have waited for retry after limit")
+	// Same floor-plus-ceiling as its two siblings: a timer can only fire late.
+	assert.GreaterOrEqual(t, elapsed, 1*time.Second, "should have honoured the 1s Retry-After")
+	assert.Less(t, elapsed, 2*time.Second, "should not have waited past the raised max backoff")
 }
 
 func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *testing.T) {
@@ -800,6 +802,51 @@ func TestRetryTransport_RetriesUnsentRequestsForAnyMethod(t *testing.T) {
 			assert.Equal(t, int32(4), base.attempts.Load())
 		})
 	}
+}
+
+func TestRetryTransport_Stopped(t *testing.T) {
+	tests := map[string]struct {
+		maxRetries  int
+		decision    retryDecision
+		exhausted   bool
+		wantMessage string
+		wantReason  string
+	}{
+		"ran out of attempts": {
+			maxRetries: 3, decision: retryDecision{retry: true}, exhausted: true,
+			wantMessage: "giving up on request", wantReason: "retries exhausted",
+		},
+		"retries turned off": {
+			maxRetries: 0, decision: retryDecision{retry: true}, exhausted: true,
+			wantMessage: "not retrying request", wantReason: "retries are disabled",
+		},
+		"never retryable in the first place": {
+			maxRetries: 3, decision: retryDecision{reason: "failure is not retryable"},
+			wantMessage: "not retrying request", wantReason: "failure is not retryable",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			config := testRetryConfig()
+			config.MaxRetries = tt.maxRetries
+			transport := NewRetryTransport(http.DefaultTransport, config)
+
+			message, reason := transport.stopped(tt.decision, tt.exhausted)
+
+			assert.Equal(t, tt.wantMessage, message)
+			assert.Equal(t, tt.wantReason, reason)
+		})
+	}
+}
+
+func TestReplaceRetryTransport_DoesNotStack(t *testing.T) {
+	base := http.DefaultTransport
+	once := ReplaceRetryTransport(base, DefaultRetryConfig())
+	twice := ReplaceRetryTransport(once, NoRetryConfig())
+
+	assert.Same(t, base, twice.Base, "replacing must unwrap, not nest")
+	assert.Zero(t, twice.Config.MaxRetries)
 }
 
 func TestRetryTransport_NextBackoff(t *testing.T) {

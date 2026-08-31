@@ -106,6 +106,17 @@ func NewRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTranspo
 	}
 }
 
+// ReplaceRetryTransport installs config on base, swapping out an already
+// installed retry transport rather than stacking a second one on it. Stacked,
+// the outer transport's per-attempt deadline would have to cover the inner
+// transport's whole retry loop.
+func ReplaceRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTransport {
+	if retry, ok := base.(*RetryTransport); ok {
+		base = retry.Base
+	}
+	return NewRetryTransport(base, config)
+}
+
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	for attempt := 0; ; attempt++ {
 		if err := req.Context().Err(); err != nil {
@@ -122,15 +133,10 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		decision := t.decide(req, resp, err)
 		exhausted := decision.retry && attempt >= t.Config.MaxRetries
 		if !decision.retry || exhausted {
+			message, reason := t.stopped(decision, exhausted)
 			fields := attemptFields(req, attempt+1, resp, err)
-			fields["reason"] = decision.reason
-			if exhausted {
-				fields["reason"] = "retries exhausted"
-				if t.Config.MaxRetries == 0 {
-					fields["reason"] = "retries are disabled"
-				}
-			}
-			tflog.Debug(req.Context(), "giving up on request", fields)
+			fields["reason"] = reason
+			tflog.Debug(req.Context(), message, fields)
 			if err != nil {
 				return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
 			}
@@ -204,9 +210,8 @@ func (b *cancelOnCloseBody) Close() error {
 	return err
 }
 
-// shouldRetry reports whether the attempt can be replayed. A retryable failure
-// is not enough on its own: for POST and PATCH the request may already have
-// been applied, and replaying it would create a duplicate resource.
+// retryDecision is the outcome of decide: whether to send the attempt again,
+// and why.
 type retryDecision struct {
 	retry bool
 	// reason is written to the debug log, so an operator can tell "ran out of
@@ -250,6 +255,20 @@ func (t *RetryTransport) decide(req *http.Request, resp *http.Response, err erro
 func failedBeforeSending(err error) bool {
 	var opErr *net.OpError
 	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
+// stopped describes why the loop ended, for the debug log. A failure that was
+// never retryable is the normal path for a 404 during drift detection, so it
+// does not get the same wording as running out of attempts.
+func (t *RetryTransport) stopped(decision retryDecision, exhausted bool) (message, reason string) {
+	switch {
+	case exhausted && t.Config.MaxRetries == 0:
+		return "not retrying request", "retries are disabled"
+	case exhausted:
+		return "giving up on request", "retries exhausted"
+	default:
+		return "not retrying request", decision.reason
+	}
 }
 
 // nextBackoff is how long to wait before trying again. A Retry-After on a
