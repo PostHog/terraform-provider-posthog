@@ -67,11 +67,8 @@ func TestClientOptions_ReplaceTheRetryTransport(t *testing.T) {
 	}
 }
 
-func TestClientOptions_DoNotNestAttemptDeadlines(t *testing.T) {
-	var attempts atomic.Int32
-	server := failingServer(t, &attempts)
-
-	client := NewDefaultClient(server.URL, "key", "test", WithNoRetry())
+func TestClientOptions_DoNotStackRetryTransports(t *testing.T) {
+	client := NewDefaultClient("https://example.invalid", "key", "test", WithNoRetry())
 
 	transport, ok := client.httpClient.Transport.(*middleware.RetryTransport)
 	require.True(t, ok)

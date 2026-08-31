@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -118,10 +119,17 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
-		retry := t.shouldRetry(req.Method, resp, err)
-		if !retry || attempt >= t.Config.MaxRetries {
-			fields := attemptFields(req.Method, attempt+1, resp, err)
-			fields["reason"] = t.giveUpReason(retry, req.Method, resp, err)
+		decision := t.decide(req, resp, err)
+		exhausted := decision.retry && attempt >= t.Config.MaxRetries
+		if !decision.retry || exhausted {
+			fields := attemptFields(req, attempt+1, resp, err)
+			fields["reason"] = decision.reason
+			if exhausted {
+				fields["reason"] = "retries exhausted"
+				if t.Config.MaxRetries == 0 {
+					fields["reason"] = "retries are disabled"
+				}
+			}
 			tflog.Debug(req.Context(), "giving up on request", fields)
 			if err != nil {
 				return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
@@ -129,27 +137,15 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
-		backoff := t.calculateBackoff(attempt)
-		if resp != nil {
-			// Close response body before retry to avoid resource leak
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-			if resp.StatusCode == http.StatusTooManyRequests {
-				if retryAfter, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After")); ok {
-					if retryAfter > backoff {
-						backoff = retryAfter
-					}
-					if backoff > t.Config.MaxBackoff {
-						backoff = t.Config.MaxBackoff
-					}
-				}
-			}
+		backoff := t.nextBackoff(attempt, resp)
+		if resp != nil && resp.Body != nil {
+			// Close the body before retrying so the connection is not leaked.
+			_ = resp.Body.Close()
 		}
 		if t.Config.OnRetry != nil {
 			t.Config.OnRetry(attempt+1, resp, err)
 		}
-		fields := attemptFields(req.Method, attempt+1, resp, err)
+		fields := attemptFields(req, attempt+1, resp, err)
 		fields["backoff"] = backoff.String()
 		tflog.Debug(req.Context(), "retrying request", fields)
 		// Sleep under the caller's context, not the attempt's. An attempt that
@@ -211,9 +207,28 @@ func (b *cancelOnCloseBody) Close() error {
 // shouldRetry reports whether the attempt can be replayed. A retryable failure
 // is not enough on its own: for POST and PATCH the request may already have
 // been applied, and replaying it would create a duplicate resource.
-func (t *RetryTransport) shouldRetry(method string, resp *http.Response, err error) bool {
-	if !t.isRetryableFailure(resp, err) {
-		return false
+type retryDecision struct {
+	retry bool
+	// reason is written to the debug log, so an operator can tell "ran out of
+	// attempts" apart from "never tried again, because replaying this method
+	// could have created the resource twice".
+	reason string
+}
+
+// decide reports whether the failed attempt can be sent again, and why.
+func (t *RetryTransport) decide(req *http.Request, resp *http.Response, err error) retryDecision {
+	// The caller's own deadline or cancellation ended this, so nothing about the
+	// failure or the method is what stopped the retry.
+	if err != nil && req.Context().Err() != nil {
+		return retryDecision{reason: "caller's context ended"}
+	}
+
+	retryable := isRetryableError(err)
+	if err == nil {
+		retryable = t.isRetryableStatus(resp.StatusCode)
+	}
+	if !retryable {
+		return retryDecision{reason: "failure is not retryable"}
 	}
 
 	// A rate-limited request was rejected before it was processed, so replaying
@@ -221,37 +236,44 @@ func (t *RetryTransport) shouldRetry(method string, resp *http.Response, err err
 	// proxy in front of an app that already committed the write, and nothing in
 	// the response or the error says which happened.
 	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
-		return true
+		return retryDecision{retry: true, reason: "rate limited"}
 	}
-	return isIdempotentMethod(method)
+	if !isIdempotentMethod(req.Method) && !failedBeforeSending(err) {
+		return retryDecision{reason: req.Method + " is not safe to replay"}
+	}
+	return retryDecision{retry: true, reason: "retryable failure"}
 }
 
-// isRetryableFailure reports whether the failure is one worth another attempt,
-// ignoring whether the method is safe to send twice.
-func (t *RetryTransport) isRetryableFailure(resp *http.Response, err error) bool {
-	if err != nil {
-		return isRetryableError(err)
-	}
-	return t.isRetryableStatus(resp.StatusCode)
+// failedBeforeSending reports whether the error proves the request never
+// reached the server. A dial that never connected wrote no bytes, so even a
+// create is safe to send again. Every other error leaves it unknowable.
+func failedBeforeSending(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
-// giveUpReason names what ended the loop. Reading TF_LOG=DEBUG, an operator
-// needs to tell "ran out of attempts" apart from "never tried again, because
-// replaying this method could have created the resource twice".
-func (t *RetryTransport) giveUpReason(retry bool, method string, resp *http.Response, err error) string {
-	switch {
-	case retry:
-		return "retries exhausted"
-	case t.isRetryableFailure(resp, err):
-		return method + " is not safe to replay"
-	default:
-		return "failure is not retryable"
+// nextBackoff is how long to wait before trying again. A Retry-After on a
+// rate-limited response outranks the computed backoff, still bounded by
+// MaxBackoff so one hostile header cannot stall an apply.
+func (t *RetryTransport) nextBackoff(attempt int, resp *http.Response) time.Duration {
+	backoff := t.calculateBackoff(attempt)
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return backoff
 	}
+
+	retryAfter, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+	if !ok {
+		return backoff
+	}
+	if retryAfter > backoff {
+		backoff = retryAfter
+	}
+	return min(backoff, t.Config.MaxBackoff)
 }
 
 // attemptFields describes an attempt's outcome for the debug log.
-func attemptFields(method string, attempt int, resp *http.Response, err error) map[string]any {
-	fields := map[string]any{"method": method, "attempt": attempt}
+func attemptFields(req *http.Request, attempt int, resp *http.Response, err error) map[string]any {
+	fields := map[string]any{"method": req.Method, "path": req.URL.Path, "attempt": attempt}
 	if resp != nil {
 		fields["status"] = resp.StatusCode
 	}

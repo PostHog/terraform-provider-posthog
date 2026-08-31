@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -659,63 +660,171 @@ func TestNewRetryTransport_KeepsMeaningfulZeroes(t *testing.T) {
 	assert.Zero(t, got.JitterFactor)
 }
 
-func TestGiveUpReason(t *testing.T) {
+func TestRetryDecision(t *testing.T) {
 	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
 
 	tests := map[string]struct {
-		retry  bool
-		method string
-		resp   *http.Response
-		err    error
-		want   string
+		method     string
+		resp       *http.Response
+		err        error
+		ctx        context.Context
+		wantRetry  bool
+		wantReason string
 	}{
-		"ran out of attempts": {
-			retry: true, method: http.MethodGet,
-			resp: &http.Response{StatusCode: 500}, want: "retries exhausted",
+		"get on a retryable status": {
+			method: http.MethodGet, resp: &http.Response{StatusCode: 500},
+			wantRetry: true, wantReason: "retryable failure",
 		},
 		"post on a retryable status": {
-			method: http.MethodPost,
-			resp:   &http.Response{StatusCode: 502}, want: "POST is not safe to replay",
+			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
+			wantReason: "POST is not safe to replay",
+		},
+		"post on a rate limit": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
+			wantRetry: true, wantReason: "rate limited",
+		},
+		"status is not retryable": {
+			method: http.MethodGet, resp: &http.Response{StatusCode: 404},
+			wantReason: "failure is not retryable",
 		},
 		"post on a transport error": {
-			method: http.MethodPost,
-			err:    errors.New("connection reset by peer"), want: "POST is not safe to replay",
+			method: http.MethodPost, err: errors.New("connection reset by peer"),
+			wantReason: "POST is not safe to replay",
 		},
-		"status is not retryable at all": {
-			method: http.MethodGet,
-			resp:   &http.Response{StatusCode: 404}, want: "failure is not retryable",
+		"post that never left the machine": {
+			method: http.MethodPost, err: &net.OpError{Op: "dial", Err: errors.New("connection refused")},
+			wantRetry: true, wantReason: "retryable failure",
 		},
 		"caller cancelled": {
-			method: http.MethodGet,
-			err:    context.Canceled, want: "failure is not retryable",
+			method: http.MethodPost, err: context.Canceled, ctx: cancelledContext(),
+			wantReason: "caller's context ended",
+		},
+		"caller's own deadline expired": {
+			method: http.MethodGet, err: context.DeadlineExceeded, ctx: cancelledContext(),
+			wantReason: "caller's context ended",
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tt.want, transport.giveUpReason(tt.retry, tt.method, tt.resp, tt.err))
+			ctx := tt.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			req, err := http.NewRequestWithContext(ctx, tt.method, "http://example.invalid/x", nil)
+			require.NoError(t, err)
+
+			got := transport.decide(req, tt.resp, tt.err)
+
+			assert.Equal(t, tt.wantRetry, got.retry)
+			assert.Equal(t, tt.wantReason, got.reason)
 		})
 	}
 }
 
-func TestRetryTransport_LogsDecisionsWithoutALogger(t *testing.T) {
-	// tflog is a no-op on a context with no provider logger, which is what the
-	// retry tests and any direct RoundTrip caller pass.
+func cancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// The message an operator actually reads is the one worth pinning.
+func TestRetryTransport_ErrorNamesAttemptAndDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		awaitOrCancel(r, 3*time.Second)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+	config := testRetryConfig()
+	config.AttemptTimeout = 80 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
 
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL, nil)
-	resp, err := transport.RoundTrip(req)
+	tests := map[string]struct {
+		method      string
+		wantAttempt string
+	}{
+		"idempotent method retries to exhaustion": {http.MethodGet, "(attempt: 4)"},
+		"create is not replayed after a timeout":  {http.MethodPost, "(attempt: 1)"},
+	}
 
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			req, _ := http.NewRequest(tt.method, server.URL, nil)
+			_, err := client.Do(req)
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantAttempt)
+			assert.ErrorContains(t, err, "attempt timed out after 80ms")
+			assert.ErrorIs(t, err, context.DeadlineExceeded, "callers still match on the cause")
+		})
+	}
 }
 
+// A caller deadline expiring mid-attempt must not be reported as a failed
+// backoff. That message is the one this whole change set out to remove.
+func TestRetryTransport_CallerDeadlineDoesNotLookLikeAFailedBackoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		awaitOrCancel(r, 3*time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 5 * time.Second
+	config.InitialBackoff = 200 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	_, err := client.Do(req)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "sleeping", "the caller's deadline ended it, not a backoff")
+}
+
+func TestRetryTransport_RetriesUnsentRequestsForAnyMethod(t *testing.T) {
+	// A dial that never connected sent nothing, so replaying it cannot duplicate
+	// a resource the way a response-side failure could.
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			base := &errorTransport{err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
+			transport := NewRetryTransport(base, testRetryConfig())
+
+			req, _ := http.NewRequest(method, "http://example.invalid", nil)
+			_, err := transport.RoundTrip(req)
+
+			require.Error(t, err)
+			assert.Equal(t, int32(4), base.attempts.Load())
+		})
+	}
+}
+
+func TestRetryTransport_NextBackoff(t *testing.T) {
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+	rateLimited := func(retryAfter string) *http.Response {
+		return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{retryAfter}}}
+	}
+
+	tests := map[string]struct {
+		resp *http.Response
+		want time.Duration
+	}{
+		"no response falls back to the computed backoff": {nil, 10 * time.Millisecond},
+		"non-429 ignores Retry-After":                    {&http.Response{StatusCode: 500}, 10 * time.Millisecond},
+		"unparseable Retry-After is ignored":             {rateLimited("later"), 10 * time.Millisecond},
+		"Retry-After outranks a shorter backoff":         {rateLimited("1"), 100 * time.Millisecond},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// MaxBackoff is 100ms in the test config, so a 1s Retry-After clamps.
+			assert.Equal(t, tt.want, transport.nextBackoff(0, tt.resp))
+		})
+	}
+}
 func TestIsIdempotentMethod(t *testing.T) {
 	idempotent := []string{
 		http.MethodGet, http.MethodHead, http.MethodPut,

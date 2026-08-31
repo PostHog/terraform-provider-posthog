@@ -16,7 +16,9 @@ func WithRetryConfig(config middleware.RetryConfig) ClientOption {
 	}
 }
 
-// WithNoRetry disables retry logic.
+// WithNoRetry disables retry logic. The request still gets the retry transport's
+// per-attempt deadline, which is the only bound left now that the client itself
+// carries no Timeout.
 func WithNoRetry() ClientOption {
 	return WithRetryConfig(middleware.NoRetryConfig())
 }
