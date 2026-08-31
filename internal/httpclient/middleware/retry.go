@@ -36,7 +36,8 @@ type RetryConfig struct {
 	// AttemptTimeout bounds a single attempt, from dialing through reading the
 	// response body. Each attempt gets its own budget, so a request that failed
 	// by timing out still has time left to be retried. Unset takes
-	// DefaultAttemptTimeout.
+	// DefaultAttemptTimeout. A whole request can therefore take
+	// (MaxRetries+1) * AttemptTimeout plus the backoff between attempts.
 	AttemptTimeout time.Duration
 	// RetryableStatusCodes are HTTP status codes that should trigger a retry.
 	// If nil, defaults to 429, 500, 502, 503, 504.
@@ -98,7 +99,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// If not retryable or last attempt, return
 		if !t.shouldRetry(req.Method, resp, err) || attempt >= t.Config.MaxRetries {
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("(attempt: %d) %w", attempt+1, err)
 			}
 			return resp, nil
 		}
@@ -135,13 +136,7 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // reading the response body, so on success the cancel func is handed to the
 // body's Close and the caller must close the body to release it.
 func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
-	ctx := req.Context()
-	cancel := func() {}
-	// NewRetryTransport fills this in. A Config assigned directly could still
-	// leave it at zero, which must not become an instantly expired deadline.
-	if t.Config.AttemptTimeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, t.Config.AttemptTimeout)
-	}
+	ctx, cancel := context.WithTimeout(req.Context(), t.Config.AttemptTimeout)
 
 	// Clone the request for retry (body needs special handling)
 	reqCopy := req.Clone(ctx)
@@ -157,6 +152,11 @@ func (t *RetryTransport) attempt(req *http.Request) (*http.Response, error) {
 	}
 
 	resp, err := t.Base.RoundTrip(reqCopy)
+	if err != nil && ctx.Err() != nil && req.Context().Err() == nil {
+		// Say whose deadline fired. On its own the wrapped error reads as
+		// "context deadline exceeded", which looks like the caller cancelled.
+		err = fmt.Errorf("attempt timed out after %s: %w", t.Config.AttemptTimeout, err)
+	}
 	if err != nil || resp.Body == nil {
 		cancel()
 		return resp, err

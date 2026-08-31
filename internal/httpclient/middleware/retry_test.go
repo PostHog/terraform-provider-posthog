@@ -227,6 +227,7 @@ func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *te
 	// elapsed too. Assert the property instead, that the 1s Retry-After was
 	// clamped down to MaxBackoff.
 	assert.GreaterOrEqual(t, elapsed, testRetryConfig().MaxBackoff, "should have waited at least the max backoff")
+	// 500ms sits between the clamped backoff and the 1s Retry-After it replaced.
 	assert.Less(t, elapsed, 500*time.Millisecond, "should have clamped the 1s Retry-After to the max backoff")
 }
 

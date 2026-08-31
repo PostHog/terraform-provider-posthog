@@ -19,7 +19,7 @@
 
 ### Upgrade notes
 
-- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have.
+- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page.
 - **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them. Rarely, PostHog stores a shape it will not accept back: splitting an overnight window at midnight can leave a piece shorter than its own minimum, which it then refuses on apply. Widen or drop that window.
 
 ## 1.0.0
