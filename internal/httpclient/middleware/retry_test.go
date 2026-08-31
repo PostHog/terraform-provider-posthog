@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -670,6 +671,7 @@ func TestRetryDecision(t *testing.T) {
 		resp       *http.Response
 		err        error
 		ctx        context.Context
+		header     http.Header
 		wantRetry  bool
 		wantReason string
 	}{
@@ -693,6 +695,21 @@ func TestRetryDecision(t *testing.T) {
 			method: http.MethodPost, err: errors.New("connection reset by peer"),
 			wantReason: "POST is not safe to replay",
 		},
+		"post carrying an idempotency key": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
+			header:    http.Header{"Idempotency-Key": []string{"abc123"}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"post carrying the x-prefixed key": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 500},
+			header:    http.Header{"X-Idempotency-Key": []string{"abc123"}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"an empty key still counts, as it does in net/http": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 500},
+			header:    http.Header{"Idempotency-Key": []string{""}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
 		"post that never left the machine": {
 			method: http.MethodPost, err: &net.OpError{Op: "dial", Err: errors.New("connection refused")},
 			wantRetry: true, wantReason: "retryable failure",
@@ -715,6 +732,9 @@ func TestRetryDecision(t *testing.T) {
 			}
 			req, err := http.NewRequestWithContext(ctx, tt.method, "http://example.invalid/x", nil)
 			require.NoError(t, err)
+			for name, values := range tt.header {
+				req.Header[name] = values
+			}
 
 			got := transport.decide(req, tt.resp, tt.err)
 
@@ -885,3 +905,36 @@ func TestIsIdempotentMethod(t *testing.T) {
 		assert.False(t, isIdempotentMethod(method), "%s should not be idempotent", method)
 	}
 }
+
+// net/http replays a request itself when a pooled connection turns out to be
+// dead before any bytes were written, including a POST, but only when GetBody
+// survives to rebuild the body. Cloning per attempt must not drop it.
+func TestRetryTransport_AttemptKeepsGetBodyForTheTransport(t *testing.T) {
+	body := []byte(`{"name":"thing"}`)
+	var seen *http.Request
+	base := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		seen = r
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+	})
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.invalid", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+
+	resp, err := NewRetryTransport(base, testRetryConfig()).RoundTrip(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.NotNil(t, seen)
+	require.NotNil(t, seen.GetBody, "the transport below needs GetBody to replay safely")
+
+	rebuilt, err := seen.GetBody()
+	require.NoError(t, err)
+	got, err := io.ReadAll(rebuilt)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

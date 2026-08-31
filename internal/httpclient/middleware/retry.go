@@ -243,15 +243,41 @@ func (t *RetryTransport) decide(req *http.Request, resp *http.Response, err erro
 	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
 		return retryDecision{retry: true, reason: "rate limited"}
 	}
-	if !isIdempotentMethod(req.Method) && !failedBeforeSending(err) {
+	if !safeToReplay(req, err) {
 		return retryDecision{reason: req.Method + " is not safe to replay"}
 	}
 	return retryDecision{retry: true, reason: "retryable failure"}
 }
 
+// safeToReplay reports whether sending the request a second time cannot apply
+// it twice.
+//
+// net/http answers the same question in Request.isReplayable, but it is
+// unexported and reachable only from inside the transport, which is why the
+// rule is restated here. Two deliberate differences from it: PUT and DELETE are
+// included, because RFC 9110 defines them as idempotent and this retry is
+// explicit and logged rather than the transport's invisible one; and the
+// "nothing was written to the wire" case is left to the transport, which
+// already replays any method when it can prove that (see failedBeforeSending).
+func safeToReplay(req *http.Request, err error) bool {
+	if isIdempotentMethod(req.Method) || failedBeforeSending(err) {
+		return true
+	}
+	// Honour the same two headers net/http does, for the same reason: the caller
+	// is saying the server will collapse a duplicate.
+	return len(req.Header.Values("Idempotency-Key")) > 0 ||
+		len(req.Header.Values("X-Idempotency-Key")) > 0
+}
+
 // failedBeforeSending reports whether the error proves the request never
 // reached the server. A dial that never connected wrote no bytes, so even a
 // create is safe to send again. Every other error leaves it unknowable.
+//
+// This is the case net/http's own transport refuses: shouldRetryRequest bails
+// on a connection that was not reused, so a failed dial is never replayed below
+// this layer. The reverse also holds, so the two do not overlap: when a pooled
+// connection turns out to be dead before any bytes are written, the transport
+// replays the request itself, including a POST, as long as GetBody is set.
 func failedBeforeSending(err error) bool {
 	var opErr *net.OpError
 	return errors.As(err, &opErr) && opErr.Op == "dial"
@@ -304,7 +330,8 @@ func attemptFields(req *http.Request, attempt int, resp *http.Response, err erro
 
 // isIdempotentMethod reports whether RFC 9110 guarantees that sending the
 // request twice has the same effect as sending it once. POST and PATCH carry no
-// such guarantee.
+// such guarantee. This is a wider set than net/http's isReplayable, which stops
+// at GET, HEAD, OPTIONS and TRACE.
 func isIdempotentMethod(method string) bool {
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodTrace:
