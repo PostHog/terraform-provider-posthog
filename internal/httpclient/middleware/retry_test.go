@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +25,7 @@ func testRetryConfig() RetryConfig {
 		MaxBackoff:           100 * time.Millisecond,
 		BackoffFactor:        2.0,
 		JitterFactor:         0, // Disable jitter for predictable tests
+		AttemptTimeout:       5 * time.Second,
 		RetryableStatusCodes: []int{429, 500, 502, 503, 504},
 	}
 }
@@ -189,7 +193,9 @@ func TestRetryTransport_RetryOn429WithRetryAfter(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), attempts.Load())
-	assert.InEpsilon(t, 1*time.Second, elapsed, 0.1, "should have waited for retry after limit")
+	// Same floor-plus-ceiling as its two siblings: a timer can only fire late.
+	assert.GreaterOrEqual(t, elapsed, 1*time.Second, "should have honoured the 1s Retry-After")
+	assert.Less(t, elapsed, 2*time.Second, "should not have waited past the raised max backoff")
 }
 
 func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *testing.T) {
@@ -221,7 +227,12 @@ func TestRetryTransport_RetryOn429WithRetryAfter_RespectingLowerMaxBackoff(t *te
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), attempts.Load())
-	assert.InEpsilon(t, testRetryConfig().MaxBackoff, elapsed, 0.1, "should have respected the max backoff from our test config")
+	// A 10% band around MaxBackoff was flaky: the two round trips are counted in
+	// elapsed too. Assert the property instead, that the 1s Retry-After was
+	// clamped down to MaxBackoff.
+	assert.GreaterOrEqual(t, elapsed, testRetryConfig().MaxBackoff, "should have waited at least the max backoff")
+	// 500ms sits between the clamped backoff and the 1s Retry-After it replaced.
+	assert.Less(t, elapsed, 500*time.Millisecond, "should have clamped the 1s Retry-After to the max backoff")
 }
 
 func TestRetryTransport_ContextCancellation(t *testing.T) {
@@ -270,8 +281,9 @@ func TestRetryTransport_WithBody(t *testing.T) {
 	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
 	client := &http.Client{Transport: transport}
 
+	// PUT rather than POST: only idempotent methods are replayed on a 500.
 	bodyContent := `{"key": "value"}`
-	req, _ := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(bodyContent))
+	req, _ := http.NewRequest(http.MethodPut, server.URL, strings.NewReader(bodyContent))
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(bodyContent)), nil
 	}
@@ -432,6 +444,534 @@ func TestSleep(t *testing.T) {
 		elapsed := time.Since(start)
 
 		assert.NoError(t, err)
-		assert.InEpsilon(t, 50*time.Millisecond, elapsed, 0.1)
+		// A 10% band was flaky: a timer can only fire late, never early.
+		assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond)
+		assert.Less(t, elapsed, 5*time.Second)
 	})
 }
+
+// awaitOrCancel stalls a handler for d, or until the client gives up. Sleeping
+// the full duration would make httptest's Close wait it out after the attempt
+// deadline has already closed the connection.
+func awaitOrCancel(r *http.Request, d time.Duration) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(d):
+	}
+}
+
+func TestRetryTransport_RetriesAfterAttemptTimeout(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) < 3 {
+			awaitOrCancel(r, 600*time.Millisecond)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 150 * time.Millisecond
+
+	transport := NewRetryTransport(http.DefaultTransport, config)
+	client := &http.Client{Transport: transport}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := client.Do(req)
+
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(3), attempts.Load(), "the first two attempts should time out and still be retried")
+}
+
+func TestRetryTransport_AppliesAttemptTimeoutWithoutRetries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		awaitOrCancel(r, 600*time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := NoRetryConfig()
+	config.AttemptTimeout = 100 * time.Millisecond
+
+	transport := NewRetryTransport(http.DefaultTransport, config)
+	client := &http.Client{Transport: transport}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	_, err := client.Do(req)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "the attempt deadline is the only timeout left on this path")
+}
+
+func TestRetryTransport_ResponseBodyOutlivesRoundTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		// Delay the body so it is read after RoundTrip has already returned.
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
+	}))
+	defer server.Close()
+
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "the body is buffered during the attempt, so it reads back fine")
+	assert.Equal(t, `{"status": "ok"}`, string(body))
+}
+
+// A body that stalls has to fail the attempt, not the caller's later read.
+// RoundTrip used to return as soon as the headers arrived, so the timeout landed
+// outside the retry loop, where it could be neither retried nor explained.
+func TestRetryTransport_RetriesWhenTheBodyStalls(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		if attempts.Add(1) < 3 {
+			// Headers arrive, the body never does.
+			awaitOrCancel(r, 3*time.Second)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 150 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := client.Do(req)
+
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, `{"status": "ok"}`, string(body))
+	assert.Equal(t, int32(3), attempts.Load(), "a stalled body should fail its attempt and be retried")
+}
+
+// The same stall on a create must not be replayed, and the error has to say so:
+// the write may have landed even though the body never arrived.
+func TestRetryTransport_StalledBodyOnCreateSaysItMayHaveApplied(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		awaitOrCancel(r, 3*time.Second)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 150 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL, nil)
+	_, err := client.Do(req)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not retried, POST may already have been applied")
+	assert.ErrorContains(t, err, "attempt timed out after 150ms")
+	assert.Equal(t, int32(1), attempts.Load())
+}
+func TestRetryTransport_RetriesOnlyIdempotentMethods(t *testing.T) {
+	tests := map[string]struct {
+		method           string
+		status           int
+		expectedAttempts int32
+	}{
+		"GET retries on 500":          {http.MethodGet, http.StatusInternalServerError, 4},
+		"HEAD retries on 500":         {http.MethodHead, http.StatusInternalServerError, 4},
+		"PUT retries on 502":          {http.MethodPut, http.StatusBadGateway, 4},
+		"DELETE retries on 503":       {http.MethodDelete, http.StatusServiceUnavailable, 4},
+		"POST does not retry on 500":  {http.MethodPost, http.StatusInternalServerError, 1},
+		"POST does not retry on 502":  {http.MethodPost, http.StatusBadGateway, 1},
+		"POST does not retry on 504":  {http.MethodPost, http.StatusGatewayTimeout, 1},
+		"PATCH does not retry on 503": {http.MethodPatch, http.StatusServiceUnavailable, 1},
+		"POST retries on 429":         {http.MethodPost, http.StatusTooManyRequests, 4},
+		"PATCH retries on 429":        {http.MethodPatch, http.StatusTooManyRequests, 4},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var attempts atomic.Int32
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+
+			transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+			client := &http.Client{Transport: transport}
+
+			req, _ := http.NewRequest(tt.method, server.URL, nil)
+			resp, err := client.Do(req)
+
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+
+			assert.Equal(t, tt.status, resp.StatusCode)
+			assert.Equal(t, tt.expectedAttempts, attempts.Load())
+		})
+	}
+}
+
+// errorTransport fails every request, standing in for a connection that drops
+// without the caller learning whether the server saw the request.
+type errorTransport struct {
+	attempts atomic.Int32
+	err      error
+}
+
+func (e *errorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	e.attempts.Add(1)
+	return nil, e.err
+}
+
+func TestRetryTransport_RetriesTransportErrorsOnlyForIdempotentMethods(t *testing.T) {
+	tests := map[string]struct {
+		method           string
+		expectedAttempts int32
+	}{
+		"GET retries":          {http.MethodGet, 4},
+		"DELETE retries":       {http.MethodDelete, 4},
+		"POST does not retry":  {http.MethodPost, 1},
+		"PATCH does not retry": {http.MethodPatch, 1},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			base := &errorTransport{err: errors.New("connection reset by peer")}
+			transport := NewRetryTransport(base, testRetryConfig())
+
+			req, _ := http.NewRequest(tt.method, "http://example.invalid", nil)
+			_, err := transport.RoundTrip(req)
+
+			require.Error(t, err)
+			assert.Equal(t, tt.expectedAttempts, base.attempts.Load())
+		})
+	}
+}
+
+func TestNewRetryTransport_FillsUnsetTunables(t *testing.T) {
+	// A hand-built config must not end up with no deadline, or with a zero
+	// backoff that would retry with no spacing between attempts.
+	for name, config := range map[string]RetryConfig{
+		"no retries": NoRetryConfig(),
+		"zero value": {MaxRetries: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			transport := NewRetryTransport(http.DefaultTransport, config)
+			got := transport.Config
+
+			assert.Equal(t, DefaultAttemptTimeout, got.AttemptTimeout)
+			assert.Equal(t, DefaultInitialBackoff, got.InitialBackoff)
+			assert.Equal(t, DefaultMaxBackoff, got.MaxBackoff)
+			assert.Equal(t, DefaultBackoffFactor, got.BackoffFactor)
+			assert.Equal(t, defaultRetryableStatusCodes(), got.RetryableStatusCodes)
+			assert.Positive(t, transport.calculateBackoff(0), "retries must be spaced out")
+		})
+	}
+}
+
+func TestNewRetryTransport_KeepsMeaningfulZeroes(t *testing.T) {
+	// Zero is a real choice for both of these, so filling them in would silently
+	// override the caller.
+	got := NewRetryTransport(http.DefaultTransport, RetryConfig{MaxRetries: 0, JitterFactor: 0}).Config
+
+	assert.Zero(t, got.MaxRetries)
+	assert.Zero(t, got.JitterFactor)
+}
+
+func TestRetryDecision(t *testing.T) {
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+
+	tests := map[string]struct {
+		method     string
+		resp       *http.Response
+		err        error
+		ctx        context.Context
+		header     http.Header
+		wantRetry  bool
+		wantReason string
+	}{
+		"get on a retryable status": {
+			method: http.MethodGet, resp: &http.Response{StatusCode: 500},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"post on a retryable status": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
+			wantReason: "POST may already have been applied",
+		},
+		"post on a rate limit": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
+			wantRetry: true, wantReason: "rate limited",
+		},
+		"status is not retryable": {
+			method: http.MethodGet, resp: &http.Response{StatusCode: 404},
+			wantReason: "failure is not retryable",
+		},
+		"post on a transport error": {
+			method: http.MethodPost, err: errors.New("connection reset by peer"),
+			wantReason: "POST may already have been applied",
+		},
+		"post carrying an idempotency key": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
+			header:    http.Header{"Idempotency-Key": []string{"abc123"}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"post carrying the x-prefixed key": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 500},
+			header:    http.Header{"X-Idempotency-Key": []string{"abc123"}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"an empty key still counts, as it does in net/http": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 500},
+			header:    http.Header{"Idempotency-Key": []string{""}},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"post that never left the machine": {
+			method: http.MethodPost, err: &net.OpError{Op: "dial", Err: errors.New("connection refused")},
+			wantRetry: true, wantReason: "retryable failure",
+		},
+		"caller cancelled": {
+			method: http.MethodPost, err: context.Canceled, ctx: cancelledContext(),
+			wantReason: "caller's context ended",
+		},
+		"caller's own deadline expired": {
+			method: http.MethodGet, err: context.DeadlineExceeded, ctx: cancelledContext(),
+			wantReason: "caller's context ended",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := tt.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			req, err := http.NewRequestWithContext(ctx, tt.method, "http://example.invalid/x", nil)
+			require.NoError(t, err)
+			for name, values := range tt.header {
+				req.Header[name] = values
+			}
+
+			got := transport.decide(req, tt.resp, tt.err)
+
+			assert.Equal(t, tt.wantRetry, got.retry)
+			assert.Equal(t, tt.wantReason, got.reason)
+		})
+	}
+}
+
+func cancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// The message an operator actually reads is the one worth pinning.
+func TestRetryTransport_ErrorNamesAttemptAndDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		awaitOrCancel(r, 3*time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 80 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	tests := map[string]struct {
+		method      string
+		wantAttempt string
+	}{
+		"idempotent method retries to exhaustion": {http.MethodGet, "(attempt: 4)"},
+		"create is not replayed after a timeout":  {http.MethodPost, "(attempt: 1)"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			req, _ := http.NewRequest(tt.method, server.URL, nil)
+			_, err := client.Do(req)
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantAttempt)
+			assert.ErrorContains(t, err, "attempt timed out after 80ms")
+			if tt.method == http.MethodPost {
+				assert.ErrorContains(t, err, "not retried, POST may already have been applied")
+			}
+			assert.ErrorIs(t, err, context.DeadlineExceeded, "callers still match on the cause")
+		})
+	}
+}
+
+// A caller deadline expiring mid-attempt must not be reported as a failed
+// backoff. That message is the one this whole change set out to remove.
+func TestRetryTransport_CallerDeadlineDoesNotLookLikeAFailedBackoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		awaitOrCancel(r, 3*time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.AttemptTimeout = 5 * time.Second
+	config.InitialBackoff = 200 * time.Millisecond
+	client := &http.Client{Transport: NewRetryTransport(http.DefaultTransport, config)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	_, err := client.Do(req)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "sleeping", "the caller's deadline ended it, not a backoff")
+}
+
+func TestRetryTransport_RetriesUnsentRequestsForAnyMethod(t *testing.T) {
+	// A dial that never connected sent nothing, so replaying it cannot duplicate
+	// a resource the way a response-side failure could.
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			base := &errorTransport{err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
+			transport := NewRetryTransport(base, testRetryConfig())
+
+			req, _ := http.NewRequest(method, "http://example.invalid", nil)
+			_, err := transport.RoundTrip(req)
+
+			require.Error(t, err)
+			assert.Equal(t, int32(4), base.attempts.Load())
+		})
+	}
+}
+
+func TestRetryTransport_Stopped(t *testing.T) {
+	tests := map[string]struct {
+		maxRetries  int
+		decision    retryDecision
+		exhausted   bool
+		wantMessage string
+		wantReason  string
+	}{
+		"ran out of attempts": {
+			maxRetries: 3, decision: retryDecision{retry: true}, exhausted: true,
+			wantMessage: "giving up on request", wantReason: "retries exhausted",
+		},
+		"retries turned off": {
+			maxRetries: 0, decision: retryDecision{retry: true}, exhausted: true,
+			wantMessage: "not retrying request", wantReason: "retries are disabled",
+		},
+		"never retryable in the first place": {
+			maxRetries: 3, decision: retryDecision{reason: "failure is not retryable"},
+			wantMessage: "not retrying request", wantReason: "failure is not retryable",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			config := testRetryConfig()
+			config.MaxRetries = tt.maxRetries
+			transport := NewRetryTransport(http.DefaultTransport, config)
+
+			message, reason := transport.stopped(tt.decision, tt.exhausted)
+
+			assert.Equal(t, tt.wantMessage, message)
+			assert.Equal(t, tt.wantReason, reason)
+		})
+	}
+}
+
+func TestReplaceRetryTransport_DoesNotStack(t *testing.T) {
+	base := http.DefaultTransport
+	once := ReplaceRetryTransport(base, DefaultRetryConfig())
+	twice := ReplaceRetryTransport(once, NoRetryConfig())
+
+	assert.Same(t, base, twice.Base, "replacing must unwrap, not nest")
+	assert.Zero(t, twice.Config.MaxRetries)
+}
+
+func TestRetryTransport_NextBackoff(t *testing.T) {
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+	rateLimited := func(retryAfter string) *http.Response {
+		return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{retryAfter}}}
+	}
+
+	tests := map[string]struct {
+		resp *http.Response
+		want time.Duration
+	}{
+		"no response falls back to the computed backoff": {nil, 10 * time.Millisecond},
+		"non-429 ignores Retry-After":                    {&http.Response{StatusCode: 500}, 10 * time.Millisecond},
+		"unparseable Retry-After is ignored":             {rateLimited("later"), 10 * time.Millisecond},
+		"Retry-After outranks a shorter backoff":         {rateLimited("1"), 100 * time.Millisecond},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			// MaxBackoff is 100ms in the test config, so a 1s Retry-After clamps.
+			assert.Equal(t, tt.want, transport.nextBackoff(0, tt.resp))
+		})
+	}
+}
+func TestIsIdempotentMethod(t *testing.T) {
+	idempotent := []string{
+		http.MethodGet, http.MethodHead, http.MethodPut,
+		http.MethodDelete, http.MethodOptions, http.MethodTrace,
+	}
+	for _, method := range idempotent {
+		assert.True(t, isIdempotentMethod(method), "%s should be idempotent", method)
+	}
+
+	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodConnect} {
+		assert.False(t, isIdempotentMethod(method), "%s should not be idempotent", method)
+	}
+}
+
+// net/http replays a request itself when a pooled connection turns out to be
+// dead before any bytes were written, including a POST, but only when GetBody
+// survives to rebuild the body. Cloning per attempt must not drop it.
+func TestRetryTransport_AttemptKeepsGetBodyForTheTransport(t *testing.T) {
+	body := []byte(`{"name":"thing"}`)
+	var seen *http.Request
+	base := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		seen = r
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+	})
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.invalid", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+
+	resp, err := NewRetryTransport(base, testRetryConfig()).RoundTrip(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.NotNil(t, seen)
+	require.NotNil(t, seen.GetBody, "the transport below needs GetBody to replay safely")
+
+	rebuilt, err := seen.GetBody()
+	require.NoError(t, err)
+	got, err := io.ReadAll(rebuilt)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

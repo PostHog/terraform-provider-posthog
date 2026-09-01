@@ -12,13 +12,13 @@ type ClientOption func(*http.Client)
 // WithRetryConfig sets a custom retry configuration.
 func WithRetryConfig(config middleware.RetryConfig) ClientOption {
 	return func(c *http.Client) {
-		c.Transport = middleware.NewRetryTransport(c.Transport, config)
+		c.Transport = middleware.ReplaceRetryTransport(c.Transport, config)
 	}
 }
 
-// WithNoRetry disables retry logic.
+// WithNoRetry disables retry logic. The request still gets the retry transport's
+// per-attempt deadline, which is the only bound left now that the client itself
+// carries no Timeout.
 func WithNoRetry() ClientOption {
-	return func(c *http.Client) {
-		c.Transport = middleware.NewRetryTransport(c.Transport, middleware.NoRetryConfig())
-	}
+	return WithRetryConfig(middleware.NoRetryConfig())
 }
