@@ -20,6 +20,7 @@ type Environment struct {
 	CookielessServerHashMode                    *int64                       `json:"cookieless_server_hash_mode,omitempty"`
 	AutocaptureWebVitalsOptIn                   *bool                        `json:"autocapture_web_vitals_opt_in,omitempty"`
 	CapturePerformanceOptIn                     *bool                        `json:"capture_performance_opt_in,omitempty"`
+	AnonymizeIps                                *bool                        `json:"anonymize_ips,omitempty"`
 	SessionRecordingNetworkPayloadCaptureConfig *NetworkPayloadCaptureConfig `json:"session_recording_network_payload_capture_config,omitempty"`
 	AppURLs                                     *[]string                    `json:"app_urls,omitempty"`
 	RecordingDomains                            *[]string                    `json:"recording_domains,omitempty"`
@@ -54,6 +55,7 @@ type EnvironmentSettingsRequest struct {
 	CookielessServerHashMode                    *int64                       `json:"cookieless_server_hash_mode,omitempty"`
 	AutocaptureWebVitalsOptIn                   *bool                        `json:"autocapture_web_vitals_opt_in,omitempty"`
 	CapturePerformanceOptIn                     *bool                        `json:"capture_performance_opt_in,omitempty"`
+	AnonymizeIps                                *bool                        `json:"anonymize_ips,omitempty"`
 	SessionRecordingNetworkPayloadCaptureConfig *NetworkPayloadCaptureConfig `json:"session_recording_network_payload_capture_config,omitempty"`
 	AppURLs                                     *[]string                    `json:"app_urls,omitempty"`
 	RecordingDomains                            *[]string                    `json:"recording_domains,omitempty"`

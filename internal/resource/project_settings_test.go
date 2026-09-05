@@ -38,6 +38,7 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	model.SurveysOptIn = types.BoolValue(false)
 	model.CookielessServerHashMode = types.Int64Value(2)
 	model.AutocaptureWebVitalsOptIn = types.BoolValue(true)
+	model.AnonymizeIps = types.BoolValue(true)
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -54,6 +55,8 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	assert.Equal(t, int64(2), *req.CookielessServerHashMode)
 	require.NotNil(t, req.AutocaptureWebVitalsOptIn)
 	assert.True(t, *req.AutocaptureWebVitalsOptIn)
+	require.NotNil(t, req.AnonymizeIps)
+	assert.True(t, *req.AnonymizeIps)
 }
 
 // TestProjectSettingsBuildCreateRequest_ZeroValues guards the zero-value path:
@@ -92,6 +95,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	assert.Nil(t, req.SurveysOptIn)
 	assert.Nil(t, req.CookielessServerHashMode)
 	assert.Nil(t, req.AutocaptureWebVitalsOptIn)
+	assert.Nil(t, req.AnonymizeIps, "unset fields must serialize as nil (omitted)")
 }
 
 // TestProjectSettingsBuildCreateRequest_EmptyListClears guards the clearing path:
@@ -255,6 +259,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 		SurveysOptIn:               util.BoolPtr(false),
 		CookielessServerHashMode:   util.Int64Ptr(1),
 		AutocaptureWebVitalsOptIn:  util.BoolPtr(true),
+		AnonymizeIps:               util.BoolPtr(true),
 	}
 
 	model := newProjectSettingsModel()
@@ -268,6 +273,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 	assert.False(t, model.SurveysOptIn.ValueBool())
 	assert.Equal(t, int64(1), model.CookielessServerHashMode.ValueInt64())
 	assert.True(t, model.AutocaptureWebVitalsOptIn.ValueBool())
+	assert.True(t, model.AnonymizeIps.ValueBool())
 }
 
 // TestProjectSettingsMapResponseToModel_ZeroValues ensures a returned 0 / false
@@ -304,6 +310,7 @@ func TestProjectSettingsMapResponseToModel_NilFieldsBecomeNull(t *testing.T) {
 	assert.True(t, model.SurveysOptIn.IsNull())
 	assert.True(t, model.CookielessServerHashMode.IsNull())
 	assert.True(t, model.AutocaptureWebVitalsOptIn.IsNull())
+	assert.True(t, model.AnonymizeIps.IsNull())
 }
 
 func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testing.T) {
@@ -388,6 +395,19 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "capture_performance_opt_in")
+	})
+
+	t.Run("anonymize_ips diverged", func(t *testing.T) {
+		model := newProjectSettingsModel()
+		model.AnonymizeIps = types.BoolValue(true)
+
+		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+			ID:           123,
+			AnonymizeIps: util.BoolPtr(false),
+		}, &model)
+
+		require.Equal(t, 1, diags.WarningsCount())
+		assert.Contains(t, diags.Warnings()[0].Detail(), "anonymize_ips")
 	})
 
 	t.Run("unparseable configured object counts as diverged", func(t *testing.T) {

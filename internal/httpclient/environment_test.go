@@ -30,6 +30,7 @@ func TestGetEnvironment(t *testing.T) {
 			SurveysOptIn:               util.BoolPtr(false),
 			CookielessServerHashMode:   util.Int64Ptr(2),
 			AutocaptureWebVitalsOptIn:  util.BoolPtr(true),
+			AnonymizeIps:               util.BoolPtr(true),
 		})
 	}))
 	defer server.Close()
@@ -52,6 +53,8 @@ func TestGetEnvironment(t *testing.T) {
 	assert.Equal(t, int64(2), *env.CookielessServerHashMode)
 	require.NotNil(t, env.AutocaptureWebVitalsOptIn)
 	assert.True(t, *env.AutocaptureWebVitalsOptIn)
+	require.NotNil(t, env.AnonymizeIps)
+	assert.True(t, *env.AnonymizeIps)
 }
 
 func TestGetEnvironmentDeserializesNetworkPayloadCaptureFromRawJSON(t *testing.T) {
