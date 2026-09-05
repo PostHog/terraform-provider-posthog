@@ -15,6 +15,8 @@ resource "posthog_project_settings" "example" {
   autocapture_web_vitals_opt_in = false
   cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateless, 2=stateful
 
+  anonymize_ips = false
+
   # Authorized URLs / permitted domains (toolbar + project domain allowlist).
   app_urls = ["https://app.example.com", "https://www.example.com"]
   # Authorized domains for session replay.
