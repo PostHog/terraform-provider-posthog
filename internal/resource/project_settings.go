@@ -47,6 +47,7 @@ type ProjectSettingsModel struct {
 	CookielessServerHashMode   types.Int64  `tfsdk:"cookieless_server_hash_mode"`
 	AutocaptureWebVitalsOptIn  types.Bool   `tfsdk:"autocapture_web_vitals_opt_in"`
 	CapturePerformanceOptIn    types.Bool   `tfsdk:"capture_performance_opt_in"`
+	AnonymizeIps               types.Bool   `tfsdk:"anonymize_ips"`
 	// NetworkPayloadCapture holds a NetworkPayloadCaptureModel object.
 	NetworkPayloadCapture types.Object `tfsdk:"session_recording_network_payload_capture_config"`
 	AppURLs               types.List   `tfsdk:"app_urls"`
@@ -164,6 +165,14 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"anonymize_ips": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether to discard the client IP address at ingestion (shown in PostHog as **Discard client IP data**). Enabling this degrades IP-based event matching for destinations that rely on it (for example Meta Conversions API), since `$ip` is never stored.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"session_recording_network_payload_capture_config": schema.SingleNestedAttribute{
 				Optional: true,
 				Computed: true,
@@ -235,6 +244,7 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 		SurveysOptIn:               util.BoolPtrFromValue(model.SurveysOptIn),
 		AutocaptureWebVitalsOptIn:  util.BoolPtrFromValue(model.AutocaptureWebVitalsOptIn),
 		CapturePerformanceOptIn:    util.BoolPtrFromValue(model.CapturePerformanceOptIn),
+		AnonymizeIps:               util.BoolPtrFromValue(model.AnonymizeIps),
 		CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
 	}
 
@@ -326,6 +336,9 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	if util.BoolDiverged(model.CapturePerformanceOptIn, resp.CapturePerformanceOptIn) {
 		ignored = append(ignored, "capture_performance_opt_in")
 	}
+	if util.BoolDiverged(model.AnonymizeIps, resp.AnonymizeIps) {
+		ignored = append(ignored, "anonymize_ips")
+	}
 	if networkPayloadCaptureDiverged(ctx, model.NetworkPayloadCapture, resp.SessionRecordingNetworkPayloadCaptureConfig) {
 		ignored = append(ignored, "session_recording_network_payload_capture_config")
 	}
@@ -347,6 +360,7 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.SurveysOptIn = core.PtrToBool(resp.SurveysOptIn)
 	model.AutocaptureWebVitalsOptIn = core.PtrToBool(resp.AutocaptureWebVitalsOptIn)
 	model.CapturePerformanceOptIn = core.PtrToBool(resp.CapturePerformanceOptIn)
+	model.AnonymizeIps = core.PtrToBool(resp.AnonymizeIps)
 	model.CookielessServerHashMode = util.PtrToInt64(resp.CookielessServerHashMode)
 
 	if resp.SessionRecordingNetworkPayloadCaptureConfig == nil {

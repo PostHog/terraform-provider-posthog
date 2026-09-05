@@ -45,6 +45,8 @@ resource "posthog_project_settings" "example" {
   autocapture_web_vitals_opt_in = false
   cookieless_server_hash_mode   = 0 # 0=disabled, 1=stateless, 2=stateful
 
+  anonymize_ips = false
+
   # Authorized URLs / permitted domains (toolbar + project domain allowlist).
   app_urls = ["https://app.example.com", "https://www.example.com"]
   # Authorized domains for session replay.
@@ -87,6 +89,7 @@ resource "posthog_project_settings" "minimal" {
 
 ### Optional
 
+- `anonymize_ips` (Boolean) Whether to discard the client IP address at ingestion (shown in PostHog as **Discard client IP data**). Enabling this degrades IP-based event matching for destinations that rely on it (for example Meta Conversions API), since `$ip` is never stored.
 - `app_urls` (List of String) The project's authorized domains — shown in PostHog settings as **Web analytics domains** (and used as the toolbar's Authorized URLs). These are the domains tracked in web analytics and where the toolbar is enabled. Maps to the team `app_urls` field. Wildcards are not allowed; order is preserved.
 - `autocapture_exceptions_opt_in` (Boolean) Whether exception autocapture is enabled.
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
