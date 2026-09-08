@@ -114,6 +114,38 @@ func TestInsight_Basic(t *testing.T) {
 	})
 }
 
+// TestInsight_CreateInFolder asserts create_in_folder round-trips. PostHog
+// consumes it only on create and never echoes it back. The provider must keep
+// the configured value in state instead of overwriting it with the empty
+// response. Otherwise the apply fails the post-apply consistency check, and a
+// re-plan is dirty. This is a regression guard for that bug.
+func TestInsight_CreateInFolder(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInsightDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightCreateInFolder(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_insight.test", "name", rName),
+					resource.TestCheckResourceAttrSet("posthog_insight.test", "id"),
+					resource.TestCheckResourceAttr("posthog_insight.test", "create_in_folder", "tf-acc-test folder"),
+				),
+			},
+			{
+				// No-drift: create_in_folder must stay in state and re-plan clean.
+				Config:   testAccInsightCreateInFolder(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestInsight_AllFields tests creating an insight with all optional fields.
 func TestInsight_AllFields(t *testing.T) {
 	skipIfNotAcceptance(t)
@@ -981,6 +1013,30 @@ provider "posthog" {}
 
 resource "posthog_insight" "test" {
   name = %q
+
+  query_json = jsonencode({
+    kind   = "InsightVizNode"
+    source = {
+      kind   = "TrendsQuery"
+      series = [{
+        kind  = "EventsNode"
+        name  = "$pageview"
+        event = "$pageview"
+        math  = "total"
+      }]
+    }
+  })
+}
+`, name)
+}
+
+func testAccInsightCreateInFolder(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  name             = %q
+  create_in_folder = "tf-acc-test folder"
 
   query_json = jsonencode({
     kind   = "InsightVizNode"
