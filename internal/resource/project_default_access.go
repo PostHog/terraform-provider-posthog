@@ -112,7 +112,14 @@ func (o ProjectDefaultAccessOps) Create(ctx context.Context, client httpclient.P
 }
 
 func (o ProjectDefaultAccessOps) Read(ctx context.Context, client httpclient.PosthogClient, model ProjectDefaultAccessModel) (httpclient.ProjectAccessControlListResponse, httpclient.HTTPStatusCode, error) {
-	return client.GetProjectAccessControls(ctx, model.GetEffectiveProjectID())
+	result, status, err := client.GetProjectAccessControls(ctx, model.GetEffectiveProjectID())
+	if err == nil {
+		// The singleton rule this resource owns: the project's own default, with no target
+		ClaimRuleForTerraform(ctx, client, model.GetEffectiveProjectID(), httpclient.AccessControlClaimRequest{
+			Resource: "project",
+		})
+	}
+	return result, status, err
 }
 
 func (o ProjectDefaultAccessOps) Update(ctx context.Context, client httpclient.PosthogClient, model ProjectDefaultAccessModel, req httpclient.ProjectAccessControlRequest) (httpclient.ProjectAccessControlListResponse, httpclient.HTTPStatusCode, error) {
