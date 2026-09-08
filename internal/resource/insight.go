@@ -116,7 +116,7 @@ func (o InsightOps) Schema() schema.Schema {
 			},
 			"create_in_folder": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "The folder where the insight is created.",
+				MarkdownDescription: "Folder identifier used only during insight creation.",
 			},
 			"dashboard_ids": schema.SetAttribute{
 				Optional:            true,
@@ -242,7 +242,10 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	model.DerivedName = core.PtrToStringNullIfEmptyTrimmed(resp.DerivedName)
 	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
-	model.CreateInFolder = core.PtrToStringNullIfEmptyTrimmed(resp.CreateInFolder)
+	// Don't map create_in_folder back. It is write-only: PostHog consumes it on
+	// create and never returns it. Mapping the empty response back would overwrite
+	// the configured value with null and fail the post-apply consistency check.
+	// The survey resource already leaves it untouched for the same reason.
 
 	// Tags - preserve empty set if configured
 	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
