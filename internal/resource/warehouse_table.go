@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
+	"github.com/posthog/terraform-provider/internal/util"
 )
 
 const warehouseTableCSVDoubleQuotesOption = "csv_allow_double_quotes"
@@ -122,8 +123,8 @@ func (o WarehouseTableOps) Schema() schema.Schema {
 
 func buildWarehouseTableOptions(model WarehouseTableTFModel) map[string]any {
 	options := map[string]any{}
-	if !model.CSVAllowDoubleQuotes.IsNull() && !model.CSVAllowDoubleQuotes.IsUnknown() {
-		options[warehouseTableCSVDoubleQuotesOption] = model.CSVAllowDoubleQuotes.ValueBool()
+	if v := util.BoolPtrFromValue(model.CSVAllowDoubleQuotes); v != nil {
+		options[warehouseTableCSVDoubleQuotesOption] = *v
 	}
 	return options
 }
