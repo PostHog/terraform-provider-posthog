@@ -1,6 +1,7 @@
 package util
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -60,4 +61,37 @@ func TestParseJSONStringMap(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStripFieldsWalksTypedMapSlice(t *testing.T) {
+	denylist := map[string]struct{}{
+		"bytecode": {},
+		"order":    {},
+	}
+	input := []map[string]interface{}{
+		{
+			"name": "Page view",
+			"filters": map[string]interface{}{
+				"events": []interface{}{
+					map[string]interface{}{"id": "$pageview", "type": "events"},
+				},
+				"bytecode": []interface{}{"_H", 1},
+			},
+			"inputs": map[string]interface{}{
+				"eventName": map[string]interface{}{
+					"value":    "PageView",
+					"bytecode": []interface{}{"_H"},
+					"order":    0,
+				},
+			},
+		},
+	}
+
+	cleaned := StripFields(input, denylist)
+	encoded, err := json.Marshal(cleaned)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "bytecode")
+	assert.NotContains(t, string(encoded), `"order"`)
+	assert.Contains(t, string(encoded), "PageView")
+	assert.Contains(t, string(encoded), "$pageview")
 }

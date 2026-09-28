@@ -88,6 +88,17 @@ func StripFields(v interface{}, denylist map[string]struct{}) interface{} {
 			cleaned[i] = StripFields(item, denylist)
 		}
 		return cleaned
+	case []map[string]interface{}:
+		// encoding/json leaves a JSON array of objects as []interface{}.
+		// A typed Go field such as HogFunction.Mappings is
+		// []map[string]interface{}, which is not that type. Leaving it
+		// untouched kept server fields (bytecode, order) in state and made
+		// apply fail its consistency check.
+		cleaned := make([]interface{}, len(val))
+		for i, item := range val {
+			cleaned[i] = StripFields(item, denylist)
+		}
+		return cleaned
 	default:
 		return val
 	}

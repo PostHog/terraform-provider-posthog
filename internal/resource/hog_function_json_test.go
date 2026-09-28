@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -114,4 +115,51 @@ func TestHogFunctionJSONAttributes_SemanticallyDifferentJSONStillDiffs(t *testin
 				tc.configJSON, tc.differentJSON)
 		})
 	}
+}
+
+// HogFunction.Mappings is []map[string]interface{}, not []interface{}.
+// PostHog adds bytecode, order, hidden, and source on create. Those must
+// not survive into state or apply reports an inconsistent result.
+func TestNormalizeMappingsDropsServerFieldsOnTypedSlice(t *testing.T) {
+	user := `[{"filters":{"events":[{"id":"$pageview","type":"events"}]},"inputs":{"eventName":{"value":"PageView"}},"inputs_schema":[{"key":"eventName","label":"Event name","required":true,"secret":false,"type":"string"}],"name":"Page view"}]`
+	api := []map[string]interface{}{
+		{
+			"name": "Page view",
+			"filters": map[string]interface{}{
+				"bytecode":          []interface{}{"_H", 1, 32, "$pageview"},
+				"bytecode_contract": "bfd6ece60e41383c",
+				"events": []interface{}{
+					map[string]interface{}{"id": "$pageview", "type": "events"},
+				},
+				"source": "events",
+			},
+			"inputs": map[string]interface{}{
+				"eventName": map[string]interface{}{
+					"bytecode":          []interface{}{"_H", 1, 32, "PageView"},
+					"bytecode_contract": "bfd6ece60e41383c",
+					"order":             float64(0),
+					"value":             "PageView",
+				},
+			},
+			"inputs_schema": []interface{}{
+				map[string]interface{}{
+					"hidden":   false,
+					"key":      "eventName",
+					"label":    "Event name",
+					"required": true,
+					"secret":   false,
+					"type":     "string",
+				},
+			},
+		},
+	}
+
+	got, err := normalizeJSONStripServerFields(api, user)
+	require.NoError(t, err)
+
+	var gotValue interface{}
+	var wantValue interface{}
+	require.NoError(t, json.Unmarshal([]byte(got), &gotValue))
+	require.NoError(t, json.Unmarshal([]byte(user), &wantValue))
+	assert.Equal(t, wantValue, gotValue)
 }
