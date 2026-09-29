@@ -19,18 +19,21 @@ Manage PostHog alerts. Alerts notify you when an insight's value crosses a thres
 
 - `condition_type` (String) Condition type: `absolute_value`, `relative_increase`, or `relative_decrease`.
 - `insight` (Number) ID of the insight this alert monitors.
-- `series_index` (Number) Index of the trend series to monitor (0-based). Used for trends alerts.
 - `subscribed_users` (Set of Number) List of user IDs to notify when the alert fires.
 - `threshold_type` (String) Type of threshold: `absolute` for fixed values, `percentage` for relative changes.
 
 ### Optional
 
 - `calculation_interval` (String) How often to check the alert: `hourly`, `daily`, `weekly`, or `monthly`.
-- `check_ongoing_interval` (Boolean) Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked.
+- `check_ongoing_interval` (Boolean) Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked. Trends alerts only.
+- `column` (String) Name of the result column to evaluate. When unset, the single numeric column is used, and PostHog errors if the result has more than one. SQL alerts only.
 - `enabled` (Boolean) Whether the alert is enabled. Defaults to true.
+- `evaluation` (String) How to read the rows a SQL (HogQL) insight returns: `last_row` when the query is ordered oldest to newest, `first_row` when it is ordered newest to oldest, or `any_row` to fire if any row breaches. Setting this makes the alert a SQL alert; leave it unset and set `series_index` for a Trends alert. `any_row` only works with `condition_type = "absolute_value"`.
+- `label_column` (String) Column whose value names the evaluated row in the notification. When unset, the first non-evaluated column is used. SQL alerts only.
 - `name` (String) Name of the alert.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `schedule_restriction` (Attributes) Quiet hours: local time windows during which the alert is not evaluated. Times use the project timezone. (see [below for nested schema](#nestedatt--schedule_restriction))
+- `series_index` (Number) Index of the trend series to monitor (0-based). Required for alerts on a Trends insight, and mutually exclusive with `evaluation`.
 - `skip_weekend` (Boolean) Whether to skip checking the alert on weekends.
 - `threshold_lower` (Number) Lower bound of the threshold. Alert fires when value goes below this.
 - `threshold_upper` (Number) Upper bound of the threshold. Alert fires when value goes above this.

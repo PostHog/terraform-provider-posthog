@@ -13,7 +13,7 @@ type Alert struct {
 	SubscribedUsers     []AlertUser               `json:"subscribed_users,omitempty"`
 	Threshold           *AlertThreshold           `json:"threshold,omitempty"`
 	Condition           *AlertCondition           `json:"condition,omitempty"`
-	Config              *TrendsAlertConfig        `json:"config,omitempty"`
+	Config              *AlertConfig              `json:"config,omitempty"`
 	CalculationInterval *string                   `json:"calculation_interval,omitempty"`
 	SnoozedUntil        *string                   `json:"snoozed_until,omitempty"`
 	SkipWeekend         *bool                     `json:"skip_weekend,omitempty"`
@@ -28,16 +28,16 @@ type Alert struct {
 }
 
 type AlertRequest struct {
-	Name                *string            `json:"name,omitempty"`
-	Insight             int64              `json:"insight"`
-	Enabled             *bool              `json:"enabled,omitempty"`
-	SubscribedUsers     []int64            `json:"subscribed_users"`
-	Threshold           *AlertThreshold    `json:"threshold,omitempty"`
-	Condition           *AlertCondition    `json:"condition,omitempty"`
-	Config              *TrendsAlertConfig `json:"config,omitempty"`
-	CalculationInterval *string            `json:"calculation_interval,omitempty"`
-	SnoozedUntil        *string            `json:"snoozed_until,omitempty"`
-	SkipWeekend         *bool              `json:"skip_weekend,omitempty"`
+	Name                *string         `json:"name,omitempty"`
+	Insight             int64           `json:"insight"`
+	Enabled             *bool           `json:"enabled,omitempty"`
+	SubscribedUsers     []int64         `json:"subscribed_users"`
+	Threshold           *AlertThreshold `json:"threshold,omitempty"`
+	Condition           *AlertCondition `json:"condition,omitempty"`
+	Config              *AlertConfig    `json:"config,omitempty"`
+	CalculationInterval *string         `json:"calculation_interval,omitempty"`
+	SnoozedUntil        *string         `json:"snoozed_until,omitempty"`
+	SkipWeekend         *bool           `json:"skip_weekend,omitempty"`
 	// Sent even when nil: an explicit null is what clears quiet hours on update.
 	ScheduleRestriction *AlertScheduleRestriction `json:"schedule_restriction"`
 }
@@ -78,10 +78,23 @@ type AlertCondition struct {
 	Type string `json:"type"` // "absolute_value", "relative_increase", "relative_decrease"
 }
 
-type TrendsAlertConfig struct {
-	Type                 string `json:"type"` // "TrendsAlertConfig"
-	SeriesIndex          *int   `json:"series_index,omitempty"`
-	CheckOngoingInterval *bool  `json:"check_ongoing_interval,omitempty"`
+// Alert config type discriminators. PostHog also has FunnelsAlertConfig and
+// MetricsAlertConfig, which this provider does not manage yet.
+const (
+	TrendsAlertConfigType = "TrendsAlertConfig"
+	HogQLAlertConfigType  = "HogQLAlertConfig"
+)
+
+// AlertConfig carries both shapes PostHog accepts under `config`. Which fields apply is
+// decided by Type: TrendsAlertConfig uses SeriesIndex and CheckOngoingInterval,
+// HogQLAlertConfig uses Evaluation, Column and LabelColumn.
+type AlertConfig struct {
+	Type                 string  `json:"type"`
+	SeriesIndex          *int    `json:"series_index,omitempty"`
+	CheckOngoingInterval *bool   `json:"check_ongoing_interval,omitempty"`
+	Evaluation           *string `json:"evaluation,omitempty"`
+	Column               *string `json:"column,omitempty"`
+	LabelColumn          *string `json:"label_column,omitempty"`
 }
 
 type AlertCheck struct {
