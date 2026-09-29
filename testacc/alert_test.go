@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -1015,6 +1016,69 @@ resource "posthog_insight" "test" {
 `, name)
 }
 
+// TestAlert_HogQL tests an alert on a SQL (HogQL) insight, which uses `evaluation` and
+// `column` instead of `series_index`.
+func TestAlert_HogQL(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckAlertDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAlertHogQL(rName, "last_row"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "evaluation", "last_row"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "column", "pageviews"),
+					resource.TestCheckResourceAttr("posthog_alert.test", "label_column", "day"),
+					resource.TestCheckNoResourceAttr("posthog_alert.test", "series_index"),
+					resource.TestCheckResourceAttrSet("posthog_alert.test", "id"),
+				),
+			},
+			{
+				Config: testAccAlertHogQL(rName, "any_row"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_alert.test", "evaluation", "any_row"),
+				),
+			},
+		},
+	})
+}
+
+// TestAlert_ConfigMutuallyExclusive checks that the two alert shapes cannot be mixed, and
+// that one of them has to be chosen.
+func TestAlert_ConfigMutuallyExclusive(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccAlertConfigAttributes(rName, "series_index = 0", `evaluation = "last_row"`),
+				ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Combination`),
+			},
+			{
+				Config:      testAccAlertConfigAttributes(rName),
+				ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Combination`),
+			},
+			{
+				Config:      testAccAlertConfigAttributes(rName, `evaluation = "last_row"`, "check_ongoing_interval = true"),
+				ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Combination`),
+			},
+			{
+				Config:      testAccAlertConfigAttributes(rName, `column = "p95_ms"`),
+				ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Combination`),
+			},
+		},
+	})
+}
+
 func testAccAlertBasic(name string) string {
 	return fmt.Sprintf(`
 provider "posthog" {}
@@ -1188,4 +1252,64 @@ resource "posthog_alert" "test" {
   depends_on = [posthog_insight.test]
 }
 `, testAccAlertInsightBase(name), name, seriesIndex)
+}
+
+func testAccAlertHogQLInsightBase(name string) string {
+	return fmt.Sprintf(`
+resource "posthog_insight" "sql" {
+  name = "%s-sql-insight"
+
+  query_json = jsonencode({
+    kind   = "DataTableNode"
+    source = {
+      kind  = "HogQLQuery"
+      query = "SELECT toDate(timestamp) AS day, count() AS pageviews FROM events WHERE event = '$pageview' GROUP BY day ORDER BY day ASC"
+    }
+  })
+}
+`, name)
+}
+
+func testAccAlertHogQL(name, evaluation string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.sql.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = 1000
+  condition_type   = "absolute_value"
+  evaluation       = %q
+  column           = "pageviews"
+  label_column     = "day"
+
+  depends_on = [posthog_insight.sql]
+}
+`, testAccAlertHogQLInsightBase(name), name, evaluation)
+}
+
+// testAccAlertConfigAttributes builds an alert whose config attributes are whatever the
+// caller passes, so a plan-time rejection can be asserted without reaching the API.
+func testAccAlertConfigAttributes(name string, configAttributes ...string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+%s
+
+resource "posthog_alert" "test" {
+  name             = %q
+  insight          = posthog_insight.test.id
+  subscribed_users = []
+  threshold_type   = "absolute"
+  threshold_upper  = 100
+  condition_type   = "absolute_value"
+  %s
+
+  depends_on = [posthog_insight.test]
+}
+`, testAccAlertInsightBase(name), name, strings.Join(configAttributes, "\n  "))
 }
