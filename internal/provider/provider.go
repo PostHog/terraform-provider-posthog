@@ -160,6 +160,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewRoleMembership,
 		posthogresource.NewSubscription,
 		posthogresource.NewSurvey,
+		posthogresource.NewWarehouseTable,
 	}
 }
 
