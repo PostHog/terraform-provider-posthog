@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
@@ -40,6 +41,9 @@ type AlertResourceTFModel struct {
 	ConditionType        types.String  `tfsdk:"condition_type"`
 	SeriesIndex          types.Int64   `tfsdk:"series_index"`
 	CheckOngoingInterval types.Bool    `tfsdk:"check_ongoing_interval"`
+	Evaluation           types.String  `tfsdk:"evaluation"`
+	Column               types.String  `tfsdk:"column"`
+	LabelColumn          types.String  `tfsdk:"label_column"`
 	CalculationInterval  types.String  `tfsdk:"calculation_interval"`
 	SkipWeekend          types.Bool    `tfsdk:"skip_weekend"`
 	ScheduleRestriction  types.Object  `tfsdk:"schedule_restriction"`
@@ -185,18 +189,54 @@ func (o AlertOps) Schema() schema.Schema {
 				},
 			},
 			"series_index": schema.Int64Attribute{
-				Required:            true,
-				MarkdownDescription: "Index of the trend series to monitor (0-based). Used for trends alerts.",
+				Optional: true,
+				MarkdownDescription: "Index of the trend series to monitor (0-based). Required for alerts on a Trends " +
+					"insight, and mutually exclusive with `evaluation`.",
 				Validators: []validator.Int64{
 					int64validator.AtLeast(0),
+					// One of the two decides which config PostHog gets. Neither set is an
+					// alert it would reject; both set is a contradiction.
+					int64validator.ExactlyOneOf(path.MatchRoot("evaluation")),
 				},
 			},
 			"check_ongoing_interval": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked.",
+				MarkdownDescription: "Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked. Trends alerts only.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"evaluation": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "How to read the rows a SQL (HogQL) insight returns: `last_row` when the query is " +
+					"ordered oldest to newest, `first_row` when it is ordered newest to oldest, or `any_row` to fire if " +
+					"any row breaches. Setting this makes the alert a SQL alert; leave it unset and set `series_index` " +
+					"for a Trends alert. `any_row` only works with `condition_type = \"absolute_value\"`.",
+				Validators: []validator.String{
+					stringvalidator.OneOf(
+						"last_row",
+						"first_row",
+						"any_row",
+					),
+					// A SQL query owns its own time window, so there is no ongoing interval to check.
+					stringvalidator.ConflictsWith(path.MatchRoot("check_ongoing_interval")),
+				},
+			},
+			"column": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "Name of the result column to evaluate. When unset, the single numeric column is " +
+					"used, and PostHog errors if the result has more than one. SQL alerts only.",
+				Validators: []validator.String{
+					stringvalidator.AlsoRequires(path.MatchRoot("evaluation")),
+				},
+			},
+			"label_column": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "Column whose value names the evaluated row in the notification. When unset, the " +
+					"first non-evaluated column is used. SQL alerts only.",
+				Validators: []validator.String{
+					stringvalidator.AlsoRequires(path.MatchRoot("evaluation")),
 				},
 			},
 			"calculation_interval": schema.StringAttribute{
@@ -297,14 +337,32 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 		Type: model.ConditionType.ValueString(),
 	}
 
-	seriesIndex := int(model.SeriesIndex.ValueInt64())
-	req.Config = &httpclient.TrendsAlertConfig{
-		Type:        "TrendsAlertConfig",
-		SeriesIndex: &seriesIndex,
-	}
-	if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
-		checkOngoing := model.CheckOngoingInterval.ValueBool()
-		req.Config.CheckOngoingInterval = &checkOngoing
+	// `evaluation` is what tells the two apart: it is required on a SQL config and has no
+	// meaning on a Trends one. The schema already refuses having neither or both.
+	if !model.Evaluation.IsNull() && !model.Evaluation.IsUnknown() {
+		evaluation := model.Evaluation.ValueString()
+		req.Config = &httpclient.AlertConfig{
+			Type:       httpclient.HogQLAlertConfigType,
+			Evaluation: &evaluation,
+		}
+		if !model.Column.IsNull() && !model.Column.IsUnknown() {
+			column := model.Column.ValueString()
+			req.Config.Column = &column
+		}
+		if !model.LabelColumn.IsNull() && !model.LabelColumn.IsUnknown() {
+			labelColumn := model.LabelColumn.ValueString()
+			req.Config.LabelColumn = &labelColumn
+		}
+	} else {
+		seriesIndex := int(model.SeriesIndex.ValueInt64())
+		req.Config = &httpclient.AlertConfig{
+			Type:        httpclient.TrendsAlertConfigType,
+			SeriesIndex: &seriesIndex,
+		}
+		if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
+			checkOngoing := model.CheckOngoingInterval.ValueBool()
+			req.Config.CheckOngoingInterval = &checkOngoing
+		}
 	}
 
 	if !model.CalculationInterval.IsNull() && !model.CalculationInterval.IsUnknown() {
@@ -421,6 +479,24 @@ func (o AlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Alert,
 		model.CheckOngoingInterval = types.BoolValue(*resp.Config.CheckOngoingInterval)
 	} else {
 		model.CheckOngoingInterval = types.BoolNull()
+	}
+
+	if resp.Config != nil && resp.Config.Evaluation != nil {
+		model.Evaluation = types.StringValue(*resp.Config.Evaluation)
+	} else {
+		model.Evaluation = types.StringNull()
+	}
+
+	if resp.Config != nil && resp.Config.Column != nil {
+		model.Column = types.StringValue(*resp.Config.Column)
+	} else {
+		model.Column = types.StringNull()
+	}
+
+	if resp.Config != nil && resp.Config.LabelColumn != nil {
+		model.LabelColumn = types.StringValue(*resp.Config.LabelColumn)
+	} else {
+		model.LabelColumn = types.StringNull()
 	}
 
 	if resp.CalculationInterval != nil {
