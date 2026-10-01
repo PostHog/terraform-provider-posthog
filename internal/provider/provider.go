@@ -142,6 +142,7 @@ func (p *PostHogProvider) Resources(_ context.Context) []func() frameworkresourc
 		posthogresource.NewCohort,
 		posthogresource.NewDashboard,
 		posthogresource.NewDashboardLayout,
+		posthogresource.NewEarlyAccessFeature,
 		posthogresource.NewExperiment,
 		posthogresource.NewExternalDataSource,
 		posthogresource.NewFeatureFlag,

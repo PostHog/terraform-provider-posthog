@@ -209,6 +209,151 @@ func TestFeatureFlag_DefaultIgnoresServerWiredKeys(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_DefaultIgnoresEarlyAccessEnrollment links an Early Access Feature to a
+// Terraform-managed flag outside Terraform, as the PostHog UI does. In an active stage PostHog
+// marks the flag with filters.feature_enrollment and keeps it when an update omits it, so the
+// default ignore set must cover it: otherwise every plan shows a diff and the apply fails with
+// "Provider produced inconsistent result after apply".
+func TestFeatureFlag_DefaultIgnoresEarlyAccessEnrollment(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	host := os.Getenv("POSTHOG_HOST")
+	apiKey := os.Getenv("POSTHOG_API_KEY")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(host, apiKey, "acceptance-test")
+
+	var flagID, featureID string
+	captureFlagID := func(s *terraform.State) error {
+		flagID = s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID
+		return nil
+	}
+	checkEnrolled := func(s *terraform.State) error {
+		flag, _, err := (&client).GetFeatureFlag(context.Background(), projectID, flagID)
+		if err != nil {
+			return err
+		}
+		if flag.Filters["feature_enrollment"] != true {
+			return fmt.Errorf("feature_enrollment = %v, want true", flag.Filters["feature_enrollment"])
+		}
+		return nil
+	}
+	deleteFeature := func() {
+		if featureID == "" {
+			return
+		}
+		if err := deleteEarlyAccessFeatureRaw(host, apiKey, projectID, featureID); err != nil {
+			t.Errorf("Failed to delete early access feature %s: %v", featureID, err)
+		}
+		featureID = ""
+	}
+	// The last step deletes the feature, since PostHog refuses to delete a flag one still uses.
+	// If an earlier step fails, destroying the flag fails too; this at least removes the feature.
+	t.Cleanup(deleteFeature)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked"),
+				Check:  captureFlagID,
+			},
+			{
+				PreConfig: func() {
+					id, err := createEarlyAccessFeatureRaw(host, apiKey, projectID, rKey, flagID)
+					if err != nil {
+						t.Fatalf("Failed to link an early access feature: %v", err)
+					}
+					featureID = id
+				},
+				Config:   testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked"),
+				PlanOnly: true,
+			},
+			{
+				// An update while linked sends filters without the marker; it must apply cleanly
+				// and PostHog must keep the marker.
+				Config: testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "linked renamed"),
+					checkEnrolled,
+				),
+			},
+			{
+				PreConfig: deleteFeature,
+				Config:    testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed"),
+				PlanOnly:  true,
+			},
+		},
+	})
+}
+
+func testAccFeatureFlagLinkedToEarlyAccess(key, name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key    = %q
+  name   = %q
+  active = true
+
+  filters = jsonencode({
+    groups = [{ rollout_percentage = 100 }]
+  })
+}
+`, key, name)
+}
+
+// createEarlyAccessFeatureRaw links a beta Early Access Feature to a flag via raw HTTP (the
+// provider has no resource for it), which is what stamps feature_enrollment onto the flag.
+func createEarlyAccessFeatureRaw(host, apiKey, projectID, name, flagID string) (string, error) {
+	body := fmt.Sprintf(`{"name":%q,"stage":"beta","feature_flag_id":%s}`, name, flagID)
+	url := fmt.Sprintf("%s/api/projects/%s/early_access_feature/", strings.TrimRight(host, "/"), projectID)
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("create early access feature returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var parsed struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil || parsed.ID == "" {
+		return "", fmt.Errorf("parse early access feature response: %v (body: %s)", err, string(respBody))
+	}
+	return parsed.ID, nil
+}
+
+func deleteEarlyAccessFeatureRaw(host, apiKey, projectID, featureID string) error {
+	url := fmt.Sprintf("%s/api/projects/%s/early_access_feature/%s/", strings.TrimRight(host, "/"), projectID, featureID)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete early access feature returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // TestFeatureFlag_FiltersOmittedRolloutNoPerpetualDiff guards the interaction between the
 // drift-preserving normalizer (normalizeFeatureFlagFiltersForState) and semantic equality:
 // a group that omits rollout_percentage must not drift. The normalizer keeps every non-empty

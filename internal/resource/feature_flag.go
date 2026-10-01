@@ -96,7 +96,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				ElementType: types.StringType,
 				Optional:    true,
 				MarkdownDescription: "Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). " +
-					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
+					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"feature_enrollment\", \"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
 					"Set to `[]` to track the entire filters blob — including any Early Access Feature or Experiment wiring, which will then show as drift if not declared in `filters` — or provide your own set to replace the default. " +
 					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
@@ -332,10 +332,10 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 }
 
 // defaultIgnoredFilterKeys are the top-level filters keys other PostHog products wire into
-// a flag rather than the author writing them (super_groups via Early Access Features;
-// holdout_groups/holdout via Experiments). Tracking them would show a perpetual diff on
-// every EAF- or experiment-linked flag.
-var defaultIgnoredFilterKeys = []string{"super_groups", "holdout_groups", "holdout"}
+// a flag rather than the author writing them (feature_enrollment via Early Access Features,
+// super_groups being its legacy form; holdout_groups/holdout via Experiments). Tracking them
+// would show a perpetual diff on every EAF- or experiment-linked flag.
+var defaultIgnoredFilterKeys = []string{"feature_enrollment", "super_groups", "holdout_groups", "holdout"}
 
 // resolveIgnoredFilterKeys returns the default set when unset, else the user's set —
 // including an empty set, which tracks the entire filters blob.
