@@ -501,3 +501,21 @@ func TestFeatureFlagMapResponseToModel_EnsureExperienceContinuity(t *testing.T) 
 	require.False(t, diags.HasError(), diags.Errors())
 	assert.True(t, modelMissing.EnsureExperienceContinuity.IsNull())
 }
+
+// An Early Access Feature in an active stage stamps feature_enrollment=true onto its linked
+// flag. PostHog keeps it when an update omits it, so tracking it would leave the flag with a
+// diff on every plan that the apply could never resolve.
+func TestFeatureFlagMapResponseToModel_DefaultIgnoresFeatureEnrollment(t *testing.T) {
+	ops := FeatureFlagOps{}
+	model := FeatureFlagTFModel{
+		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":0}]}`),
+	}
+
+	resp := httpclient.FeatureFlag{ID: 1, Key: "new-editor", Filters: map[string]interface{}{
+		"groups":             []interface{}{map[string]interface{}{"rollout_percentage": float64(0)}},
+		"feature_enrollment": true,
+	}}
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.JSONEq(t, `{"groups":[{"rollout_percentage":0}]}`, model.Filters.ValueString())
+}
