@@ -200,8 +200,9 @@ func TestProject_Import(t *testing.T) {
 	})
 }
 
-// TestProject_Recreate tests deleting and recreating a project with the same name.
-func TestProject_Recreate(t *testing.T) {
+// TestProject_RecreateWithNewName tests recreating a project after a soft delete.
+// PostHog reserves the deleted project's name within the organization.
+func TestProject_RecreateWithNewName(t *testing.T) {
 	skipIfNotAcceptance(t)
 
 	rName := acctest.RandomWithPrefix("tf-acc-test")
@@ -222,11 +223,11 @@ func TestProject_Recreate(t *testing.T) {
 			{
 				Config: `provider "posthog" {}`,
 			},
-			// Recreate
+			// Recreate with a new name because the soft-deleted project still owns its name.
 			{
-				Config: testAccProjectBasic(orgID, rName),
+				Config: testAccProjectBasic(orgID, rName+"-recreated"),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
+					resource.TestCheckResourceAttr("posthog_project.test", "name", rName+"-recreated"),
 				),
 			},
 		},

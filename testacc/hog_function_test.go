@@ -267,8 +267,8 @@ func TestHogFunction_AlertWebhookIntegration(t *testing.T) {
 // only needs a URL).
 //
 // The second step is PlanOnly and asserts an empty plan, proving there is no
-// perpetual diff after apply (the server enriches filters with `source` and
-// `bytecode`, which the provider strips/normalizes away).
+// perpetual diff after apply (the server enriches filters with `bytecode`,
+// which the provider strips away).
 func TestHogFunction_InsightAlertNotification(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -1024,7 +1024,7 @@ resource "posthog_hog_function" "test" {
   })
 
   filters_json = jsonencode({
-    source = "events"
+    source = "internal-events"
     events = [{
       id   = "$insight_alert_firing"
       type = "events"
@@ -1106,7 +1106,7 @@ resource "posthog_hog_function" "test" {
   })
 
   filters_json = jsonencode({
-    source = "events"
+    source = "internal-events"
     events = [{
       id   = "$insight_alert_firing"
       type = "events"
