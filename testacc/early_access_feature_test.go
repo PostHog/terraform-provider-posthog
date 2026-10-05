@@ -156,6 +156,21 @@ func TestEarlyAccessFeature_LinkedFlagLifecycle(t *testing.T) {
 				Check: testAccCheckFlagFeatureEnrollment(true),
 			},
 			{
+				// GA keeps opt-in gating unless the separate PostHog rollout-to-all action
+				// is requested. This resource manages the stage, not that one-time action.
+				Config: testAccEarlyAccessFeatureLinked(key, "flag renamed", "general-availability", "second"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(earlyAccessFeatureAddress, plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("posthog_feature_flag.test", plancheck.ResourceActionNoop),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(earlyAccessFeatureAddress, "stage", "general-availability"),
+					testAccCheckFlagFeatureEnrollment(true),
+				),
+			},
+			{
 				Config: testAccEarlyAccessFeatureLinked(key, "flag renamed", "archived", "second"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(earlyAccessFeatureAddress, "stage", "archived"),

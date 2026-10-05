@@ -3,12 +3,12 @@
 page_title: "posthog_early_access_feature Resource - posthog"
 subcategory: ""
 description: |-
-  A PostHog early access feature: a feature users can opt into from your app's feature previews list. Each one is backed by a feature flag. Moving it to an active stage (alpha, beta, or general-availability) turns on opt-in for that flag; any other stage turns it off. Destroying the feature deletes it and turns off opt-in, but leaves the flag in place.
+  A PostHog early access feature: a feature users can opt into from your app's feature previews list. Each one is backed by a feature flag. Moving it to an active stage (alpha, beta, or general-availability) turns on opt-in for that flag; any other stage turns it off. general-availability remains opt-in gated: PostHog's separate, one-time rollout-to-all action is not managed by this resource. Destroying the feature deletes it and turns off opt-in, but leaves the flag in place.
 ---
 
 # posthog_early_access_feature (Resource)
 
-A PostHog early access feature: a feature users can opt into from your app's feature previews list. Each one is backed by a feature flag. Moving it to an active stage (`alpha`, `beta`, or `general-availability`) turns on opt-in for that flag; any other stage turns it off. Destroying the feature deletes it and turns off opt-in, but leaves the flag in place.
+A PostHog early access feature: a feature users can opt into from your app's feature previews list. Each one is backed by a feature flag. Moving it to an active stage (`alpha`, `beta`, or `general-availability`) turns on opt-in for that flag; any other stage turns it off. `general-availability` remains opt-in gated: PostHog's separate, one-time rollout-to-all action is not managed by this resource. Destroying the feature deletes it and turns off opt-in, but leaves the flag in place.
 
 ## Example Usage
 
@@ -38,7 +38,7 @@ resource "posthog_early_access_feature" "new_editor" {
 ### Required
 
 - `name` (String) Name shown to users in the opt-in list (at most 200 characters).
-- `stage` (String) Lifecycle stage: `draft`, `concept`, `alpha`, `beta`, `general-availability`, or `archived`. In `alpha`, `beta`, and `general-availability`, users who opt in get the flag enabled. `concept` lists the feature so users can register interest without enabling anything.
+- `stage` (String) Lifecycle stage: `draft`, `concept`, `alpha`, `beta`, `general-availability`, or `archived`. In `alpha`, `beta`, and `general-availability`, users who opt in get the flag enabled. Changing to `general-availability` does not roll the flag out to everyone; that is a separate one-time PostHog action. `concept` lists the feature so users can register interest without enabling anything.
 
 ### Optional
 
