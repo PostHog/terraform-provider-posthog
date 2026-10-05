@@ -519,3 +519,30 @@ func TestFeatureFlagMapResponseToModel_DefaultIgnoresFeatureEnrollment(t *testin
 	require.False(t, diags.HasError(), diags.Errors())
 	assert.JSONEq(t, `{"groups":[{"rollout_percentage":0}]}`, model.Filters.ValueString())
 }
+
+func TestFeatureFlagMapResponseToModel_ExplicitEmptyIgnoreStillPreservesEAFOwnership(t *testing.T) {
+	ignore, d := types.SetValue(types.StringType, []attr.Value{})
+	require.False(t, d.HasError(), d.Errors())
+	response := httpclient.FeatureFlag{ID: 1, Key: "new-editor", Filters: map[string]interface{}{
+		"groups":             []interface{}{map[string]interface{}{"rollout_percentage": float64(0)}},
+		"feature_enrollment": true,
+	}}
+
+	for _, tc := range []struct {
+		name    string
+		filters string
+	}{
+		{name: "undeclared marker", filters: `{"groups":[{"rollout_percentage":0}]}`},
+		{name: "declared marker", filters: `{"groups":[{"rollout_percentage":0}],"feature_enrollment":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := FeatureFlagTFModel{
+				Filters:            jsontypes.NewNormalizedValue(tc.filters),
+				IgnoreFilterFields: ignore,
+			}
+			diags := (FeatureFlagOps{}).MapResponseToModel(context.Background(), response, &model)
+			require.False(t, diags.HasError(), diags.Errors())
+			assert.JSONEq(t, tc.filters, model.Filters.ValueString())
+		})
+	}
+}
