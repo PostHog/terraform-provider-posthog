@@ -60,9 +60,9 @@ func (o EarlyAccessFeatureOps) ResourceName() string {
 func (o EarlyAccessFeatureOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: "A PostHog early access feature: a feature users can opt into from your app's feature previews list. " +
-			"Each one is backed by a feature flag. Moving it to an active stage (`alpha`, `beta`, or `general-availability`) turns on opt-in " +
-			"for that flag; any other stage turns it off. `general-availability` remains opt-in gated: PostHog's separate, one-time " +
-			"rollout-to-all action is not managed by this resource. Destroying the feature deletes it and turns off opt-in, but leaves the flag in place.",
+			"Each one is backed by a feature flag. Active stages (`alpha`, `beta`, and `general-availability`) add an opt-in gate; " +
+			"other stages remove that gate. `general-availability` remains opt-in gated: PostHog's separate, one-time rollout-to-all action " +
+			"is not managed by this resource. Destroying the feature removes the gate but leaves the flag and its rollout rules in place.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -84,7 +84,8 @@ func (o EarlyAccessFeatureOps) Schema() schema.Schema {
 				MarkdownDescription: "Lifecycle stage: `draft`, `concept`, `alpha`, `beta`, `general-availability`, or `archived`. " +
 					"In `alpha`, `beta`, and `general-availability`, users who opt in get the flag enabled. " +
 					"Changing to `general-availability` does not roll the flag out to everyone; that is a separate one-time PostHog action. " +
-					"`concept` lists the feature so users can register interest without enabling anything.",
+					"`concept` lists the feature so users can register interest without enabling anything. " +
+					"Leaving an active stage removes the enrollment gate but retains the flag's own rollout rules.",
 				Validators: []validator.String{
 					stringvalidator.OneOf(earlyAccessFeatureStages...),
 				},
