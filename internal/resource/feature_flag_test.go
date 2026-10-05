@@ -167,7 +167,7 @@ func TestNormalizeFeatureFlagFiltersForState_KeepsAllWhenNoIgnoreKeyMatches(t *t
 		name        string
 		ignoredKeys []string
 	}{
-		{"explicit empty set tracks everything", []string{}},
+		{"explicit empty set tracks these keys", []string{}},
 		{"near-miss and typo keys are a no-op", []string{"super_group", "payload", "not_a_key"}},
 	}
 	for _, tc := range cases {
