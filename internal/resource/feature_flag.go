@@ -90,7 +90,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.",
+				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields` and an undeclared `feature_enrollment` marker owned by Early Access Features.",
 			},
 			"ignore_filter_fields": schema.SetAttribute{
 				ElementType: types.StringType,
@@ -339,7 +339,8 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 var defaultIgnoredFilterKeys = []string{"feature_enrollment", "super_groups", "holdout_groups", "holdout"}
 
 // resolveIgnoredFilterKeys returns the default set when unset, else the user's set —
-// including an empty set, which tracks the entire filters blob.
+// including an empty set, which tracks other filter keys. An undeclared
+// feature_enrollment marker is always omitted separately below.
 func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, diag.Diagnostics) {
 	if set.IsNull() || set.IsUnknown() {
 		return defaultIgnoredFilterKeys, nil
