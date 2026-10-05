@@ -280,15 +280,32 @@ func TestFeatureFlag_DefaultIgnoresEarlyAccessEnrollment(t *testing.T) {
 				),
 			},
 			{
+				// Opting out of the default ignore set must also apply: the linked EAF still
+				// owns its marker, so omitting it from filters cannot remove it.
+				Config: testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed", "[]"),
+				Check:  checkEnrolled,
+			},
+			{
+				Config:   testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed", "[]"),
+				PlanOnly: true,
+			},
+			{
 				PreConfig: deleteFeature,
 				Config:    testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed"),
-				PlanOnly:  true,
+			},
+			{
+				Config:   testAccFeatureFlagLinkedToEarlyAccess(rKey, "linked renamed"),
+				PlanOnly: true,
 			},
 		},
 	})
 }
 
-func testAccFeatureFlagLinkedToEarlyAccess(key, name string) string {
+func testAccFeatureFlagLinkedToEarlyAccess(key, name string, ignoreFilterFields ...string) string {
+	ignore := ""
+	if len(ignoreFilterFields) != 0 {
+		ignore = "ignore_filter_fields = " + ignoreFilterFields[0]
+	}
 	return fmt.Sprintf(`
 provider "posthog" {}
 
@@ -296,12 +313,13 @@ resource "posthog_feature_flag" "test" {
   key    = %q
   name   = %q
   active = true
+  %s
 
   filters = jsonencode({
     groups = [{ rollout_percentage = 100 }]
   })
 }
-`, key, name)
+`, key, name, ignore)
 }
 
 // createEarlyAccessFeatureRaw links a beta Early Access Feature to a flag via raw HTTP (the
