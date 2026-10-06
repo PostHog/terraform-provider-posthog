@@ -1202,6 +1202,46 @@ resource "posthog_feature_flag" "test" {
 	})
 }
 
+// A project change replaces an existing flag, so the removed create-only option
+// must fail during planning before Terraform destroys the original flag.
+func TestFeatureFlag_CreateUsageDashboardReplacementOptInRejected(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	key := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	replacementProjectID := projectID + "9999"
+	config := func(projectID string, createUsageDashboard bool) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                    = %q
+  project_id             = %q
+  create_usage_dashboard = %t
+}
+`, key, projectID, createUsageDashboard)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config(projectID, false),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "project_id", projectID),
+				),
+			},
+			{
+				Config:      config(replacementProjectID, true),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Unsupported create_usage_dashboard`),
+			},
+		},
+	})
+}
+
 // usageDashboardName is the name of a legacy generated usage dashboard.
 func usageDashboardName(flagKey string) string {
 	return fmt.Sprintf("Generated Dashboard: %s Usage", flagKey)
