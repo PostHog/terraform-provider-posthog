@@ -30,7 +30,7 @@
 
 ### Upgrade notes
 
-- **`posthog_feature_flag`:** Remove `create_usage_dashboard = true` before creating or replacing a flag. The attribute is deprecated; an existing flag can still be read and updated with the old setting.
+- **`posthog_feature_flag`:** Remove `create_usage_dashboard = true` before creating or replacing a flag on current PostHog. Older self-hosted servers that still support saved usage dashboards can set provider `allow_legacy_usage_dashboard_creation = true` to keep the opt-in. An existing flag can still be read and updated with the old setting.
 
 - An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop.
 - **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them. Rarely, PostHog stores a shape it will not accept back: splitting an overnight window at midnight can leave a piece shorter than its own minimum, which it then refuses on apply. Widen or drop that window.
