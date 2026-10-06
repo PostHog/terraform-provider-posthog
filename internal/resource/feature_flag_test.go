@@ -167,7 +167,7 @@ func TestNormalizeFeatureFlagFiltersForState_KeepsAllWhenNoIgnoreKeyMatches(t *t
 		name        string
 		ignoredKeys []string
 	}{
-		{"explicit empty set tracks everything", []string{}},
+		{"explicit empty set tracks these keys", []string{}},
 		{"near-miss and typo keys are a no-op", []string{"super_group", "payload", "not_a_key"}},
 	}
 	for _, tc := range cases {
@@ -500,4 +500,49 @@ func TestFeatureFlagMapResponseToModel_EnsureExperienceContinuity(t *testing.T) 
 	diags = ops.MapResponseToModel(context.Background(), respMissing, &modelMissing)
 	require.False(t, diags.HasError(), diags.Errors())
 	assert.True(t, modelMissing.EnsureExperienceContinuity.IsNull())
+}
+
+// An Early Access Feature in an active stage stamps feature_enrollment=true onto its linked
+// flag. PostHog keeps it when an update omits it, so tracking it would leave the flag with a
+// diff on every plan that the apply could never resolve.
+func TestFeatureFlagMapResponseToModel_DefaultIgnoresFeatureEnrollment(t *testing.T) {
+	ops := FeatureFlagOps{}
+	model := FeatureFlagTFModel{
+		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":0}]}`),
+	}
+
+	resp := httpclient.FeatureFlag{ID: 1, Key: "new-editor", Filters: map[string]interface{}{
+		"groups":             []interface{}{map[string]interface{}{"rollout_percentage": float64(0)}},
+		"feature_enrollment": true,
+	}}
+	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+	assert.JSONEq(t, `{"groups":[{"rollout_percentage":0}]}`, model.Filters.ValueString())
+}
+
+func TestFeatureFlagMapResponseToModel_ExplicitEmptyIgnoreStillPreservesEAFOwnership(t *testing.T) {
+	ignore, d := types.SetValue(types.StringType, []attr.Value{})
+	require.False(t, d.HasError(), d.Errors())
+	response := httpclient.FeatureFlag{ID: 1, Key: "new-editor", Filters: map[string]interface{}{
+		"groups":             []interface{}{map[string]interface{}{"rollout_percentage": float64(0)}},
+		"feature_enrollment": true,
+	}}
+
+	for _, tc := range []struct {
+		name    string
+		filters string
+	}{
+		{name: "undeclared marker", filters: `{"groups":[{"rollout_percentage":0}]}`},
+		{name: "declared marker", filters: `{"groups":[{"rollout_percentage":0}],"feature_enrollment":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := FeatureFlagTFModel{
+				Filters:            jsontypes.NewNormalizedValue(tc.filters),
+				IgnoreFilterFields: ignore,
+			}
+			diags := (FeatureFlagOps{}).MapResponseToModel(context.Background(), response, &model)
+			require.False(t, diags.HasError(), diags.Errors())
+			assert.JSONEq(t, tc.filters, model.Filters.ValueString())
+		})
+	}
 }
