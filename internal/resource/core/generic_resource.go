@@ -51,11 +51,6 @@ type ResourcePlanModifier interface {
 	ModifyResourcePlan(context.Context, resource.ModifyPlanRequest, *resource.ModifyPlanResponse)
 }
 
-// ResourceConfigurator lets resource-specific operations use provider settings.
-type ResourceConfigurator interface {
-	ConfigureResource(data.ProviderData)
-}
-
 // GenericResource implements resource.Resource using the provided operations.
 type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
 	client       httpclient.PosthogClient
@@ -120,9 +115,6 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Configure(
 	r.defaults = ProviderDefaults{
 		ProjectID:      providerData.DefaultProjectID,
 		OrganizationID: providerData.DefaultOrganizationID,
-	}
-	if configurable, ok := any(r.ops).(ResourceConfigurator); ok {
-		configurable.ConfigureResource(providerData)
 	}
 }
 

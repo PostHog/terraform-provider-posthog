@@ -14,14 +14,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/posthog/terraform-provider/internal/data"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
 )
 
 func NewFeatureFlag() resource.Resource {
 	return core.NewGenericResource[FeatureFlagTFModel, httpclient.FeatureFlagRequest, httpclient.FeatureFlag](
-		&FeatureFlagOps{},
+		FeatureFlagOps{},
 		core.ProjectScopedImportParser[FeatureFlagTFModel](),
 	)
 }
@@ -41,13 +40,7 @@ type FeatureFlagTFModel struct {
 	CreateUsageDashboard       types.Bool           `tfsdk:"create_usage_dashboard"`
 }
 
-type FeatureFlagOps struct {
-	allowLegacyUsageDashboardCreation bool
-}
-
-func (o *FeatureFlagOps) ConfigureResource(providerData data.ProviderData) {
-	o.allowLegacyUsageDashboardCreation = providerData.AllowLegacyUsageDashboardCreation
-}
+type FeatureFlagOps struct{}
 
 func (o FeatureFlagOps) ResourceName() string {
 	return "Feature Flag"
@@ -131,10 +124,9 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			},
 			"create_usage_dashboard": schema.BoolAttribute{
 				Optional:           true,
-				DeprecationMessage: "Current PostHog no longer creates saved usage dashboards when feature flags are created. Remove this setting unless your provider is configured for an older server that supports it.",
+				DeprecationMessage: "PostHog no longer creates saved usage dashboards when feature flags are created. Remove this setting from new configurations.",
 				MarkdownDescription: "Deprecated create-time option. PostHog no longer creates a saved usage dashboard when a flag is created, " +
 					"so `true` is rejected for new flags instead of silently doing nothing. Omit this attribute for new configurations. " +
-					"For older self-hosted servers that still support it, set provider `allow_legacy_usage_dashboard_creation = true` to permit the opt-in. " +
 					"Existing flags with this setting remain readable, and usage charts are available on the flag's Usage tab.",
 			},
 		},
@@ -142,8 +134,8 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 }
 
 // Existing flags may carry the deprecated setting in state, but a new flag with
-// the opt-in cannot produce the saved dashboard it promises on current PostHog.
-func (o *FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+// the opt-in cannot produce the saved dashboard it promises.
+func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() || !req.State.Raw.IsNull() {
 		return
 	}
@@ -153,7 +145,7 @@ func (o *FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mo
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if o.allowLegacyUsageDashboardCreation || plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
+	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
 		return
 	}
 
@@ -163,13 +155,13 @@ func (o *FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mo
 	)
 }
 
-func (o *FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
+func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	req := httpclient.FeatureFlagRequest{
 		Key: model.Key.ValueString(),
 	}
-	if model.CreateUsageDashboard.ValueBool() && !o.allowLegacyUsageDashboardCreation {
+	if model.CreateUsageDashboard.ValueBool() {
 		diags.AddError(
 			"Unsupported create_usage_dashboard",
 			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
@@ -241,8 +233,8 @@ func (o *FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFl
 	req.Deleted = &deleted
 
 	// Older PostHog versions created a usage dashboard by default. False still
-	// suppresses that behavior; true is sent only with the explicit legacy opt-in.
-	createUsageDashboard := model.CreateUsageDashboard.ValueBool()
+	// suppresses that behavior.
+	createUsageDashboard := false
 	req.ShouldCreateUsageDashboard = &createUsageDashboard
 
 	return req, diags

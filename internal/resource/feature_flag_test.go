@@ -455,19 +455,6 @@ func TestFeatureFlagBuildCreateRequestRejectsUnsupportedUsageDashboardOptIn(t *t
 	assert.Nil(t, req.ShouldCreateUsageDashboard)
 }
 
-func TestFeatureFlagBuildCreateRequestAllowsLegacyUsageDashboardOptIn(t *testing.T) {
-	ops := FeatureFlagOps{allowLegacyUsageDashboardCreation: true}
-	model := FeatureFlagTFModel{
-		Key:                  types.StringValue("my_flag"),
-		CreateUsageDashboard: types.BoolValue(true),
-	}
-
-	req, diags := ops.BuildCreateRequest(context.Background(), model)
-	require.False(t, diags.HasError(), diags.Errors())
-	require.NotNil(t, req.ShouldCreateUsageDashboard)
-	assert.True(t, *req.ShouldCreateUsageDashboard)
-}
-
 func TestFeatureFlagBuildUpdateRequestNeverSendsUsageDashboardField(t *testing.T) {
 	ops := FeatureFlagOps{}
 	plan := FeatureFlagTFModel{

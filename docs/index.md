@@ -16,7 +16,6 @@ description: |-
 
 ### Optional
 
-- `allow_legacy_usage_dashboard_creation` (Boolean) Allow `posthog_feature_flag.create_usage_dashboard = true` on older self-hosted PostHog versions that still create a saved usage dashboard on flag creation. Set this only when your server supports the legacy `_should_create_usage_dashboard` API field. Current PostHog ignores that field, so this option cannot make it create a dashboard.
 - `api_key` (String, Sensitive) PostHog personal API key. Can be set via `POSTHOG_API_KEY` environment variable.
 - `host` (String) Base URL for the PostHog API. Defaults to `https://us.posthog.com`. Can be set via `POSTHOG_HOST`
 - `organization_id` (String) Default organization to target. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization). Slugs and `@current` are resolved to a UUID for API calls. Can be set via `POSTHOG_ORGANIZATION_ID` environment variable.

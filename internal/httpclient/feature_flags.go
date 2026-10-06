@@ -27,7 +27,7 @@ type FeatureFlagRequest struct {
 	EnsureExperienceContinuity *bool                  `json:"ensure_experience_continuity,omitempty"`
 	// Legacy write-only create option. Current PostHog ignores it, but sending
 	// false still suppresses automatic dashboards on older PostHog versions.
-	// The resource sends true only with an explicit legacy-server opt-in.
+	// The resource rejects true before calling the API.
 	ShouldCreateUsageDashboard *bool `json:"_should_create_usage_dashboard,omitempty"`
 }
 
