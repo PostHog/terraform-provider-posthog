@@ -90,14 +90,15 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields`.",
+				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields` and an undeclared `feature_enrollment` marker owned by Early Access Features.",
 			},
 			"ignore_filter_fields": schema.SetAttribute{
 				ElementType: types.StringType,
 				Optional:    true,
 				MarkdownDescription: "Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). " +
-					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
-					"Set to `[]` to track the entire filters blob — including any Early Access Feature or Experiment wiring, which will then show as drift if not declared in `filters` — or provide your own set to replace the default. " +
+					"When unset, defaults to the keys other PostHog products wire into a flag — `[\"feature_enrollment\", \"super_groups\", \"holdout_groups\", \"holdout\"]` (Early Access Features and Experiments). " +
+					"Set to `[]` to track other filter keys, including Experiment wiring, or provide your own set to replace the default. " +
+					"`feature_enrollment` is always ignored when absent from `filters`: PostHog owns this marker while an Early Access Feature is linked and preserves it on flag updates, so Terraform cannot clear it by omission. " +
 					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
@@ -338,13 +339,14 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 }
 
 // defaultIgnoredFilterKeys are the top-level filters keys other PostHog products wire into
-// a flag rather than the author writing them (super_groups via Early Access Features;
-// holdout_groups/holdout via Experiments). Tracking them would show a perpetual diff on
-// every EAF- or experiment-linked flag.
-var defaultIgnoredFilterKeys = []string{"super_groups", "holdout_groups", "holdout"}
+// a flag rather than the author writing them (feature_enrollment via Early Access Features,
+// super_groups being its legacy form; holdout_groups/holdout via Experiments). Tracking them
+// would show a perpetual diff on every EAF- or experiment-linked flag.
+var defaultIgnoredFilterKeys = []string{"feature_enrollment", "super_groups", "holdout_groups", "holdout"}
 
 // resolveIgnoredFilterKeys returns the default set when unset, else the user's set —
-// including an empty set, which tracks the entire filters blob.
+// including an empty set, which tracks other filter keys. An undeclared
+// feature_enrollment marker is always omitted separately below.
 func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, diag.Diagnostics) {
 	if set.IsNull() || set.IsUnknown() {
 		return defaultIgnoredFilterKeys, nil
@@ -357,8 +359,8 @@ func resolveIgnoredFilterKeys(ctx context.Context, set types.Set) ([]string, dia
 // normalizeFeatureFlagFiltersForState shapes the API's filters for state so remote changes
 // to a flag's targeting surface as drift. Unlike the shared normalizeJSONForState whitelist
 // (survey/action/hog_function/insight), which drops unconfigured fields and so hides
-// remote-added ones, this keeps every API field with a value, dropping only unconfigured
-// empty defaults and ignoredKeys the user hasn't configured (see defaultIgnoredFilterKeys).
+// remote-added ones, this keeps every API field with a value, dropping unconfigured
+// empty defaults, ignoredKeys, and PostHog-owned feature_enrollment when undeclared.
 // Feature-flag-specific by design.
 func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJSON string, ignoredKeys []string) (string, error) {
 	var stateData interface{}
@@ -372,6 +374,11 @@ func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJS
 	// Top level only (never recursively) so a like-named nested key is safe; a key the
 	// user declared in filters is kept.
 	if result, ok := normalized.(map[string]interface{}); ok {
+		// EAFs own this marker and PostHog preserves it on flag updates. Omitting it from
+		// filters cannot remove it, even when ignore_filter_fields is explicitly empty.
+		if _, configured := stateMap["feature_enrollment"]; !configured {
+			delete(result, "feature_enrollment")
+		}
 		for _, key := range ignoredKeys {
 			if _, configured := stateMap[key]; !configured {
 				delete(result, key)
