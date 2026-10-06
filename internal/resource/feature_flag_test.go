@@ -442,7 +442,7 @@ func TestFeatureFlagBuildCreateRequestSuppressesUsageDashboardByDefault(t *testi
 	assert.False(t, *req.ShouldCreateUsageDashboard)
 }
 
-func TestFeatureFlagBuildCreateRequestAllowsUsageDashboardOptIn(t *testing.T) {
+func TestFeatureFlagBuildCreateRequestRejectsUnsupportedUsageDashboardOptIn(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
 		Key:                  types.StringValue("my_flag"),
@@ -450,9 +450,9 @@ func TestFeatureFlagBuildCreateRequestAllowsUsageDashboardOptIn(t *testing.T) {
 	}
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
-	require.False(t, diags.HasError(), diags.Errors())
-	require.NotNil(t, req.ShouldCreateUsageDashboard)
-	assert.True(t, *req.ShouldCreateUsageDashboard)
+	require.True(t, diags.HasError())
+	assert.Contains(t, diags.Errors()[0].Summary(), "Unsupported create_usage_dashboard")
+	assert.Nil(t, req.ShouldCreateUsageDashboard)
 }
 
 func TestFeatureFlagBuildUpdateRequestNeverSendsUsageDashboardField(t *testing.T) {

@@ -123,21 +123,50 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				},
 			},
 			"create_usage_dashboard": schema.BoolAttribute{
-				Optional: true,
-				MarkdownDescription: "Whether PostHog should auto-create a \"Generated Dashboard: <key> Usage\" dashboard when the flag is created. " +
-					"Defaults to `false`: PostHog's API defaults this to `true`, which silently creates one usage dashboard per flag — " +
-					"for Terraform-managed flag fleets that quickly clutters the dashboard list. Set to `true` to keep the API's " +
-					"auto-generation. Create-time only; changing it later has no effect and a usage dashboard can always be generated " +
-					"on demand from the flag's Usage tab.",
+				Optional:           true,
+				DeprecationMessage: "PostHog no longer creates saved usage dashboards when feature flags are created. Remove this setting from new configurations.",
+				MarkdownDescription: "Deprecated create-time option. PostHog no longer creates a saved usage dashboard when a flag is created, " +
+					"so `true` is rejected for new flags instead of silently doing nothing. Omit this attribute for new configurations. " +
+					"Existing flags with this setting remain readable, and usage charts are available on the flag's Usage tab.",
 			},
 		},
 	}
 }
+
+// Existing flags may carry the deprecated setting in state, but a new flag with
+// the opt-in cannot produce the saved dashboard it promises.
+func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || !req.State.Raw.IsNull() {
+		return
+	}
+
+	var plan FeatureFlagTFModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
+		return
+	}
+
+	resp.Diagnostics.AddError(
+		"Unsupported create_usage_dashboard",
+		"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
+	)
+}
+
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	req := httpclient.FeatureFlagRequest{
 		Key: model.Key.ValueString(),
+	}
+	if model.CreateUsageDashboard.ValueBool() {
+		diags.AddError(
+			"Unsupported create_usage_dashboard",
+			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
+		)
+		return req, diags
 	}
 
 	if !model.Name.IsNull() {
@@ -203,9 +232,9 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	deleted := false
 	req.Deleted = &deleted
 
-	// Suppress PostHog's auto-generated per-flag usage dashboard unless
-	// explicitly requested (the API's own default is true). Create-time only.
-	createUsageDashboard := model.CreateUsageDashboard.ValueBool()
+	// Older PostHog versions created a usage dashboard by default. False still
+	// suppresses that behavior.
+	createUsageDashboard := false
 	req.ShouldCreateUsageDashboard = &createUsageDashboard
 
 	return req, diags

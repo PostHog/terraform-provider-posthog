@@ -4,7 +4,7 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
-// ProviderData passes configured client to resources.
+// ProviderData passes the configured client and scope defaults to resources.
 type ProviderData struct {
 	Client                httpclient.PosthogClient
 	DefaultProjectID      string

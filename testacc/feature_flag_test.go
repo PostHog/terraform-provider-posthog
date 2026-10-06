@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1153,74 +1154,100 @@ func TestFeatureFlag_ExternalDeletion(t *testing.T) {
 	})
 }
 
-// TestFeatureFlag_CreateUsageDashboard empirically confirms the observable behavior of the
-// create_usage_dashboard attribute against the live API. PostHog's flag-create serializer
-// defaults _should_create_usage_dashboard to true, auto-creating a dashboard named
-// "Generated Dashboard: <key> Usage" in the same request. The provider defaults the attribute
-// to false and only sends the field on create.
-//
-// Two flags are created in a single apply:
-//   - default: create_usage_dashboard unset (=> false). Assert ZERO usage dashboards exist.
-//   - optin:   create_usage_dashboard = true.          Assert exactly ONE usage dashboard exists.
-//
-// The dashboard PostHog auto-creates for the opt-in flag is NOT Terraform-managed, so
-// CheckDestroy will not remove it. After asserting it exists, the final check soft-deletes it
-// via the API so the run does not orphan a dashboard in the project.
+// TestFeatureFlag_CreateUsageDashboard confirms that creating a flag does not leave behind
+// a saved dashboard. PostHog now renders usage charts on the flag's Usage tab instead.
 func TestFeatureFlag_CreateUsageDashboard(t *testing.T) {
 	skipIfNotAcceptance(t)
 
-	keyDefault := acctest.RandomWithPrefix("tf-acc-test")
-	keyOptIn := acctest.RandomWithPrefix("tf-acc-test")
-
+	key := acctest.RandomWithPrefix("tf-acc-test")
 	host := os.Getenv("POSTHOG_HOST")
 	apiKey := os.Getenv("POSTHOG_API_KEY")
 	projectID := os.Getenv("POSTHOG_PROJECT_ID")
-	client := httpclient.NewDefaultClient(host, apiKey, "acceptance-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config: testAccFeatureFlagBasic(key),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", key),
+				testCheckUsageDashboardCount(t, host, apiKey, projectID, key, 0),
+			),
+		}},
+	})
+}
+
+// The removed create-time option must fail before a flag is sent to PostHog.
+func TestFeatureFlag_CreateUsageDashboardOptInRejected(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	key := acctest.RandomWithPrefix("tf-acc-test")
+	config := fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                    = %q
+  create_usage_dashboard = true
+}
+`, key)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config:      config,
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(`Unsupported create_usage_dashboard`),
+		}},
+	})
+}
+
+// A project change replaces an existing flag, so the removed create-only option
+// must fail during planning before Terraform destroys the original flag.
+func TestFeatureFlag_CreateUsageDashboardReplacementOptInRejected(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	key := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	replacementProjectID := projectID + "9999"
+	config := func(projectID string, createUsageDashboard bool) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                    = %q
+  project_id             = %q
+  create_usage_dashboard = %t
+}
+`, key, projectID, createUsageDashboard)
+	}
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccFeatureFlagUsageDashboardPair(keyDefault, keyOptIn),
+				Config: config(projectID, false),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_feature_flag.default", "key", keyDefault),
-					resource.TestCheckResourceAttr("posthog_feature_flag.optin", "key", keyOptIn),
-					// Default (unset => false): PostHog must NOT have auto-created a usage dashboard.
-					testCheckUsageDashboardCount(t, host, apiKey, projectID, keyDefault, 0),
-					// Opt-in (true): PostHog must have auto-created exactly one usage dashboard.
-					testCheckUsageDashboardCount(t, host, apiKey, projectID, keyOptIn, 1),
-					// Clean up the non-Terraform-managed dashboard so we don't orphan it.
-					testCleanupUsageDashboards(t, host, apiKey, projectID, &client, keyOptIn),
+					resource.TestCheckResourceAttrSet("posthog_feature_flag.test", "id"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "project_id", projectID),
 				),
+			},
+			{
+				Config:      config(replacementProjectID, true),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Unsupported create_usage_dashboard`),
 			},
 		},
 	})
 }
 
-func testAccFeatureFlagUsageDashboardPair(keyDefault, keyOptIn string) string {
-	return fmt.Sprintf(`
-provider "posthog" {}
-
-resource "posthog_feature_flag" "default" {
-  key    = %q
-  active = true
-}
-
-resource "posthog_feature_flag" "optin" {
-  key                    = %q
-  active                 = true
-  create_usage_dashboard = true
-}
-`, keyDefault, keyOptIn)
-}
-
-// usageDashboardName is the name PostHog gives the dashboard it auto-generates for a flag.
+// usageDashboardName is the name of a legacy generated usage dashboard.
 func usageDashboardName(flagKey string) string {
 	return fmt.Sprintf("Generated Dashboard: %s Usage", flagKey)
 }
 
-// searchUsageDashboards lists dashboards for a flag key via the raw dashboards endpoint
+// searchUsageDashboards looks for legacy dashboards via the raw dashboards endpoint
 // (there is no list method on the client) and returns only those whose name exactly matches
 // the auto-generated usage-dashboard name. Using ?search=<key> avoids paginating the project's
 // full dashboard list; the exact-name filter guards against fuzzy search matches.
@@ -1263,8 +1290,7 @@ func searchUsageDashboards(host, apiKey, projectID, flagKey string) ([]httpclien
 	return matched, nil
 }
 
-// testCheckUsageDashboardCount asserts the number of auto-generated usage dashboards that
-// exist for a flag key.
+// testCheckUsageDashboardCount asserts the number of saved usage dashboards for a flag key.
 func testCheckUsageDashboardCount(t *testing.T, host, apiKey, projectID, flagKey string, want int) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		found, err := searchUsageDashboards(host, apiKey, projectID, flagKey)
@@ -1275,24 +1301,6 @@ func testCheckUsageDashboardCount(t *testing.T, host, apiKey, projectID, flagKey
 			return fmt.Errorf("expected %d usage dashboard(s) named %q, found %d", want, usageDashboardName(flagKey), len(found))
 		}
 		t.Logf("usage dashboards for %q: found %d (want %d)", flagKey, len(found), want)
-		return nil
-	}
-}
-
-// testCleanupUsageDashboards soft-deletes any auto-generated usage dashboards for a flag key.
-// These dashboards are created by PostHog, not Terraform, so CheckDestroy will not remove them.
-func testCleanupUsageDashboards(t *testing.T, host, apiKey, projectID string, client *httpclient.PosthogClient, flagKey string) resource.TestCheckFunc {
-	return func(*terraform.State) error {
-		found, err := searchUsageDashboards(host, apiKey, projectID, flagKey)
-		if err != nil {
-			return fmt.Errorf("searching usage dashboards for cleanup of %q: %w", flagKey, err)
-		}
-		for _, d := range found {
-			if _, err := client.DeleteDashboard(context.Background(), projectID, fmt.Sprintf("%d", d.ID)); err != nil {
-				return fmt.Errorf("soft-deleting orphan usage dashboard %d for %q: %w", d.ID, flagKey, err)
-			}
-			t.Logf("soft-deleted orphan usage dashboard %d (%q)", d.ID, usageDashboardName(flagKey))
-		}
 		return nil
 	}
 }
