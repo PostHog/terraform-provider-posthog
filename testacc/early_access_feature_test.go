@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,6 +25,14 @@ func testAccEarlyAccessFeatureClient() httpclient.PosthogClient {
 // PostHog keeps it on destroy, and a flag it created itself would otherwise pile up in the
 // test project. A flag Terraform already deleted is skipped.
 func testAccCheckEarlyAccessFeatureDestroy(s *terraform.State) error {
+	return testAccCheckEarlyAccessFeatureDestroyWithFlagRequirement(s, false)
+}
+
+func testAccCheckAutoCreatedFeatureFlagRetained(s *terraform.State) error {
+	return testAccCheckEarlyAccessFeatureDestroyWithFlagRequirement(s, true)
+}
+
+func testAccCheckEarlyAccessFeatureDestroyWithFlagRequirement(s *terraform.State, requireFlagRetained bool) error {
 	client := testAccEarlyAccessFeatureClient()
 	projectID := os.Getenv("POSTHOG_PROJECT_ID")
 
@@ -46,6 +55,9 @@ func testAccCheckEarlyAccessFeatureDestroy(s *terraform.State) error {
 		}
 		flag, status, err := client.GetFeatureFlag(context.Background(), projectID, flagID)
 		if status == httpclient.HTTPStatusCode(http.StatusNotFound) || (err == nil && flag.Deleted != nil && *flag.Deleted) {
+			if requireFlagRetained {
+				return fmt.Errorf("auto-created feature flag %s was deleted with early access feature %s", flagID, rs.Primary.ID)
+			}
 			continue
 		}
 		if err != nil {
@@ -100,6 +112,33 @@ resource "posthog_early_access_feature" "test" {
   feature_flag_id   = posthog_feature_flag.test.id
 }
 `, key, flagName, key, stage, description)
+}
+
+func testAccEarlyAccessFeatureLinkedToSecondFlag(key string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                = %q
+  name               = "flag renamed"
+  rollout_percentage = 0
+}
+
+resource "posthog_feature_flag" "second" {
+  key                = %q
+  name               = "second flag"
+  rollout_percentage = 0
+}
+
+resource "posthog_early_access_feature" "test" {
+  name              = %q
+  stage             = "archived"
+  description       = "second"
+  documentation_url = "https://example.com/docs"
+  payload           = jsonencode({ theme = "dark" })
+  feature_flag_id   = posthog_feature_flag.second.id
+}
+`, key, key+"-second", key)
 }
 
 func TestEarlyAccessFeature_LinkedFlagLifecycle(t *testing.T) {
@@ -178,6 +217,20 @@ func TestEarlyAccessFeature_LinkedFlagLifecycle(t *testing.T) {
 				),
 			},
 			{
+				Config: testAccEarlyAccessFeatureLinkedToSecondFlag(key),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(earlyAccessFeatureAddress, plancheck.ResourceActionReplace),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrPair(earlyAccessFeatureAddress, "feature_flag_id", "posthog_feature_flag.second", "id"),
+					resource.TestCheckResourceAttr(earlyAccessFeatureAddress, "feature_flag_key", key+"-second"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "key", key),
+					testAccCheckFlagFeatureEnrollment(false),
+				),
+			},
+			{
 				ResourceName:      earlyAccessFeatureAddress,
 				ImportState:       true,
 				ImportStateVerify: true,
@@ -208,7 +261,7 @@ func TestEarlyAccessFeature_AutoCreatedFlag(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		CheckDestroy:             testAccCheckEarlyAccessFeatureDestroy,
+		CheckDestroy:             testAccCheckAutoCreatedFeatureFlagRetained,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccEarlyAccessFeatureAutoFlag(name, "first"),
@@ -229,5 +282,29 @@ func TestEarlyAccessFeature_AutoCreatedFlag(t *testing.T) {
 				Check: resource.TestCheckResourceAttr(earlyAccessFeatureAddress, "description", "second"),
 			},
 		},
+	})
+}
+
+func TestEarlyAccessFeature_RejectsNonObjectPayload(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	name := strings.ReplaceAll(randomTestPrefix(), "_", "-")
+	config := fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_early_access_feature" "test" {
+  name    = %q
+  stage   = "draft"
+  payload = jsonencode([])
+}
+`, name)
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config:      config,
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(`payload must be a JSON object`),
+		}},
 	})
 }

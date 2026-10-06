@@ -101,7 +101,10 @@ func (o EarlyAccessFeatureOps) Schema() schema.Schema {
 			"payload": schema.StringAttribute{
 				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
-				MarkdownDescription: "Arbitrary JSON metadata for the feature, e.g. `jsonencode({ theme = \"dark\" })`. Compared semantically, so key ordering and whitespace do not produce a diff.",
+				MarkdownDescription: "JSON object metadata for the feature, e.g. `jsonencode({ theme = \"dark\" })`. Empty objects are allowed; arrays, scalars, and JSON null are not. Compared semantically, so key ordering and whitespace do not produce a diff.",
+				Validators: []validator.String{
+					earlyAccessFeaturePayloadObjectValidator{},
+				},
 			},
 			"feature_flag_id": schema.Int64Attribute{
 				Optional: true,
@@ -131,6 +134,26 @@ func (o EarlyAccessFeatureOps) Schema() schema.Schema {
 				},
 			},
 		},
+	}
+}
+
+type earlyAccessFeaturePayloadObjectValidator struct{}
+
+func (earlyAccessFeaturePayloadObjectValidator) Description(_ context.Context) string {
+	return "payload must be a JSON object"
+}
+
+func (v earlyAccessFeaturePayloadObjectValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (earlyAccessFeaturePayloadObjectValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(req.ConfigValue.ValueString()), &object); err != nil || object == nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid payload", "payload must be a JSON object, such as jsonencode({ theme = \"dark\" }).")
 	}
 }
 

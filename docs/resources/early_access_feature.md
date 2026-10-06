@@ -46,7 +46,7 @@ resource "posthog_early_access_feature" "new_editor" {
 - `description` (String) Description shown to users in the opt-in list.
 - `documentation_url` (String) Link to documentation for the feature, shown to users in the opt-in list.
 - `feature_flag_id` (Number) ID of the feature flag backing this feature, typically `posthog_feature_flag.<name>.id`. The flag must not be multivariate or group-based, and must not already back another early access feature, survey, or experiment. When omitted, PostHog creates a flag keyed by the slugified `name`. That flag is left behind on destroy, so re-creating a feature with the same name fails until you delete it; managing the flag with `posthog_feature_flag` avoids this. The flag can only be linked on create, so changing it replaces the feature.
-- `payload` (String) Arbitrary JSON metadata for the feature, e.g. `jsonencode({ theme = "dark" })`. Compared semantically, so key ordering and whitespace do not produce a diff.
+- `payload` (String) JSON object metadata for the feature, e.g. `jsonencode({ theme = "dark" })`. Empty objects are allowed; arrays, scalars, and JSON null are not. Compared semantically, so key ordering and whitespace do not produce a diff.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 
 ### Read-Only
