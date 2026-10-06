@@ -12,6 +12,8 @@
 
 ### Fixes
 
+- **`posthog_feature_flag`:** `create_usage_dashboard = true` now fails clearly on new flags instead of silently doing nothing. Current PostHog no longer creates saved usage dashboards at flag creation; usage charts remain available on the flag's Usage tab. Existing flags with the setting remain readable.
+
 - **HTTP retries:** a read that fails by timing out is now retried. The 30-second timeout was set on the HTTP client, which bounds the whole retry loop including the waits between attempts, so the first retry of a timed-out request was cancelled before it began and the apply failed with `(attempt: 1) sleeping: context deadline exceeded`. Each attempt now gets its own 30-second budget instead. `POST` and `PATCH` are the exception, for the reason in the next entry: a timeout cannot tell you whether PostHog already applied the write, so they are not sent again. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
 - **HTTP retries:** `POST` and `PATCH` requests are no longer replayed after a 500, 502, 503, 504, a timeout, or a dropped connection. None of those failures say whether PostHog had already committed the write, so retrying a create could leave behind a second resource that Terraform never records and will not clean up. They are still retried on 429, which PostHog returns before processing the request at all. `GET`, `HEAD`, `PUT`, and `DELETE` are safe to send twice and are unaffected, as is any request whose connection was never established, since nothing was sent. A `POST` or `PATCH` carrying an `Idempotency-Key` (or `X-Idempotency-Key`) header is replayed too, the same two headers `net/http` honours for the same purpose. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
 - **HTTP retries:** a response body that stalls is now retried like any other timeout. The retry loop used to end as soon as the response headers arrived, so a read that hung partway through failed outside it and was never retried.
@@ -25,6 +27,8 @@
 - Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
+
+- **`posthog_feature_flag`:** Remove `create_usage_dashboard = true` before creating or replacing a flag. The attribute is deprecated; an existing flag can still be read and updated with the old setting.
 
 - An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop.
 - **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them. Rarely, PostHog stores a shape it will not accept back: splitting an overnight window at midnight can leave a piece shorter than its own minimum, which it then refuses on apply. Widen or drop that window.
