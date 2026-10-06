@@ -32,7 +32,13 @@ jobs:
       - name: Run govulncheck
         run: |
           govulncheck ./...
-          cd tools && govulncheck ./...
+          cd tools
+          packages="$(go list ./...)"
+          if [ -n "$packages" ]; then
+            govulncheck ./...
+          else
+            echo "No buildable packages in tools; dependency review covers tools/go.mod changes."
+          fi
 
   # Static analysis with gosec
   gosec:
