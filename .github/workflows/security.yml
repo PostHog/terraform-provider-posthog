@@ -54,10 +54,14 @@ jobs:
           # Path to SARIF file relative to the root of the repository
           sarif_file: results.sarif
       - name: Run gosec on tools
-        uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
-        with:
-          args: '-no-fail -fmt sarif -out results-tools.sarif ./...'
-        working-directory: tools
+        run: |
+          # The pinned gosec action uses this image, but `uses` cannot set a working directory.
+          # Keep this digest aligned with the action above when upgrading gosec.
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/src" \
+            --workdir /src/tools \
+            ghcr.io/securego/gosec@sha256:4342ad119a7c69f3f4e4ce78d81ba183dc774a70a7a4c6eeb15fe9e511f214f0 \
+            -no-fail -fmt sarif -out results-tools.sarif ./...
       - name: Upload SARIF file for tools
         uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # v2.23.6
         with:
