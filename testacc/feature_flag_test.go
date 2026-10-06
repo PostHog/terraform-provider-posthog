@@ -1196,7 +1196,36 @@ resource "posthog_feature_flag" "test" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{{
 			Config:      config,
+			PlanOnly:    true,
 			ExpectError: regexp.MustCompile(`Unsupported create_usage_dashboard`),
+		}},
+	})
+}
+
+// A legacy-server opt-in permits planning the old create-time API field. The
+// current local server ignores that field, so this intentionally stops at plan.
+func TestFeatureFlag_CreateUsageDashboardLegacyOptInPlans(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	key := acctest.RandomWithPrefix("tf-acc-test")
+	config := fmt.Sprintf(`
+provider "posthog" {
+  allow_legacy_usage_dashboard_creation = true
+}
+
+resource "posthog_feature_flag" "test" {
+  key                    = %q
+  create_usage_dashboard = true
+}
+`, key)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config:             config,
+			PlanOnly:           true,
+			ExpectNonEmptyPlan: true,
 		}},
 	})
 }

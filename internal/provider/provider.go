@@ -33,10 +33,11 @@ var (
 )
 
 type PostHogProviderModel struct {
-	Host           types.String `tfsdk:"host"`
-	APIKey         types.String `tfsdk:"api_key"`
-	ProjectID      types.String `tfsdk:"project_id"`
-	OrganizationID types.String `tfsdk:"organization_id"`
+	Host                              types.String `tfsdk:"host"`
+	APIKey                            types.String `tfsdk:"api_key"`
+	ProjectID                         types.String `tfsdk:"project_id"`
+	OrganizationID                    types.String `tfsdk:"organization_id"`
+	AllowLegacyUsageDashboardCreation types.Bool   `tfsdk:"allow_legacy_usage_dashboard_creation"`
 }
 
 type PostHogProvider struct {
@@ -84,6 +85,11 @@ func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 					"Default organization to target. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization). Slugs and `@current` are resolved to a UUID for API calls. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
 				),
 			},
+			"allow_legacy_usage_dashboard_creation": schema.BoolAttribute{
+				Optional: true,
+				MarkdownDescription: "Allow `posthog_feature_flag.create_usage_dashboard = true` on older self-hosted PostHog versions that still create a saved usage dashboard on flag creation. " +
+					"Set this only when your server supports the legacy `_should_create_usage_dashboard` API field. Current PostHog ignores that field, so this option cannot make it create a dashboard.",
+			},
 		},
 	}
 }
@@ -126,9 +132,10 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})
 
 	providerData := internaldata.ProviderData{
-		Client:                httpclient.NewDefaultClient(host, apiKey, p.version),
-		DefaultProjectID:      projectID,
-		DefaultOrganizationID: organizationID,
+		Client:                            httpclient.NewDefaultClient(host, apiKey, p.version),
+		DefaultProjectID:                  projectID,
+		DefaultOrganizationID:             organizationID,
+		AllowLegacyUsageDashboardCreation: data.AllowLegacyUsageDashboardCreation.ValueBool(),
 	}
 	resp.DataSourceData = providerData
 	resp.ResourceData = providerData
