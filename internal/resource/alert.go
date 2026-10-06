@@ -76,6 +76,32 @@ var alertTimeOfDayValidator = stringvalidator.RegexMatches(
 	"must be a 24-hour time in HH:MM format",
 )
 
+type clearOngoingIntervalForSQLPlanModifier struct{}
+
+func (clearOngoingIntervalForSQLPlanModifier) Description(_ context.Context) string {
+	return "Clears the Trends-only ongoing interval setting for SQL alerts."
+}
+
+func (m clearOngoingIntervalForSQLPlanModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (clearOngoingIntervalForSQLPlanModifier) PlanModifyBool(ctx context.Context, req planmodifier.BoolRequest, resp *planmodifier.BoolResponse) {
+	if !req.ConfigValue.IsNull() {
+		return
+	}
+	var evaluation types.String
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("evaluation"), &evaluation)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if evaluation.IsUnknown() {
+		resp.PlanValue = types.BoolUnknown()
+	} else if !evaluation.IsNull() {
+		resp.PlanValue = types.BoolNull()
+	}
+}
+
 // blockedWindowsValidator feeds this resource's nested windows into the shared rules.
 // They live in core because posthog_logs_alert has the same windows under a different
 // attribute and must reject the same shapes.
@@ -205,6 +231,7 @@ func (o AlertOps) Schema() schema.Schema {
 				MarkdownDescription: "Whether to check the ongoing (incomplete) interval. When false, only completed intervals are checked. Trends alerts only.",
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
+					clearOngoingIntervalForSQLPlanModifier{},
 				},
 			},
 			"evaluation": schema.StringAttribute{
