@@ -12,13 +12,9 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
-// slackIntegrationID returns the Slack integration ID to use in Slack subscription tests.
-// Defaults to "1" (the live test stack's Slack integration) but can be overridden.
+// slackIntegrationID returns the integration fixture for the current test project.
 func slackIntegrationID() string {
-	if v := os.Getenv("POSTHOG_SLACK_INTEGRATION_ID"); v != "" {
-		return v
-	}
-	return "1"
+	return os.Getenv("POSTHOG_SLACK_INTEGRATION_ID")
 }
 
 // testAccCheckSubscriptionDestroy verifies each subscription has been soft-deleted.
@@ -55,6 +51,9 @@ func testAccCheckSubscriptionDestroy(s *terraform.State) error {
 // and round-trip import.
 func TestSubscription_SlackDashboard(t *testing.T) {
 	skipIfNotAcceptance(t)
+	if slackIntegrationID() == "" {
+		t.Skip("POSTHOG_SLACK_INTEGRATION_ID is required for Slack subscription tests")
+	}
 
 	rName := acctest.RandomWithPrefix("tf-acc-sub")
 
@@ -227,6 +226,9 @@ func TestSubscription_AIPrompt(t *testing.T) {
 // validation error rather than a silent inconsistent-result).
 func TestSubscription_ClearsOptionalFields(t *testing.T) {
 	skipIfNotAcceptance(t)
+	if slackIntegrationID() == "" {
+		t.Skip("POSTHOG_SLACK_INTEGRATION_ID is required for Slack subscription tests")
+	}
 
 	rName := acctest.RandomWithPrefix("tf-acc-sub")
 
