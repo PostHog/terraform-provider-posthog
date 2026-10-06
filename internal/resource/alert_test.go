@@ -200,3 +200,118 @@ func TestBlockedWindowsValidator(t *testing.T) {
 		assert.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 	})
 }
+
+// A SQL alert and a trends alert are told apart by `evaluation`, and each has to send the
+// config PostHog validates its insight kind against.
+func TestBuildCreateRequestAlertConfig(t *testing.T) {
+	ctx := context.Background()
+
+	baseModel := func() AlertResourceTFModel {
+		return AlertResourceTFModel{
+			Insight:         types.Int64Value(1),
+			ThresholdType:   types.StringValue("absolute"),
+			ConditionType:   types.StringValue("absolute_value"),
+			SubscribedUsers: types.SetNull(types.Int64Type),
+		}
+	}
+
+	t.Run("series index sends a trends config", func(t *testing.T) {
+		model := baseModel()
+		model.SeriesIndex = types.Int64Value(2)
+		model.CheckOngoingInterval = types.BoolValue(true)
+
+		req, diags := AlertOps{}.BuildCreateRequest(ctx, model)
+		require.False(t, diags.HasError(), "%v", diags)
+		require.NotNil(t, req.Config)
+		assert.Equal(t, httpclient.TrendsAlertConfigType, req.Config.Type)
+		require.NotNil(t, req.Config.SeriesIndex)
+		assert.Equal(t, 2, *req.Config.SeriesIndex)
+		require.NotNil(t, req.Config.CheckOngoingInterval)
+		assert.True(t, *req.Config.CheckOngoingInterval)
+		assert.Nil(t, req.Config.Evaluation)
+		assert.Nil(t, req.Config.Column)
+	})
+
+	t.Run("evaluation sends a hogql config", func(t *testing.T) {
+		model := baseModel()
+		model.Evaluation = types.StringValue("last_row")
+		model.Column = types.StringValue("p95_ms")
+		model.LabelColumn = types.StringValue("service")
+
+		req, diags := AlertOps{}.BuildCreateRequest(ctx, model)
+		require.False(t, diags.HasError(), "%v", diags)
+		require.NotNil(t, req.Config)
+		assert.Equal(t, httpclient.HogQLAlertConfigType, req.Config.Type)
+		require.NotNil(t, req.Config.Evaluation)
+		assert.Equal(t, "last_row", *req.Config.Evaluation)
+		require.NotNil(t, req.Config.Column)
+		assert.Equal(t, "p95_ms", *req.Config.Column)
+		require.NotNil(t, req.Config.LabelColumn)
+		assert.Equal(t, "service", *req.Config.LabelColumn)
+		// series_index would make PostHog reject the config it validates against a
+		// HogQLQuery insight.
+		assert.Nil(t, req.Config.SeriesIndex)
+		assert.Nil(t, req.Config.CheckOngoingInterval)
+	})
+
+	// An unset column is how you ask PostHog to pick the single numeric column, so it must
+	// not reach the API as an empty string.
+	t.Run("hogql config omits an unset column", func(t *testing.T) {
+		model := baseModel()
+		model.Evaluation = types.StringValue("any_row")
+
+		req, diags := AlertOps{}.BuildCreateRequest(ctx, model)
+		require.False(t, diags.HasError(), "%v", diags)
+
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"type":"HogQLAlertConfig"`)
+		assert.NotContains(t, string(body), `"column"`)
+		assert.NotContains(t, string(body), `"label_column"`)
+	})
+}
+
+func TestMapResponseToModelAlertConfig(t *testing.T) {
+	ctx := context.Background()
+
+	stringPtr := func(value string) *string { return &value }
+
+	t.Run("hogql config lands in state", func(t *testing.T) {
+		var model AlertResourceTFModel
+		diags := AlertOps{}.MapResponseToModel(ctx, httpclient.Alert{
+			ID:      "alert-id",
+			Insight: httpclient.AlertInsight{ID: 1},
+			Config: &httpclient.AlertConfig{
+				Type:        httpclient.HogQLAlertConfigType,
+				Evaluation:  stringPtr("any_row"),
+				Column:      stringPtr("p95_ms"),
+				LabelColumn: stringPtr("service"),
+			},
+		}, &model)
+		require.False(t, diags.HasError(), "%v", diags)
+
+		assert.Equal(t, types.StringValue("any_row"), model.Evaluation)
+		assert.Equal(t, types.StringValue("p95_ms"), model.Column)
+		assert.Equal(t, types.StringValue("service"), model.LabelColumn)
+		assert.True(t, model.SeriesIndex.IsNull())
+	})
+
+	t.Run("trends config leaves the sql attributes null", func(t *testing.T) {
+		seriesIndex := 0
+		var model AlertResourceTFModel
+		diags := AlertOps{}.MapResponseToModel(ctx, httpclient.Alert{
+			ID:      "alert-id",
+			Insight: httpclient.AlertInsight{ID: 1},
+			Config: &httpclient.AlertConfig{
+				Type:        httpclient.TrendsAlertConfigType,
+				SeriesIndex: &seriesIndex,
+			},
+		}, &model)
+		require.False(t, diags.HasError(), "%v", diags)
+
+		assert.Equal(t, types.Int64Value(0), model.SeriesIndex)
+		assert.True(t, model.Evaluation.IsNull())
+		assert.True(t, model.Column.IsNull())
+		assert.True(t, model.LabelColumn.IsNull())
+	})
+}

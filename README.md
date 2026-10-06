@@ -81,6 +81,10 @@ export POSTHOG_TEST_USER_EMAIL="user@example.com" # Email of existing org member
 make testacc
 ```
 
+Slack subscription tests also need `POSTHOG_SLACK_INTEGRATION_ID` set to a Slack
+integration belonging to `POSTHOG_PROJECT_ID`. They skip when it is unset;
+use a non-delivering integration fixture for local contract tests.
+
 ### Proxy Record DNS Harness
 
 `posthog_proxy_record` acceptance tests need programmable DNS so they can create a custom domain, point it at the PostHog-returned `target_cname`, and wait for the record to converge to `valid`.
