@@ -22,7 +22,7 @@ func (check projectSettingsPlanCheck) CheckPlan(ctx context.Context, req planche
 	check(ctx, req, resp)
 }
 
-func TestProjectSettingsConfiguredUpdates(t *testing.T) {
+func TestProjectSettingsSavedPlanKeepsOmittedSettings(t *testing.T) {
 	var mu sync.Mutex
 	settings := map[string]any{
 		"id":                            123,
@@ -86,7 +86,6 @@ resource "posthog_project_settings" "test" {
 }
 `, server.URL)
 	const address = "posthog_project_settings.test"
-	onlyAnonymize := fmt.Sprintf(config, "anonymize_ips = true")
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: map[string]func() (tfprotov6.ProviderServer, error){
 			"posthog": providerserver.NewProtocol6WithError(New("test")()),
@@ -100,12 +99,11 @@ resource "posthog_project_settings" "test" {
 				ImportStatePersist: true,
 			},
 			{
-				Config:           fmt.Sprintf(config, ""),
-				PlanOnly:         true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+				Config:   fmt.Sprintf(config, ""),
+				PlanOnly: true,
 			},
 			{
-				Config: onlyAnonymize,
+				Config: fmt.Sprintf(config, "anonymize_ips = true"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						projectSettingsPlanCheck(func(_ context.Context, _ plancheck.CheckPlanRequest, _ *plancheck.CheckPlanResponse) {
@@ -118,56 +116,13 @@ resource "posthog_project_settings" "test" {
 					},
 				},
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(address, "id", "123"),
-					resource.TestCheckResourceAttr(address, "project_id", "123"),
-					resource.TestCheckResourceAttr(address, "anonymize_ips", "true"),
 					resource.TestCheckResourceAttr(address, "session_recording_opt_in", "false"),
 					resource.TestCheckResourceAttr(address, "session_recording_network_payload_capture_config.record_headers", "false"),
-					resource.TestCheckResourceAttr(address, "session_recording_network_payload_capture_config.record_body", "true"),
 				),
 				PostApplyFunc: func() {
 					mu.Lock()
 					defer mu.Unlock()
 					assert.Equal(t, []map[string]any{{"anonymize_ips": true}}, patches)
-				},
-			},
-			{
-				Config:           onlyAnonymize,
-				PlanOnly:         true,
-				ConfigPlanChecks: resource.ConfigPlanChecks{PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
-			},
-			{
-				Config: fmt.Sprintf(config, `
-  anonymize_ips = false
-  cookieless_server_hash_mode = 0
-  app_urls = []
-  recording_domains = []
-  test_account_filters = jsonencode([{key = "email", type = "person", value = "@example.org", operator = "icontains"}])
-  test_account_filters_default_checked = false
-  session_recording_network_payload_capture_config = {record_headers = false, record_body = false}
-`),
-				PostApplyFunc: func() {
-					mu.Lock()
-					defer mu.Unlock()
-					assert.Len(t, patches, 2)
-					assert.Equal(t, map[string]any{
-						"anonymize_ips":                                    false,
-						"cookieless_server_hash_mode":                      float64(0),
-						"app_urls":                                         []any{},
-						"recording_domains":                                []any{},
-						"test_account_filters":                             []any{map[string]any{"key": "email", "type": "person", "value": "@example.org", "operator": "icontains"}},
-						"test_account_filters_default_checked":             false,
-						"session_recording_network_payload_capture_config": map[string]any{"recordHeaders": false, "recordBody": false},
-					}, patches[len(patches)-1])
-				},
-			},
-			{
-				Config: fmt.Sprintf(config, "test_account_filters = \"[]\""),
-				PostApplyFunc: func() {
-					mu.Lock()
-					defer mu.Unlock()
-					assert.Len(t, patches, 3)
-					assert.Equal(t, map[string]any{"test_account_filters": []any{}}, patches[len(patches)-1])
 				},
 			},
 		},

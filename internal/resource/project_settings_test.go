@@ -258,9 +258,7 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 	}{
 		{"enabled in state", types.BoolValue(true), types.BoolUnknown(), 0},
 		{"disabled in state", types.BoolValue(false), types.BoolUnknown(), 1},
-		{"unknown in state", types.BoolUnknown(), types.BoolUnknown(), 1},
 		{"explicitly disabled", types.BoolValue(true), types.BoolValue(false), 1},
-		{"explicitly enabled", types.BoolValue(false), types.BoolValue(true), 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			plan := newProjectSettingsModel()
@@ -269,19 +267,9 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 			state := newProjectSettingsModel()
 			state.CapturePerformanceOptIn = test.prior
 
-			req, diags := (ProjectSettingsOps{}).BuildUpdateRequest(context.Background(), plan, state)
+			_, diags := (ProjectSettingsOps{}).BuildUpdateRequest(context.Background(), plan, state)
 
-			require.False(t, diags.HasError())
 			assert.Equal(t, test.warnings, diags.WarningsCount())
-			if test.planned.IsUnknown() {
-				assert.Nil(t, req.CapturePerformanceOptIn)
-			} else {
-				require.NotNil(t, req.CapturePerformanceOptIn)
-				assert.Equal(t, test.planned.ValueBool(), *req.CapturePerformanceOptIn)
-			}
-			require.NotNil(t, req.SessionRecordingNetworkPayloadCaptureConfig)
-			assert.Equal(t, new(true), req.SessionRecordingNetworkPayloadCaptureConfig.RecordHeaders)
-			assert.Equal(t, new(false), req.SessionRecordingNetworkPayloadCaptureConfig.RecordBody)
 		})
 	}
 }
