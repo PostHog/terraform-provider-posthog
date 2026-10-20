@@ -103,7 +103,7 @@ resource "posthog_project_settings" "test" {
 				PlanOnly: true,
 			},
 			{
-				Config: fmt.Sprintf(config, "anonymize_ips = true"),
+				Config: fmt.Sprintf(config, "anonymize_ips = true\n  surveys_opt_in = true"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						projectSettingsPlanCheck(func(_ context.Context, _ plancheck.CheckPlanRequest, _ *plancheck.CheckPlanResponse) {
@@ -116,13 +116,14 @@ resource "posthog_project_settings" "test" {
 					},
 				},
 				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(address, "surveys_opt_in", "true"),
 					resource.TestCheckResourceAttr(address, "session_recording_opt_in", "false"),
 					resource.TestCheckResourceAttr(address, "session_recording_network_payload_capture_config.record_headers", "false"),
 				),
 				PostApplyFunc: func() {
 					mu.Lock()
 					defer mu.Unlock()
-					assert.Equal(t, []map[string]any{{"anonymize_ips": true}}, patches)
+					assert.Equal(t, []map[string]any{{"anonymize_ips": true, "surveys_opt_in": true}}, patches)
 				},
 			},
 		},

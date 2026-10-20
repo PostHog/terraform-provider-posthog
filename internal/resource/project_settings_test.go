@@ -3,14 +3,18 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/util"
 	"github.com/stretchr/testify/assert"
@@ -270,6 +274,50 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 			_, diags := (ProjectSettingsOps{}).BuildUpdateRequest(context.Background(), plan, state)
 
 			assert.Equal(t, test.warnings, diags.WarningsCount())
+		})
+	}
+}
+
+func TestProjectSettingsModifyPlanPreservesConfiguredChanges(t *testing.T) {
+	ctx := context.Background()
+	ops := ProjectSettingsOps{}
+	s := ops.Schema()
+	objectType := s.Type().TerraformType(ctx).(tftypes.Object)
+	for _, test := range []struct {
+		name      string
+		attribute string
+		value     tftypes.Value
+		expected  attr.Value
+	}{
+		{"unknown setting", "anonymize_ips", tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue), types.BoolUnknown()},
+		{"project replacement", "project_id", tftypes.NewValue(tftypes.String, "456"), types.StringValue("456")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prior := make(map[string]tftypes.Value)
+			for name, attributeType := range objectType.AttributeTypes {
+				prior[name] = tftypes.NewValue(attributeType, nil)
+			}
+			prior["id"] = tftypes.NewValue(tftypes.String, "123")
+			prior["project_id"] = tftypes.NewValue(tftypes.String, "123")
+			prior["anonymize_ips"] = tftypes.NewValue(tftypes.Bool, false)
+			configured := maps.Clone(prior)
+			configured["id"] = tftypes.NewValue(tftypes.String, nil)
+			configured[test.attribute] = test.value
+			planned := maps.Clone(prior)
+			planned[test.attribute] = test.value
+			req := tfresource.ModifyPlanRequest{
+				Config: tfsdk.Config{Schema: s, Raw: tftypes.NewValue(objectType, configured)},
+				State:  tfsdk.State{Schema: s, Raw: tftypes.NewValue(objectType, prior)},
+				Plan:   tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(objectType, planned)},
+			}
+			resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
+
+			ops.ModifyResourcePlan(ctx, req, &resp)
+
+			require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+			var result types.Object
+			require.False(t, resp.Plan.Get(ctx, &result).HasError())
+			assert.Equal(t, test.expected, result.Attributes()[test.attribute])
 		})
 	}
 }
