@@ -4,7 +4,7 @@ page_title: "posthog_project_settings Resource - posthog"
 subcategory: ""
 description: |-
   Manages environment-level settings for a PostHog project (environment).
-  These settings live on the PostHog environment object (/api/environments/{id}/), which is distinct from the organization-scoped posthog_project resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state.
+  These settings live on the PostHog environment object (/api/environments/{id}/), which is distinct from the organization-scoped posthog_project resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state. Updates send only configured settings. When a plan changes settings, omitted attributes show as (known after apply) and refresh from PostHog after the update.
   ~> Singleton: There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
   ~> Destroy Behavior: Destroying this resource is a no-op. It stops Terraform from managing the settings but does not reset any values on PostHog; the last-applied settings remain in effect.
   ~> Plan-gated settings: If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
@@ -15,7 +15,7 @@ description: |-
 
 Manages environment-level settings for a PostHog project (environment).
 
-These settings live on the PostHog environment object (`/api/environments/{id}/`), which is distinct from the organization-scoped `posthog_project` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state.
+These settings live on the PostHog environment object (`/api/environments/{id}/`), which is distinct from the organization-scoped `posthog_project` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state. Updates send only configured settings. When a plan changes settings, omitted attributes show as `(known after apply)` and refresh from PostHog after the update.
 
 ~> **Singleton:** There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
 
