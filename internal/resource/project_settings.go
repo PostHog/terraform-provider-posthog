@@ -84,7 +84,7 @@ func (o ProjectSettingsOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: `Manages environment-level settings for a PostHog project (environment).
 
-These settings live on the PostHog environment object (` + "`/api/environments/{id}/`" + `), which is distinct from the organization-scoped ` + "`posthog_project`" + ` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state. Updates send only configured settings. When a plan changes settings, omitted attributes show as ` + "`(known after apply)`" + ` and refresh from PostHog after the update.
+These settings live on the PostHog environment object (` + "`/api/environments/{id}/`" + `), which is distinct from the organization-scoped ` + "`posthog_project`" + ` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state. Updates send only configured settings. When a plan changes settings, omitted attributes become unknown, show as ` + "`(known after apply)`" + `, and refresh from PostHog after the update. References to omitted attributes can also be unknown until apply.
 
 ~> **Singleton:** There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
 
@@ -210,7 +210,7 @@ func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource
 	prior := state.Attributes()
 	planned := plan.Attributes()
 	for name, configured := range config.Attributes() {
-		if name == "id" || name == "project_id" {
+		if name == "project_id" {
 			if !planned[name].Equal(prior[name]) {
 				return
 			}
@@ -219,7 +219,7 @@ func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource
 		if configured.IsNull() {
 			continue
 		}
-		if configured.IsUnknown() || !configured.Equal(prior[name]) {
+		if !configured.Equal(prior[name]) {
 			return
 		}
 	}

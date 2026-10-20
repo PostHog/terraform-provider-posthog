@@ -272,19 +272,21 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 	}
 }
 
-func TestProjectSettingsModifyPlanPreservesConfiguredChanges(t *testing.T) {
+func TestProjectSettingsModifyPlan(t *testing.T) {
 	ctx := context.Background()
 	ops := ProjectSettingsOps{}
 	s := ops.Schema()
 	objectType := s.Type().TerraformType(ctx).(tftypes.Object)
 	for _, test := range []struct {
-		name      string
-		attribute string
-		value     tftypes.Value
-		expected  attr.Value
+		name          string
+		attribute     string
+		value         tftypes.Value
+		expected      attr.Value
+		restoresState bool
 	}{
-		{"unknown setting", "anonymize_ips", tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue), types.BoolUnknown()},
-		{"project replacement", "project_id", tftypes.NewValue(tftypes.String, "456"), types.StringValue("456")},
+		{"unknown setting", "anonymize_ips", tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue), types.BoolUnknown(), false},
+		{"project replacement", "project_id", tftypes.NewValue(tftypes.String, "456"), types.StringValue("456"), false},
+		{"unchanged settings", "anonymize_ips", tftypes.NewValue(tftypes.Bool, false), nil, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prior := make(map[string]tftypes.Value)
@@ -294,8 +296,18 @@ func TestProjectSettingsModifyPlanPreservesConfiguredChanges(t *testing.T) {
 			prior["id"] = tftypes.NewValue(tftypes.String, "123")
 			prior["project_id"] = tftypes.NewValue(tftypes.String, "123")
 			prior["anonymize_ips"] = tftypes.NewValue(tftypes.Bool, false)
+			if test.restoresState {
+				prior["session_recording_network_payload_capture_config"] = tftypes.NewValue(
+					objectType.AttributeTypes["session_recording_network_payload_capture_config"],
+					map[string]tftypes.Value{
+						"record_headers": tftypes.NewValue(tftypes.Bool, true),
+						"record_body":    tftypes.NewValue(tftypes.Bool, false),
+					},
+				)
+			}
 			configured := maps.Clone(prior)
 			configured["id"] = tftypes.NewValue(tftypes.String, nil)
+			configured["session_recording_network_payload_capture_config"] = tftypes.NewValue(objectType.AttributeTypes["session_recording_network_payload_capture_config"], nil)
 			configured[test.attribute] = test.value
 			planned := maps.Clone(prior)
 			for name, attributeType := range objectType.AttributeTypes {
@@ -314,6 +326,10 @@ func TestProjectSettingsModifyPlanPreservesConfiguredChanges(t *testing.T) {
 			ops.ModifyResourcePlan(ctx, req, &resp)
 
 			require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+			if test.restoresState {
+				assert.True(t, resp.Plan.Raw.Equal(req.State.Raw), "unchanged configuration must restore the full prior state")
+				return
+			}
 			var result types.Object
 			require.False(t, resp.Plan.Get(ctx, &result).HasError())
 			assert.Equal(t, test.expected, result.Attributes()[test.attribute])
