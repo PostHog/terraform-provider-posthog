@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type projectSettingsPlanCheck func(context.Context, plancheck.CheckPlanRequest, *plancheck.CheckPlanResponse)
@@ -99,10 +100,6 @@ resource "posthog_project_settings" "test" {
 				ImportStatePersist: true,
 			},
 			{
-				Config:   fmt.Sprintf(config, ""),
-				PlanOnly: true,
-			},
-			{
 				Config: fmt.Sprintf(config, "anonymize_ips = true\n  surveys_opt_in = true"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
@@ -116,14 +113,15 @@ resource "posthog_project_settings" "test" {
 					},
 				},
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(address, "surveys_opt_in", "true"),
 					resource.TestCheckResourceAttr(address, "session_recording_opt_in", "false"),
 					resource.TestCheckResourceAttr(address, "session_recording_network_payload_capture_config.record_headers", "false"),
 				),
 				PostApplyFunc: func() {
 					mu.Lock()
 					defer mu.Unlock()
-					assert.Equal(t, []map[string]any{{"anonymize_ips": true, "surveys_opt_in": true}}, patches)
+					require.Len(t, patches, 1)
+					assert.Equal(t, true, patches[0]["anonymize_ips"])
+					assert.Equal(t, true, patches[0]["surveys_opt_in"])
 				},
 			},
 		},

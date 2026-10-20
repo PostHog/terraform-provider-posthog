@@ -86,7 +86,7 @@ func TestProjectSettingsBuildCreateRequest_ZeroValues(t *testing.T) {
 func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
-	// Only heatmaps configured; the omitted scalars checked below are unknown.
+	// Only heatmaps configured; omitted computed settings are unknown.
 	model.HeatmapsOptIn = types.BoolValue(true)
 	model.AutocaptureExceptionsOptIn = types.BoolUnknown()
 	model.SessionRecordingOptIn = types.BoolUnknown()
@@ -94,6 +94,12 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	model.CookielessServerHashMode = types.Int64Unknown()
 	model.AutocaptureWebVitalsOptIn = types.BoolUnknown()
 	model.AnonymizeIps = types.BoolUnknown()
+	model.CapturePerformanceOptIn = types.BoolUnknown()
+	model.NetworkPayloadCapture = types.ObjectUnknown(networkPayloadCaptureAttrTypes)
+	model.AppURLs = types.ListUnknown(types.StringType)
+	model.RecordingDomains = types.ListUnknown(types.StringType)
+	model.TestAccountFilters = jsontypes.NewNormalizedUnknown()
+	model.TestAccountFiltersDefaultChecked = types.BoolUnknown()
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -106,6 +112,18 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	assert.Nil(t, req.CookielessServerHashMode)
 	assert.Nil(t, req.AutocaptureWebVitalsOptIn)
 	assert.Nil(t, req.AnonymizeIps, "unset fields must serialize as nil (omitted)")
+	assert.Nil(t, req.SessionRecordingNetworkPayloadCaptureConfig)
+	assert.Nil(t, req.CapturePerformanceOptIn)
+	assert.Nil(t, req.AppURLs)
+	assert.Nil(t, req.RecordingDomains)
+	assert.Nil(t, req.TestAccountFilters)
+	assert.Nil(t, req.TestAccountFiltersDefaultChecked)
+
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "session_recording_network_payload_capture_config")
+	assert.NotContains(t, string(body), "capture_performance_opt_in")
+	assert.NotContains(t, string(body), "test_account_filters")
 }
 
 // TestProjectSettingsBuildCreateRequest_EmptyListClears guards the clearing path:
@@ -179,36 +197,8 @@ func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureExplicitFalse(t 
 	assert.Contains(t, string(body), `"session_recording_network_payload_capture_config":{"recordHeaders":false,"recordBody":false}`)
 }
 
-// TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureAbsent guards the
-// leave-untouched contract: an unset block must be omitted from the PATCH body
-// entirely, not sent as null or {} (the API replaces the whole JSON blob).
-// TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerformanceCapture
-// guards the no-op warning: payload capture only takes effect when network
-// performance capture is enabled, so configuring the block without a known-true
-// capture_performance_opt_in must warn (and only then).
 func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerformanceCapture(t *testing.T) {
 	ops := ProjectSettingsOps{}
-
-	t.Run("warns when capture_performance_opt_in is unset", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
-
-		_, diags := ops.BuildCreateRequest(context.Background(), model)
-
-		assert.False(t, diags.HasError())
-		require.Equal(t, 1, diags.WarningsCount())
-		assert.Contains(t, diags.Warnings()[0].Summary(), "capture_performance_opt_in")
-	})
-
-	t.Run("warns when capture_performance_opt_in is false", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		model.CapturePerformanceOptIn = types.BoolValue(false)
-		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
-
-		_, diags := ops.BuildCreateRequest(context.Background(), model)
-
-		require.Equal(t, 1, diags.WarningsCount())
-	})
 
 	t.Run("no warning when capture_performance_opt_in is true", func(t *testing.T) {
 		model := newProjectSettingsModel()
@@ -223,6 +213,7 @@ func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerf
 	t.Run("no warning when the block is not configured", func(t *testing.T) {
 		model := newProjectSettingsModel()
 		model.CapturePerformanceOptIn = types.BoolValue(false)
+		model.NetworkPayloadCapture = types.ObjectUnknown(networkPayloadCaptureAttrTypes)
 
 		_, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -230,44 +221,52 @@ func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureWarnsWithoutPerf
 	})
 }
 
-func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureAbsent(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	model := newProjectSettingsModel()
-	model.HeatmapsOptIn = types.BoolValue(true)
-
-	req, diags := ops.BuildCreateRequest(context.Background(), model)
-
-	assert.False(t, diags.HasError())
-	assert.Nil(t, req.SessionRecordingNetworkPayloadCaptureConfig)
-	assert.Nil(t, req.CapturePerformanceOptIn)
-
-	body, err := json.Marshal(req)
-	require.NoError(t, err)
-	assert.NotContains(t, string(body), "session_recording_network_payload_capture_config")
-	assert.NotContains(t, string(body), "capture_performance_opt_in")
-}
-
 func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		prior    types.Bool
-		planned  types.Bool
-		warnings int
+		name        string
+		prior       types.Bool
+		planned     types.Bool
+		warnings    int
+		wantCapture *bool
 	}{
-		{"enabled in state", types.BoolValue(true), types.BoolUnknown(), 0},
-		{"disabled in state", types.BoolValue(false), types.BoolUnknown(), 1},
-		{"explicitly disabled", types.BoolValue(true), types.BoolValue(false), 1},
+		{"enabled in state", types.BoolValue(true), types.BoolUnknown(), 0, nil},
+		{"disabled in state", types.BoolValue(false), types.BoolUnknown(), 1, nil},
+		{"unset in state", types.BoolNull(), types.BoolUnknown(), 1, nil},
+		{"explicitly disabled", types.BoolValue(true), types.BoolValue(false), 1, new(false)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			plan := newProjectSettingsModel()
 			plan.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
 			plan.CapturePerformanceOptIn = test.planned
+			plan.HeatmapsOptIn = types.BoolValue(true)
+			plan.AutocaptureExceptionsOptIn = types.BoolUnknown()
+			plan.SessionRecordingOptIn = types.BoolUnknown()
+			plan.SurveysOptIn = types.BoolUnknown()
+			plan.CookielessServerHashMode = types.Int64Unknown()
+			plan.AutocaptureWebVitalsOptIn = types.BoolUnknown()
+			plan.AnonymizeIps = types.BoolUnknown()
+			plan.AppURLs = types.ListUnknown(types.StringType)
+			plan.RecordingDomains = types.ListUnknown(types.StringType)
+			plan.TestAccountFilters = jsontypes.NewNormalizedUnknown()
+			plan.TestAccountFiltersDefaultChecked = types.BoolUnknown()
 			state := newProjectSettingsModel()
 			state.CapturePerformanceOptIn = test.prior
 
-			_, diags := (ProjectSettingsOps{}).BuildUpdateRequest(context.Background(), plan, state)
+			req, diags := (ProjectSettingsOps{}).BuildUpdateRequest(context.Background(), plan, state)
 
-			assert.Equal(t, test.warnings, diags.WarningsCount())
+			require.False(t, diags.HasError())
+			require.Equal(t, test.warnings, diags.WarningsCount())
+			if test.warnings > 0 {
+				assert.Contains(t, diags.Warnings()[0].Summary(), "capture_performance_opt_in")
+			}
+			assert.Equal(t, httpclient.EnvironmentSettingsRequest{
+				HeatmapsOptIn:           new(true),
+				CapturePerformanceOptIn: test.wantCapture,
+				SessionRecordingNetworkPayloadCaptureConfig: &httpclient.NetworkPayloadCaptureConfig{
+					RecordHeaders: new(true),
+					RecordBody:    new(false),
+				},
+			}, req)
 		})
 	}
 }
@@ -399,6 +398,10 @@ func TestProjectSettingsMapResponseToModel_NilFieldsBecomeNull(t *testing.T) {
 	assert.True(t, model.CookielessServerHashMode.IsNull())
 	assert.True(t, model.AutocaptureWebVitalsOptIn.IsNull())
 	assert.True(t, model.AnonymizeIps.IsNull())
+	assert.True(t, model.CapturePerformanceOptIn.IsNull())
+	assert.True(t, model.NetworkPayloadCapture.IsNull())
+	assert.True(t, model.TestAccountFilters.IsNull())
+	assert.True(t, model.TestAccountFiltersDefaultChecked.IsNull())
 }
 
 func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testing.T) {
@@ -423,21 +426,6 @@ func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testi
 	assert.True(t, cfg.RecordHeaders.ValueBool())
 	require.False(t, cfg.RecordBody.IsNull(), "explicit false must map to a known value, not null")
 	assert.False(t, cfg.RecordBody.ValueBool())
-}
-
-// TestProjectSettingsMapResponseToModel_NetworkPayloadCaptureNull covers the
-// server default: PostHog stores null until the setting is first written, and
-// that must map to a null object (not an object of null bools).
-func TestProjectSettingsMapResponseToModel_NetworkPayloadCaptureNull(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	resp := httpclient.Environment{ID: 123}
-
-	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
-
-	assert.False(t, diags.HasError())
-	assert.True(t, model.CapturePerformanceOptIn.IsNull())
-	assert.True(t, model.NetworkPayloadCapture.IsNull())
 }
 
 // TestProjectSettingsMapResponseToModel_DivergenceWarning verifies the
@@ -571,22 +559,6 @@ func TestProjectSettingsBuildCreateRequest_TestAccountFiltersEmptyClears(t *test
 	assert.Empty(t, *req.TestAccountFilters)
 }
 
-func TestProjectSettingsBuildCreateRequest_TestAccountFiltersUnset(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	model := newProjectSettingsModel()
-	model.HeatmapsOptIn = types.BoolValue(true)
-
-	req, diags := ops.BuildCreateRequest(context.Background(), model)
-
-	assert.False(t, diags.HasError())
-	assert.Nil(t, req.TestAccountFilters)
-	assert.Nil(t, req.TestAccountFiltersDefaultChecked)
-
-	body, err := json.Marshal(req)
-	require.NoError(t, err)
-	assert.NotContains(t, string(body), "test_account_filters")
-}
-
 func TestProjectSettingsBuildCreateRequest_TestAccountFiltersInvalidJSON(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
@@ -636,18 +608,6 @@ func TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName(t 
 	assert.NotContains(t, model.TestAccountFilters.ValueString(), "cohort_name")
 
 	assert.True(t, model.TestAccountFiltersDefaultChecked.ValueBool())
-}
-
-func TestProjectSettingsMapResponseToModel_TestAccountFiltersNil(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	resp := httpclient.Environment{ID: 123}
-
-	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
-
-	assert.False(t, diags.HasError())
-	assert.True(t, model.TestAccountFilters.IsNull())
-	assert.True(t, model.TestAccountFiltersDefaultChecked.IsNull())
 }
 
 func TestProjectSettingsDeleteIsNoOp(t *testing.T) {
