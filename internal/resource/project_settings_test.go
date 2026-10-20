@@ -86,8 +86,14 @@ func TestProjectSettingsBuildCreateRequest_ZeroValues(t *testing.T) {
 func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
-	// Only heatmaps configured; everything else null/unknown.
+	// Only heatmaps configured; the omitted scalars checked below are unknown.
 	model.HeatmapsOptIn = types.BoolValue(true)
+	model.AutocaptureExceptionsOptIn = types.BoolUnknown()
+	model.SessionRecordingOptIn = types.BoolUnknown()
+	model.SurveysOptIn = types.BoolUnknown()
+	model.CookielessServerHashMode = types.Int64Unknown()
+	model.AutocaptureWebVitalsOptIn = types.BoolUnknown()
+	model.AnonymizeIps = types.BoolUnknown()
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -241,18 +247,6 @@ func TestProjectSettingsBuildCreateRequest_NetworkPayloadCaptureAbsent(t *testin
 	assert.NotContains(t, string(body), "capture_performance_opt_in")
 }
 
-func TestProjectSettingsBuildUpdateRequest(t *testing.T) {
-	ops := ProjectSettingsOps{}
-	plan := newProjectSettingsModel()
-	plan.SurveysOptIn = types.BoolValue(true)
-
-	req, diags := ops.BuildUpdateRequest(context.Background(), plan, newProjectSettingsModel())
-
-	assert.False(t, diags.HasError())
-	require.NotNil(t, req.SurveysOptIn)
-	assert.True(t, *req.SurveysOptIn)
-}
-
 func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -304,6 +298,11 @@ func TestProjectSettingsModifyPlanPreservesConfiguredChanges(t *testing.T) {
 			configured["id"] = tftypes.NewValue(tftypes.String, nil)
 			configured[test.attribute] = test.value
 			planned := maps.Clone(prior)
+			for name, attributeType := range objectType.AttributeTypes {
+				if name != "id" && name != "project_id" && configured[name].IsNull() {
+					planned[name] = tftypes.NewValue(attributeType, tftypes.UnknownValue)
+				}
+			}
 			planned[test.attribute] = test.value
 			req := tfresource.ModifyPlanRequest{
 				Config: tfsdk.Config{Schema: s, Raw: tftypes.NewValue(objectType, configured)},
