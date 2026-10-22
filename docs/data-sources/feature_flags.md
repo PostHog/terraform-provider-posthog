@@ -37,8 +37,10 @@ output "flag_keys" {
 # If the environment already has a project with this name, import that project
 # into posthog_project.this first instead of creating a second one. Otherwise
 # the name matches the old project, and adopting its flags into resources that
-# point at the new project plans to replace them, deleting them from the old
-# project.
+# point at the new project plans to replace them. Terraform deletes the old
+# flags before PostHog refuses the second project (names are unique within an
+# organization), so the flags are lost even though the apply fails.
+# prevent_destroy on the flags turns that into an error at plan time.
 variable "environment" {
   type = string
 }
@@ -63,6 +65,10 @@ resource "posthog_feature_flag" "this" {
   project_id = posthog_project.this.id
   key        = each.key
   name       = each.value
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # for_each in an import block needs Terraform 1.7 or later.
@@ -83,7 +89,7 @@ import {
 
 - `organization_id` (String) Organization to look `project_name` up in. Defaults to the provider-level organization_id. Requires `project_name`.
 - `project_id` (String) Project ID (environment) to list flags in. Defaults to the provider-level project_id. Conflicts with `project_name`. When the project is looked up by `project_name` and none matches, this is null.
-- `project_name` (String) Name of the project to list flags in, matched case-insensitively within `organization_id`. Use this when the project ID is not known until apply, for example a project created in the same configuration. When no project has this name, `flags` is empty rather than an error. More than one project with the name is an error. If a project with this name already exists, import it into your `posthog_project` resource rather than creating a second one: before the new project exists, this name matches the old one, and adopting its flags into resources pointed at the new project would plan to replace them, deleting them from the old project.
+- `project_name` (String) Name of the project to list flags in, matched case-insensitively within `organization_id`. Use this when the project ID is not known until apply, for example a project created in the same configuration. When no project has this name, `flags` is empty rather than an error. More than one project with the name is an error. If a project with this name already exists, import it into your `posthog_project` resource rather than creating a second one: before the new project exists, this name matches the old one, and adopting its flags into resources pointed at the new project plans to replace them. Terraform deletes the old flags before PostHog refuses the second project, so they are lost even though the apply fails. Setting `lifecycle { prevent_destroy = true }` on the flag resources turns this into an error at plan time.
 
 ### Read-Only
 

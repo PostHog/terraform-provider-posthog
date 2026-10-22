@@ -22,8 +22,10 @@ output "flag_keys" {
 # If the environment already has a project with this name, import that project
 # into posthog_project.this first instead of creating a second one. Otherwise
 # the name matches the old project, and adopting its flags into resources that
-# point at the new project plans to replace them, deleting them from the old
-# project.
+# point at the new project plans to replace them. Terraform deletes the old
+# flags before PostHog refuses the second project (names are unique within an
+# organization), so the flags are lost even though the apply fails.
+# prevent_destroy on the flags turns that into an error at plan time.
 variable "environment" {
   type = string
 }
@@ -48,6 +50,10 @@ resource "posthog_feature_flag" "this" {
   project_id = posthog_project.this.id
   key        = each.key
   name       = each.value
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # for_each in an import block needs Terraform 1.7 or later.

@@ -92,7 +92,8 @@ func (d *FeatureFlagsDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 					"When no project has this name, `flags` is empty rather than an error. More than one project with the name is an error. " +
 					"If a project with this name already exists, import it into your `posthog_project` resource rather than creating a second one: " +
 					"before the new project exists, this name matches the old one, and adopting its flags into resources pointed at the new project " +
-					"would plan to replace them, deleting them from the old project.",
+					"plans to replace them. Terraform deletes the old flags before PostHog refuses the second project, so they are lost even though " +
+					"the apply fails. Setting `lifecycle { prevent_destroy = true }` on the flag resources turns this into an error at plan time.",
 			},
 			"organization_id": schema.StringAttribute{
 				Optional:            true,
