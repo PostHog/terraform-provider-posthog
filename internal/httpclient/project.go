@@ -26,6 +26,15 @@ func (c *PosthogClient) CreateProject(ctx context.Context, orgIDOrSlug string, i
 	return result, err
 }
 
+// ListProjects returns the organization's projects that the API key's user can see.
+func (c *PosthogClient) ListProjects(ctx context.Context, orgIDOrSlug string) ([]Project, error) {
+	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/")
+	if err != nil {
+		return nil, err
+	}
+	return listAll[Project](c, ctx, path)
+}
+
 func (c *PosthogClient) GetProject(ctx context.Context, orgIDOrSlug, projectID string) (Project, HTTPStatusCode, error) {
 	path, err := c.orgPath(ctx, orgIDOrSlug, "/api/organizations/%s/projects/%s/", projectID)
 	if err != nil {
