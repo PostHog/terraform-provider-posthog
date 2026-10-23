@@ -34,6 +34,10 @@ const (
 	DefaultRateLimitTotalWait = 5 * time.Minute
 	// maxRateLimitJitter caps the jitter added to a Retry-After wait.
 	maxRateLimitJitter = 2 * time.Second
+	// minRateLimitWait is the shortest wait on a 429. PostHog writes
+	// Retry-After in whole seconds rounded down, so a slot freeing up within
+	// the second arrives as "0".
+	minRateLimitWait = time.Second
 )
 
 // RateLimitWaitedHeader and RateLimitStopReasonHeader are set on a 429 the
@@ -208,6 +212,9 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		} else {
 			if retries >= t.Config.MaxRetries {
+				if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+					return t.stopRateLimited(req, attempt+1, resp, t.noRetryAfterStopReason(), rateLimitSlept)
+				}
 				return t.stop(req, attempt+1, resp, err, decision, true)
 			}
 			backoff = t.calculateBackoff(retries)
@@ -220,9 +227,10 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err := sleep(req.Context(), backoff); err != nil {
 			return nil, fmt.Errorf("(attempt: %d) sleeping: %w", attempt+1, err)
 		}
-		if decision.rateLimited {
+		if err == nil && resp.StatusCode == http.StatusTooManyRequests {
 			rateLimitSlept += backoff
-		} else {
+		}
+		if !decision.rateLimited {
 			retries++
 		}
 	}
@@ -276,6 +284,15 @@ func (t *RetryTransport) logRetry(req *http.Request, attempt int, resp *http.Res
 	tflog.Debug(req.Context(), "retrying request", fields)
 }
 
+// noRetryAfterStopReason explains giving up on a 429 that carried no usable
+// Retry-After, which gets the ordinary MaxRetries bound.
+func (t *RetryTransport) noRetryAfterStopReason() string {
+	if t.Config.MaxRetries == 0 {
+		return "retries are disabled"
+	}
+	return fmt.Sprintf("the response had no usable Retry-After and %d retries ran out", t.Config.MaxRetries)
+}
+
 // rateLimitBackoff is how long to wait before sending a request again after a
 // 429 that asked for retryAfter, given the time since the request was first
 // rate-limited. A non-empty stopReason means not to send it again.
@@ -289,8 +306,9 @@ func (t *RetryTransport) rateLimitBackoff(retryAfter, rateLimitedFor time.Durati
 	}
 	// Parallel requests rejected together get the same Retry-After, and the
 	// window frees one slot at a time. Spread them out, never sooner than asked.
-	jitter := min(time.Duration(float64(retryAfter)*t.Config.JitterFactor), maxRateLimitJitter)
-	backoff = retryAfter + time.Duration(rand.Float64()*float64(jitter))
+	wait := max(retryAfter, minRateLimitWait)
+	jitter := min(time.Duration(float64(wait)*t.Config.JitterFactor), maxRateLimitJitter)
+	backoff = wait + time.Duration(rand.Float64()*float64(jitter))
 	if rateLimitedFor+backoff > t.Config.RateLimitTotalWait {
 		return 0, fmt.Sprintf("waiting again would pass the %s rate-limit budget", t.Config.RateLimitTotalWait)
 	}
@@ -553,7 +571,7 @@ func parseRetryAfterHeader(header string) (time.Duration, bool) {
 		// Too long to hold, so far too long to wait.
 		return maxRetryAfter, true
 	}
-	if err != nil || seconds <= 0 {
+	if err != nil || seconds < 0 {
 		return 0, false
 	}
 	if seconds > int64(maxRetryAfter/time.Second) {

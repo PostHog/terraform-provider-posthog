@@ -311,6 +311,58 @@ func TestRetryTransport_RateLimitBudgetCountsSlowThrottledAttempts(t *testing.T)
 	assert.GreaterOrEqual(t, attempts.Load(), int32(2), "a rate-limited request is still retried")
 }
 
+func TestRetryTransport_ZeroRetryAfterUsesTheRateLimitBudget(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) <= 2 {
+			// What PostHog sends when a slot frees up within the second.
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := testRetryConfig()
+	config.MaxRetries = 1
+	transport := NewRetryTransport(http.DefaultTransport, config)
+	client := &http.Client{Transport: transport}
+
+	start := time.Now()
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := client.Do(req)
+
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "two 429s then a success, despite MaxRetries = 1")
+	assert.Equal(t, int32(3), attempts.Load())
+	assert.GreaterOrEqual(t, time.Since(start), 2*time.Second, "each zero Retry-After still waits a second")
+}
+
+func TestRetryTransport_A429WithoutRetryAfterIsExplainedWhenRetriesRunOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
+	client := &http.Client{Transport: transport}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	resp, err := client.Do(req)
+
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	waited, reason, ok := RateLimitStop(resp)
+	require.True(t, ok, "the caller gets the rate-limit explanation, not a bare 429")
+	assert.Contains(t, reason, "no usable Retry-After and 3 retries ran out")
+	assert.Zero(t, waited, "the 10-80ms backoffs round down to no wait")
+}
+
 func TestRetryTransport_NoRetryConfigDoesNotRetryRateLimits(t *testing.T) {
 	var attempts atomic.Int32
 
@@ -493,7 +545,7 @@ func TestParseRetryAfter(t *testing.T) {
 		ok       bool
 	}{
 		{"empty", "", 0, false},
-		{"zero", "0", 0, false},
+		{"zero, a sub-second wait rounded down", "0", 0, true},
 		{"negative", "-1", 0, false},
 		{"one second", "1", 1 * time.Second, true},
 		{"five seconds", "5", 5 * time.Second, true},
@@ -832,6 +884,10 @@ func TestRetryDecision(t *testing.T) {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"5"}}},
 			wantRetry: true, wantReason: "rate limited",
 		},
+		"a zero Retry-After is still a rate limit": {
+			method: http.MethodGet, resp: &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"0"}}},
+			wantRetry: true, wantReason: "rate limited",
+		},
 		"post on a rate limit without Retry-After": {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
 			wantRetry: true, wantReason: "rate limited without Retry-After",
@@ -1098,6 +1154,7 @@ func TestRetryTransport_RateLimitBackoff(t *testing.T) {
 		wantStop       string
 	}{
 		"Retry-After is honoured past MaxBackoff":         {retryAfter: time.Second, want: time.Second},
+		"a zero Retry-After still waits a second":         {retryAfter: 0, want: time.Second},
 		"Retry-After up to RateLimitMaxWait is honoured":  {retryAfter: 2 * time.Second, want: 2 * time.Second},
 		"Retry-After past RateLimitMaxWait is not waited": {retryAfter: 3 * time.Second, wantStop: "Retry-After of 3s is longer than the 2s"},
 		"a clamped huge Retry-After is not waited":        {retryAfter: maxRetryAfter, wantStop: "is longer than"},
