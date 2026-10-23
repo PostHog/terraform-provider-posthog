@@ -193,9 +193,14 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 }
 
 func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
-	return o.buildRequest(ctx, model, model.CapturePerformanceOptIn)
+	req, diags := o.buildRequest(ctx, model)
+	diags.Append(networkCaptureWarning(model.NetworkPayloadCapture, model.CapturePerformanceOptIn)...)
+	return req, diags
 }
 
+// ModifyResourcePlan plans no change when every configured setting already
+// matches state. Otherwise the plan is left as the framework built it, with the
+// settings the config leaves out unknown until the update reads them back.
 func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
 		return
@@ -208,27 +213,29 @@ func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource
 		return
 	}
 	prior := state.Attributes()
-	planned := plan.Attributes()
+
+	// A changed project_id is a replacement the framework has already planned.
+	// It is compared plan to state because the config leaves it null when the
+	// provider-level project applies.
+	if !plan.Attributes()["project_id"].Equal(prior["project_id"]) {
+		return
+	}
 	for name, configured := range config.Attributes() {
-		if name == "project_id" {
-			if !planned[name].Equal(prior[name]) {
-				return
-			}
-			continue
-		}
-		if configured.IsNull() {
+		if name == "project_id" || configured.IsNull() {
 			continue
 		}
 		if !configured.Equal(prior[name]) {
 			return
 		}
 	}
-	// Required children of an omitted computed object can make the framework
-	// propose changes even when every configured setting still matches state.
+
+	// Restore the whole prior state, not only the omitted settings: required
+	// children of an omitted computed object can make the framework propose
+	// changes even when every configured setting still matches state.
 	resp.Plan.Raw = req.State.Raw
 }
 
-func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSettingsModel, capturePerformance types.Bool) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	req := httpclient.EnvironmentSettingsRequest{
 		HeatmapsOptIn:              util.BoolPtrFromValue(model.HeatmapsOptIn),
@@ -252,17 +259,6 @@ func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSetti
 				RecordHeaders: util.BoolPtrFromValue(cfg.RecordHeaders),
 				RecordBody:    util.BoolPtrFromValue(cfg.RecordBody),
 			}
-		}
-		// Updates use the prior value for this warning when the plan leaves
-		// performance capture unknown. The request still omits that setting.
-		if !capturePerformance.ValueBool() {
-			diags.AddWarning(
-				"session_recording_network_payload_capture_config has no effect without capture_performance_opt_in",
-				"Session replay only captures network requests when network performance capture is enabled, "+
-					"so the configured payload capture settings will do nothing until capture_performance_opt_in is true. "+
-					"Set capture_performance_opt_in = true in this resource, or ignore this warning if network capture "+
-					"is already enabled for the project outside Terraform.",
-			)
 		}
 	}
 
@@ -293,11 +289,34 @@ func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSetti
 }
 
 func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, state ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+	req, diags := o.buildRequest(ctx, plan)
+	// An omitted capture_performance_opt_in is unknown in an update plan, so the
+	// warning goes by the value PostHog last reported. The request still omits it.
 	capturePerformance := plan.CapturePerformanceOptIn
 	if capturePerformance.IsUnknown() {
 		capturePerformance = state.CapturePerformanceOptIn
 	}
-	return o.buildRequest(ctx, plan, capturePerformance)
+	diags.Append(networkCaptureWarning(plan.NetworkPayloadCapture, capturePerformance)...)
+	return req, diags
+}
+
+// networkCaptureWarning warns when network payload capture is configured but
+// capture_performance_opt_in, which it depends on, is not known to be on.
+func networkCaptureWarning(payload types.Object, capturePerformance types.Bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	// ValueBool is false for null and unknown too: warn unless performance
+	// capture is known to be enabled.
+	if payload.IsNull() || payload.IsUnknown() || capturePerformance.ValueBool() {
+		return diags
+	}
+	diags.AddWarning(
+		"session_recording_network_payload_capture_config has no effect without capture_performance_opt_in",
+		"Session replay only captures network requests when network performance capture is enabled, "+
+			"so the configured payload capture settings will do nothing until capture_performance_opt_in is true. "+
+			"Set capture_performance_opt_in = true in this resource, or ignore this warning if network capture "+
+			"is already enabled for the project outside Terraform.",
+	)
+	return diags
 }
 
 func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {
