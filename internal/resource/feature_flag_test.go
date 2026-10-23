@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
@@ -480,6 +481,130 @@ func TestFeatureFlagBuildUpdateRequestSetsEnsureExperienceContinuity(t *testing.
 	require.False(t, diags.HasError(), diags.Errors())
 	require.NotNil(t, req.EnsureExperienceContinuity)
 	assert.True(t, *req.EnsureExperienceContinuity)
+}
+
+func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
+	targeted := `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":100},{"rollout_percentage":10}]}`
+
+	tests := []struct {
+		name         string
+		planFilters  jsontypes.Normalized
+		stateFilters jsontypes.Normalized
+		stateRollout types.Int64
+		want         string // empty: the update sends no filters
+	}{
+		{
+			// Filters not in the config, with a rollout known only at apply: the update keeps
+			// the flag's release conditions and changes only the first one's rollout.
+			name:         "unconfigured filters keep the flag's current conditions",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			stateRollout: types.Int64Value(100),
+			want:         `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":25},{"rollout_percentage":10}]}`,
+		},
+		{
+			// A rename must not write back filters that may have changed in the UI.
+			name:         "unconfigured filters are not sent when the rollout does not change",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			stateRollout: types.Int64Value(25),
+		},
+		{
+			name:         "a flag without filters gets a single condition",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			stateFilters: jsontypes.NewNormalizedNull(),
+			stateRollout: types.Int64Null(),
+			want:         `{"groups":[{"rollout_percentage":25}]}`,
+		},
+		{
+			name:         "configured filters replace the flag's current ones",
+			planFilters:  jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
+			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			stateRollout: types.Int64Value(25),
+			want:         `{"groups":[{"rollout_percentage":25}]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := FeatureFlagTFModel{
+				Key:               types.StringValue("my_flag"),
+				Filters:           tc.planFilters,
+				RolloutPercentage: types.Int64Value(25),
+			}
+			state := FeatureFlagTFModel{Filters: tc.stateFilters, RolloutPercentage: tc.stateRollout}
+
+			req, diags := FeatureFlagOps{}.BuildUpdateRequest(context.Background(), plan, state)
+			require.False(t, diags.HasError(), diags.Errors())
+			if tc.want == "" {
+				assert.Nil(t, req.Filters)
+				return
+			}
+			got, err := json.Marshal(req.Filters)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.want, string(got))
+		})
+	}
+}
+
+func TestPlannedFiltersForRollout(t *testing.T) {
+	stateFilters := jsontypes.NewNormalizedValue(`{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":100},{"rollout_percentage":10}],"payloads":{"test":"{}"}}`)
+
+	tests := []struct {
+		name         string
+		planFilters  jsontypes.Normalized
+		planRollout  types.Int64
+		stateFilters jsontypes.Normalized
+		want         string // empty: filters stay as the framework planned them
+	}{
+		{
+			name:         "a rollout change plans the flag's filters with the new percentage",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planRollout:  types.Int64Value(25),
+			stateFilters: stateFilters,
+			want:         `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":25},{"rollout_percentage":10}],"payloads":{"test":"{}"}}`,
+		},
+		{
+			name:         "an unchanged rollout leaves filters to be read after apply",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planRollout:  types.Int64Value(100),
+			stateFilters: stateFilters,
+		},
+		{
+			name:         "a rollout known only at apply leaves filters unknown",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planRollout:  types.Int64Unknown(),
+			stateFilters: stateFilters,
+		},
+		{
+			name:         "a flag without filters leaves them unknown",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planRollout:  types.Int64Value(25),
+			stateFilters: jsontypes.NewNormalizedNull(),
+		},
+		{
+			name:         "known planned filters are left alone",
+			planFilters:  jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
+			planRollout:  types.Int64Value(25),
+			stateFilters: stateFilters,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := FeatureFlagTFModel{Filters: tc.planFilters, RolloutPercentage: tc.planRollout}
+			state := FeatureFlagTFModel{Filters: tc.stateFilters, RolloutPercentage: types.Int64Value(100)}
+
+			planned, ok, err := plannedFiltersForRollout(plan, state)
+			require.NoError(t, err)
+			if tc.want == "" {
+				assert.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			assert.JSONEq(t, tc.want, planned.ValueString())
+		})
+	}
 }
 
 func TestFeatureFlagMapResponseToModel_EnsureExperienceContinuity(t *testing.T) {

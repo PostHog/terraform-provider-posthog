@@ -15,7 +15,10 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
@@ -205,6 +208,143 @@ func TestFeatureFlag_DefaultIgnoresServerWiredKeys(t *testing.T) {
 				// Default ignore set drops super_groups/holdout_groups → no perpetual diff.
 				Config:   testAccFeatureFlagGroupsOnly(rKey),
 				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_RolloutPercentageKeepsAdoptedTargeting adopts a flag built in the PostHog UI,
+// with a targeted release condition, a second condition, variants and payloads, into a config
+// that sets only rollout_percentage. Changing the percentage must change only the first
+// condition's rollout: the update used to send filters rebuilt from nothing, which replaced the
+// flag's targeting with a rollout to everyone and dropped its variants and payloads.
+func TestFeatureFlag_RolloutPercentageKeepsAdoptedTargeting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "acceptance-test")
+
+	var flagID int64
+	createTargetedFlag := func() {
+		active := true
+		f, err := (&client).CreateFeatureFlag(context.Background(), projectID, httpclient.FeatureFlagRequest{
+			Key:    rKey,
+			Active: &active,
+			Filters: map[string]interface{}{
+				"groups": []interface{}{
+					map[string]interface{}{
+						"properties": []interface{}{map[string]interface{}{
+							"key": "email", "type": "person", "operator": "icontains", "value": "@example.com",
+						}},
+						"rollout_percentage": 100,
+					},
+					map[string]interface{}{"rollout_percentage": 10},
+				},
+				"multivariate": map[string]interface{}{
+					"variants": []interface{}{
+						map[string]interface{}{"key": "control", "rollout_percentage": 50},
+						map[string]interface{}{"key": "test", "rollout_percentage": 50},
+					},
+				},
+				"payloads": map[string]interface{}{"test": `{"color":"blue"}`},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Failed to create targeted flag externally: %v", err)
+		}
+		flagID = f.ID
+	}
+
+	checkTargetingKept := func(*terraform.State) error {
+		f, _, err := (&client).GetFeatureFlag(context.Background(), projectID, fmt.Sprintf("%d", flagID))
+		if err != nil {
+			return fmt.Errorf("reading flag back: %w", err)
+		}
+		raw, _ := json.Marshal(f.Filters)
+		var got struct {
+			Groups []struct {
+				Properties        []map[string]interface{} `json:"properties"`
+				RolloutPercentage *float64                 `json:"rollout_percentage"`
+			} `json:"groups"`
+			Multivariate *struct {
+				Variants []map[string]interface{} `json:"variants"`
+			} `json:"multivariate"`
+			Payloads map[string]interface{} `json:"payloads"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			return fmt.Errorf("decoding filters %s: %w", raw, err)
+		}
+		switch {
+		case len(got.Groups) != 2:
+			return fmt.Errorf("expected 2 release conditions, got %s", raw)
+		case len(got.Groups[0].Properties) != 1 || got.Groups[0].Properties[0]["key"] != "email":
+			return fmt.Errorf("first condition lost its targeting: %s", raw)
+		case got.Groups[0].RolloutPercentage == nil || *got.Groups[0].RolloutPercentage != 25:
+			return fmt.Errorf("first condition should roll out to 25%%: %s", raw)
+		case got.Groups[1].RolloutPercentage == nil || *got.Groups[1].RolloutPercentage != 10:
+			return fmt.Errorf("second condition should be unchanged: %s", raw)
+		case got.Multivariate == nil || len(got.Multivariate.Variants) != 2:
+			return fmt.Errorf("variants were dropped: %s", raw)
+		case got.Payloads["test"] == nil:
+			return fmt.Errorf("payloads were dropped: %s", raw)
+		}
+		return nil
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				PreConfig:          createTargetedFlag,
+				Config:             testAccFeatureFlagRolloutOnly(rKey, 25),
+				ResourceName:       "posthog_feature_flag.test",
+				ImportState:        true,
+				ImportStatePersist: true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return fmt.Sprintf("%s/%d", projectID, flagID), nil
+				},
+			},
+			{
+				Config: testAccFeatureFlagRolloutOnly(rKey, 25),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("posthog_feature_flag.test", plancheck.ResourceActionUpdate),
+						// The plan shows the filters the update leaves, not "(known after apply)".
+						plancheck.ExpectKnownValue("posthog_feature_flag.test", tfjsonpath.New("filters"),
+							knownvalue.StringFunc(func(v string) error {
+								if !strings.Contains(v, `"email"`) || !strings.Contains(v, `"rollout_percentage":25`) {
+									return fmt.Errorf("planned filters should keep the targeting and roll out to 25%%: %s", v)
+								}
+								return nil
+							})),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "rollout_percentage", "25"),
+					checkTargetingKept,
+				),
+			},
+			{
+				Config:   testAccFeatureFlagRolloutOnly(rKey, 25),
+				PlanOnly: true,
+			},
+			{
+				// A rename that does not set rollout_percentage leaves filters out of the update,
+				// so it cannot write back targeting that changed in the UI after the plan was made,
+				// and plans the rollout as unknown so such a change does not fail the apply.
+				Config: testAccFeatureFlagNameOnly(rKey, "Renamed"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectUnknownValue("posthog_feature_flag.test", tfjsonpath.New("filters")),
+						plancheck.ExpectUnknownValue("posthog_feature_flag.test", tfjsonpath.New("rollout_percentage")),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Renamed"),
+					checkTargetingKept,
+				),
 			},
 		},
 	})
@@ -742,6 +882,32 @@ resource "posthog_feature_flag" "test" {
   rollout_percentage = %d
 }
 `, key, percentage)
+}
+
+// testAccFeatureFlagRolloutOnly manages only a flag's rollout_percentage, leaving filters
+// unset, as a configuration that adopts flags built in the PostHog UI does.
+func testAccFeatureFlagRolloutOnly(key string, percentage int) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                = %q
+  rollout_percentage = %d
+}
+`, key, percentage)
+}
+
+// testAccFeatureFlagNameOnly manages only a flag's name, leaving filters and
+// rollout_percentage to whatever the flag has in PostHog.
+func testAccFeatureFlagNameOnly(key, name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key  = %q
+  name = %q
+}
+`, key, name)
 }
 
 func testAccFeatureFlagSimpleFilters(key string) string {
