@@ -391,21 +391,9 @@ func (o LogsAlertOps) BuildCreateRequest(ctx context.Context, model LogsAlertTFM
 	req.DatapointsToAlarm = util.Int64PtrFromValue(model.DatapointsToAlarm)
 	req.CooldownMinutes = util.Int64PtrFromValue(model.CooldownMinutes)
 
-	if !model.BlockedWindows.IsNull() && !model.BlockedWindows.IsUnknown() {
-		var windows []BlockedWindowTFModel
-		diags.Append(model.BlockedWindows.ElementsAs(ctx, &windows, false)...)
-		if diags.HasError() {
-			return req, diags
-		}
-		blockedWindows := make([]httpclient.LogsAlertBlockedWindow, len(windows))
-		for i, w := range windows {
-			blockedWindows[i] = httpclient.LogsAlertBlockedWindow{
-				Start: w.Start.ValueString(),
-				End:   w.End.ValueString(),
-			}
-		}
-		req.ScheduleRestriction = &httpclient.LogsAlertSchedule{BlockedWindows: blockedWindows}
-	}
+	schedule, d := blockedWindowsFromSet(ctx, model.BlockedWindows)
+	diags.Append(d...)
+	req.ScheduleRestriction = schedule
 
 	return req, diags
 }
@@ -488,6 +476,27 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	model.BlockedWindows = blockedWindows
 
 	return diags
+}
+
+// blockedWindowsFromSet builds the schedule restriction a request sends. A null set returns nil,
+// which marshals to null and clears quiet hours.
+func blockedWindowsFromSet(ctx context.Context, set types.Set) (*httpclient.LogsAlertSchedule, diag.Diagnostics) {
+	if set.IsNull() || set.IsUnknown() {
+		return nil, nil
+	}
+	var windows []BlockedWindowTFModel
+	diags := set.ElementsAs(ctx, &windows, false)
+	if diags.HasError() {
+		return nil, diags
+	}
+	blockedWindows := make([]httpclient.LogsAlertBlockedWindow, len(windows))
+	for i, w := range windows {
+		blockedWindows[i] = httpclient.LogsAlertBlockedWindow{
+			Start: w.Start.ValueString(),
+			End:   w.End.ValueString(),
+		}
+	}
+	return &httpclient.LogsAlertSchedule{BlockedWindows: blockedWindows}, diags
 }
 
 // blockedWindowsToSet keeps an explicitly empty set empty. Flipping it to null would show
