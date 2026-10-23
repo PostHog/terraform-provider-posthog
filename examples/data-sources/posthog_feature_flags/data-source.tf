@@ -3,37 +3,43 @@ data "posthog_feature_flags" "all" {
   project_id = "12345"
 }
 
-output "flag_keys" {
-  value = [for flag in data.posthog_feature_flags.all.flags : flag.key]
+output "active_flag_keys" {
+  value = [for flag in data.posthog_feature_flags.all.flags : flag.key if flag.active]
 }
 
-# Adopt flags that already exist, and create the rest, without writing any IDs.
+# Promote flags from dev to staging to production, adopting flags that already
+# exist instead of creating duplicates, without writing any flag IDs.
 #
-# Each environment has its own project, and every project declares the same
-# flags. Where a flag already exists (for example, created in the PostHog UI),
-# the import block adopts it; where it does not, Terraform creates it. Once a
-# flag is in state its import is a no-op, so the block can stay in place.
+# Each environment has its own PostHog project and its own Terraform state, and
+# the same configuration is applied to each in turn, for example from CI:
 #
-# The project is looked up by name rather than by ID, because a new
-# environment's project ID is not known until apply. Until that project exists
-# the data source finds no flags, so nothing is imported and every flag is
-# created.
+#   terraform -chdir=flags init -backend-config=dev.backend.hcl
+#   terraform -chdir=flags apply -var environment=dev
+#   # ...then the same with staging, then production
 #
-# If the environment already has a project with this name, import that project
-# into posthog_project.this first instead of creating a second one. Otherwise
-# the name matches the old project, and adopting its flags into resources that
-# point at the new project plans to replace them. Terraform deletes the old
-# flags before PostHog refuses the second project (names are unique within an
-# organization), so the flags are lost even though the apply fails.
-# prevent_destroy on the flags turns that into an error at plan time.
+# A flag created by hand in a project's UI is adopted by the import block on
+# that environment's next apply; anywhere it does not exist yet, it is created.
 variable "environment" {
   type = string
+
+  validation {
+    condition     = contains(["dev", "staging", "production"], var.environment)
+    error_message = "environment must be dev, staging or production."
+  }
 }
 
 locals {
+  # Every flag, declared once. A feature ships to dev first and is rolled out
+  # further as it moves towards production.
   feature_flags = {
-    "new-onboarding" = "New onboarding flow"
-    "beta-dashboard" = "Beta dashboard"
+    "new-onboarding" = {
+      name    = "New onboarding flow"
+      rollout = { dev = 100, staging = 100, production = 25 }
+    }
+    "beta-dashboard" = {
+      name    = "Beta dashboard"
+      rollout = { dev = 100, staging = 50, production = 0 }
+    }
   }
 }
 
@@ -41,22 +47,29 @@ resource "posthog_project" "this" {
   name = var.environment
 }
 
+# Looked up by name, because a new environment's project ID is not known until
+# apply. Until the project exists this finds no flags, so every flag is created.
 data "posthog_feature_flags" "existing" {
   project_name = var.environment
 }
 
 resource "posthog_feature_flag" "this" {
-  for_each   = local.feature_flags
-  project_id = posthog_project.this.id
-  key        = each.key
-  name       = each.value
+  for_each           = local.feature_flags
+  project_id         = posthog_project.this.id
+  key                = each.key
+  name               = each.value.name
+  rollout_percentage = each.value.rollout[var.environment]
 
+  # If the environment already had a project with this name before Terraform
+  # managed it, import that project first: see project_name above. This turns
+  # the replace that would otherwise delete its flags into a plan-time error.
   lifecycle {
     prevent_destroy = true
   }
 }
 
-# for_each in an import block needs Terraform 1.7 or later.
+# for_each in an import block needs Terraform 1.7 or later. Once a flag is in
+# state its import does nothing, so the block can stay in place.
 import {
   for_each = {
     for flag in data.posthog_feature_flags.existing.flags : flag.key => flag.id

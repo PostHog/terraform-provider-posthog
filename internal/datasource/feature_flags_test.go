@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testOrgID = "11111111-2222-3333-4444-555555555555"
+
 func TestFeatureFlagsToList_DropsDeletedFlagsAndSortsByKey(t *testing.T) {
 	flags := []httpclient.FeatureFlag{
 		{ID: 2, Key: "zeta", Name: util.StringPtr("Zeta"), Active: util.BoolPtr(true)},
@@ -85,8 +87,6 @@ func TestMatchProjectByName(t *testing.T) {
 		})
 	}
 }
-
-const testOrgID = "11111111-2222-3333-4444-555555555555"
 
 // projectsServer answers the organization's project list. A nil projects
 // list makes it fail the request instead.
