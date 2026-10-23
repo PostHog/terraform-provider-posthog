@@ -416,7 +416,9 @@ func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJS
 // at any depth (never authored by the user). Unlike defaultIgnoredFilterKeys (top-level keys),
 // these must be stripped recursively. Add future server-only enrichments here.
 var serverComputedFilterKeys = map[string]struct{}{
-	"cohort_name": {}, // API attaches this next to a cohort property's numeric value id
+	"cohort_name":    {}, // API attaches this next to a cohort property's numeric value id
+	"cohort_deleted": {}, // API sets this when the cohort is deleted or missing, so the flag can't evaluate the condition
+	"cohort_missing": {}, // API sets this when no cohort with that id exists in the project
 }
 
 // normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping unconfigured

@@ -196,17 +196,19 @@ func TestNormalizeFeatureFlagFiltersForState_ConfiguredKeyBeatsIgnore(t *testing
 	}`, got)
 }
 
-// Server-injected cohort_name (absent from config) is stripped; type/key/value kept.
-func TestNormalizeFeatureFlagFiltersForState_DropsServerInjectedCohortName(t *testing.T) {
+// Server-injected cohort keys (absent from config) are stripped; type/key/value kept.
+func TestNormalizeFeatureFlagFiltersForState_DropsServerInjectedCohortKeys(t *testing.T) {
 	apiData := map[string]interface{}{
 		"groups": []interface{}{
 			map[string]interface{}{
 				"properties": []interface{}{
 					map[string]interface{}{
-						"type":        "cohort",
-						"key":         "id",
-						"value":       float64(81),
-						"cohort_name": "Beta testers",
+						"type":           "cohort",
+						"key":            "id",
+						"value":          float64(81),
+						"cohort_name":    "Beta testers",
+						"cohort_deleted": true,
+						"cohort_missing": true,
 					},
 				},
 				"rollout_percentage": float64(100),
