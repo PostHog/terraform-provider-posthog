@@ -197,7 +197,8 @@ func TestRetryTransport_RateLimitRetriesDoNotUseUpMaxRetries(t *testing.T) {
 	var attempts atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if attempts.Add(1) <= 5 {
+		if attempts.Add(1) <= 2 {
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -217,7 +218,7 @@ func TestRetryTransport_RateLimitRetriesDoNotUseUpMaxRetries(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int32(6), attempts.Load(), "five 429s then a success, despite MaxRetries = 1")
+	assert.Equal(t, int32(3), attempts.Load(), "two 429s then a success, despite MaxRetries = 1")
 }
 
 func TestRetryTransport_RetryAfterBeyondRateLimitMaxWaitIsReturnedAtOnce(t *testing.T) {
@@ -245,7 +246,7 @@ func TestRetryTransport_RetryAfterBeyondRateLimitMaxWaitIsReturnedAtOnce(t *test
 
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "the 429 reaches the caller, whose error carries PostHog's message")
 	assert.Equal(t, "0s", resp.Header.Get(RateLimitWaitedHeader))
-	assert.Contains(t, resp.Header.Get(RateLimitStopReasonHeader), "hourly limit")
+	assert.Contains(t, resp.Header.Get(RateLimitStopReasonHeader), "Retry-After of 30m0s is longer than the 2s")
 	assert.Equal(t, int32(1), attempts.Load())
 	assert.Less(t, elapsed, time.Second, "should not have waited at all")
 	body, _ := io.ReadAll(resp.Body)
@@ -285,14 +286,15 @@ func TestRetryTransport_RateLimitBudgetCountsSlowThrottledAttempts(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
-		// Each 429 takes far longer than the 10ms wait it asks for.
-		time.Sleep(400 * time.Millisecond)
+		// Each 429 takes a large share of the 1s wait it asks for.
+		time.Sleep(600 * time.Millisecond)
+		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
 
 	config := testRetryConfig()
-	config.RateLimitTotalWait = time.Second
+	config.RateLimitTotalWait = 3 * time.Second
 	transport := NewRetryTransport(http.DefaultTransport, config)
 	client := &http.Client{Transport: transport}
 
@@ -303,8 +305,8 @@ func TestRetryTransport_RateLimitBudgetCountsSlowThrottledAttempts(t *testing.T)
 	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
-	// Counting only the sleeps (10, 20, 40, 80, 100ms...) would allow about a
-	// dozen 400ms attempts; counting the attempts too allows three.
+	// Counting only the 1s sleeps would allow four attempts in a 3s budget;
+	// counting the 600ms attempts too allows two.
 	assert.LessOrEqual(t, attempts.Load(), int32(3))
 	assert.GreaterOrEqual(t, attempts.Load(), int32(2), "a rate-limited request is still retried")
 }
@@ -314,6 +316,7 @@ func TestRetryTransport_NoRetryConfigDoesNotRetryRateLimits(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
+		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
@@ -705,11 +708,10 @@ func TestRetryTransport_RetriesOnlyIdempotentMethods(t *testing.T) {
 		"POST does not retry on 502":  {http.MethodPost, http.StatusBadGateway, 1},
 		"POST does not retry on 504":  {http.MethodPost, http.StatusGatewayTimeout, 1},
 		"PATCH does not retry on 503": {http.MethodPatch, http.StatusServiceUnavailable, 1},
-		// A 429 is bounded by the rate-limit budget, not MaxRetries. With no
-		// Retry-After the waits are 10, 20, 40 and 80ms, which fit the 200ms
-		// budget below, and a fifth wait of 100ms would not.
-		"POST retries on 429":  {http.MethodPost, http.StatusTooManyRequests, 5},
-		"PATCH retries on 429": {http.MethodPatch, http.StatusTooManyRequests, 5},
+		// A 429 was never processed, so it is replayed for any method. With no
+		// Retry-After it gets the ordinary MaxRetries bound.
+		"POST retries on 429":  {http.MethodPost, http.StatusTooManyRequests, 4},
+		"PATCH retries on 429": {http.MethodPatch, http.StatusTooManyRequests, 4},
 	}
 
 	for name, tt := range tests {
@@ -722,9 +724,7 @@ func TestRetryTransport_RetriesOnlyIdempotentMethods(t *testing.T) {
 			}))
 			defer server.Close()
 
-			config := testRetryConfig()
-			config.RateLimitTotalWait = 200 * time.Millisecond
-			transport := NewRetryTransport(http.DefaultTransport, config)
+			transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
 			client := &http.Client{Transport: transport}
 
 			req, _ := http.NewRequest(tt.method, server.URL, nil)
@@ -828,9 +828,13 @@ func TestRetryDecision(t *testing.T) {
 			method: http.MethodPost, resp: &http.Response{StatusCode: 502},
 			wantReason: "POST may already have been applied",
 		},
-		"post on a rate limit": {
-			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
+		"post on a rate limit with Retry-After": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"5"}}},
 			wantRetry: true, wantReason: "rate limited",
+		},
+		"post on a rate limit without Retry-After": {
+			method: http.MethodPost, resp: &http.Response{StatusCode: 429},
+			wantRetry: true, wantReason: "rate limited without Retry-After",
 		},
 		"status is not retryable": {
 			method: http.MethodGet, resp: &http.Response{StatusCode: 404},
@@ -1021,29 +1025,16 @@ func TestRetryTransport_RateLimitWaitAddsJitterButNeverWaitsLess(t *testing.T) {
 	config := testRetryConfig()
 	config.JitterFactor = 0.2
 	transport := NewRetryTransport(http.DefaultTransport, config)
-	resp := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"1"}}}
 
 	seen := map[time.Duration]bool{}
 	for range 50 {
-		wait, ok := transport.rateLimitWait(0, resp)
-		require.True(t, ok)
+		wait, stopReason := transport.rateLimitBackoff(time.Second, 0)
+		require.Empty(t, stopReason)
 		assert.GreaterOrEqual(t, wait, time.Second, "never sooner than PostHog asked")
 		assert.LessOrEqual(t, wait, 1200*time.Millisecond)
 		seen[wait] = true
 	}
 	assert.Greater(t, len(seen), 1, "parallel requests given the same Retry-After should not wake together")
-}
-
-func TestRetryTransport_RateLimitWaitIsPositiveWithAnyJitter(t *testing.T) {
-	config := testRetryConfig()
-	config.JitterFactor = 1.5
-	transport := NewRetryTransport(http.DefaultTransport, config)
-
-	for range 50 {
-		wait, ok := transport.rateLimitWait(0, &http.Response{StatusCode: 429, Header: http.Header{}})
-		require.True(t, ok)
-		assert.Positive(t, wait, "a non-positive wait would never fill the budget")
-	}
 }
 
 func TestRetryTransport_CancellingDuringARateLimitWaitStopsAtOnce(t *testing.T) {
@@ -1072,6 +1063,7 @@ func TestRetryTransport_OnRetryFiresForRateLimitWaits(t *testing.T) {
 	var attempts, callbacks atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) <= 2 {
+			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -1095,35 +1087,65 @@ func TestRetryTransport_OnRetryFiresForRateLimitWaits(t *testing.T) {
 	assert.Equal(t, int32(2), callbacks.Load())
 }
 
-func TestRetryTransport_RateLimitWait(t *testing.T) {
-	transport := NewRetryTransport(http.DefaultTransport, testRetryConfig())
-	rateLimited := func(retryAfter string) *http.Response {
-		return &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{retryAfter}}}
-	}
-
+func TestRetryTransport_RateLimitBackoff(t *testing.T) {
+	// RateLimitMaxWait is 2s and RateLimitTotalWait 5s in the test config, and
+	// jitter is off.
 	tests := map[string]struct {
-		resp     *http.Response
-		want     time.Duration
-		wantWait bool
+		retryAfter     time.Duration
+		rateLimitedFor time.Duration
+		maxRetries     int
+		want           time.Duration
+		wantStop       string
 	}{
-		"no Retry-After falls back to the computed backoff": {&http.Response{StatusCode: 429}, 10 * time.Millisecond, true},
-		"unparseable Retry-After is ignored":                {rateLimited("later"), 10 * time.Millisecond, true},
-		"a zero Retry-After is ignored":                     {rateLimited("0"), 10 * time.Millisecond, true},
-		"Retry-After is honoured past MaxBackoff":           {rateLimited("1"), time.Second, true},
-		"Retry-After up to RateLimitMaxWait is honoured":    {rateLimited("2"), 2 * time.Second, true},
-		"Retry-After past RateLimitMaxWait is not waited":   {rateLimited("3"), 0, false},
-		"an overflowing Retry-After is not waited":          {rateLimited("9223372037"), 0, false},
-		"an out-of-range Retry-After is not waited":         {rateLimited("99999999999999999999"), 0, false},
+		"Retry-After is honoured past MaxBackoff":         {retryAfter: time.Second, want: time.Second},
+		"Retry-After up to RateLimitMaxWait is honoured":  {retryAfter: 2 * time.Second, want: 2 * time.Second},
+		"Retry-After past RateLimitMaxWait is not waited": {retryAfter: 3 * time.Second, wantStop: "Retry-After of 3s is longer than the 2s"},
+		"a clamped huge Retry-After is not waited":        {retryAfter: maxRetryAfter, wantStop: "is longer than"},
+		"a wait past the budget is not started":           {retryAfter: time.Second, rateLimitedFor: 4500 * time.Millisecond, wantStop: "5s rate-limit budget"},
+		"no retries at all with MaxRetries 0":             {retryAfter: time.Second, maxRetries: -1, wantStop: "retries are disabled"},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			// RateLimitMaxWait is 2s in the test config.
-			got, ok := transport.rateLimitWait(0, tt.resp)
-			assert.Equal(t, tt.wantWait, ok)
+			config := testRetryConfig()
+			if tt.maxRetries < 0 {
+				config.MaxRetries = 0
+			}
+			transport := NewRetryTransport(http.DefaultTransport, config)
+
+			got, stopReason := transport.rateLimitBackoff(tt.retryAfter, tt.rateLimitedFor)
+
+			if tt.wantStop != "" {
+				assert.Contains(t, stopReason, tt.wantStop)
+				return
+			}
+			assert.Empty(t, stopReason)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRateLimitStop(t *testing.T) {
+	stopped := func(waited, reason string) *http.Response {
+		h := http.Header{}
+		if waited != "" {
+			h.Set(RateLimitWaitedHeader, waited)
+		}
+		if reason != "" {
+			h.Set(RateLimitStopReasonHeader, reason)
+		}
+		return &http.Response{StatusCode: 429, Header: h}
+	}
+
+	waited, reason, ok := RateLimitStop(stopped("42s", "budget spent"))
+	assert.True(t, ok)
+	assert.Equal(t, 42*time.Second, waited)
+	assert.Equal(t, "budget spent", reason)
+
+	_, _, ok = RateLimitStop(stopped("", ""))
+	assert.False(t, ok, "a 429 the transport did not stop on")
+	_, _, ok = RateLimitStop(stopped("soon", "budget spent"))
+	assert.False(t, ok, "an unparseable wait")
 }
 
 func TestIsIdempotentMethod(t *testing.T) {

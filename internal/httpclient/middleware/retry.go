@@ -25,29 +25,43 @@ const (
 	DefaultBackoffFactor  = 2.0
 	DefaultJitterFactor   = 0.2 // 20% jitter
 	DefaultAttemptTimeout = 30 * time.Second
-	// PostHog's Retry-After on a 429 is the time until the API key's sliding
-	// window frees a request: at most a minute for its per-minute limit. Asking
-	// for longer means the hourly limit, which no apply should sit through.
+	// PostHog's Retry-After is the time until the API key's sliding window
+	// frees a request: at most a minute under its per-minute limits. A longer
+	// ask comes from an hourly limit, which no apply should sit through.
 	DefaultRateLimitMaxWait = 60 * time.Second
 	// A plan that refreshes more resources than the per-minute limit allows
 	// waits out several windows, but not without end.
 	DefaultRateLimitTotalWait = 5 * time.Minute
+	// maxRateLimitJitter caps the jitter added to a Retry-After wait.
+	maxRateLimitJitter = 2 * time.Second
 )
 
 // RateLimitWaitedHeader and RateLimitStopReasonHeader are set on a 429 the
-// transport stops retrying: the time it spent waiting on 429s, and why it
-// stopped. The client reads them to explain the error. They ride on the
-// response rather than a typed error because a RoundTripper that returns an
-// error loses the response, and with it PostHog's message.
+// transport stops retrying: how long it slept on 429s, and why it stopped.
+// RateLimitStop reads them back. They ride on the response rather than a typed
+// error because a RoundTripper that returns an error loses the response, and
+// with it PostHog's message.
 const (
 	RateLimitWaitedHeader     = "X-Posthog-Provider-Rate-Limit-Waited"
 	RateLimitStopReasonHeader = "X-Posthog-Provider-Rate-Limit-Stop-Reason"
 )
 
+// RateLimitStop reports how long the transport slept on 429s before giving up
+// on resp, and why it gave up. ok is false when resp is not a 429 the transport
+// stopped retrying.
+func RateLimitStop(resp *http.Response) (waited time.Duration, reason string, ok bool) {
+	reason = resp.Header.Get(RateLimitStopReasonHeader)
+	waited, err := time.ParseDuration(resp.Header.Get(RateLimitWaitedHeader))
+	if reason == "" || err != nil {
+		return 0, "", false
+	}
+	return waited, reason, true
+}
+
 type RetryConfig struct {
-	// MaxRetries bounds retries of server errors and timeouts. 0 turns off
-	// every retry, including waits on 429s, which are otherwise bounded by
-	// RateLimitTotalWait rather than by this count.
+	// MaxRetries bounds retries of server errors, timeouts, and 429s that carry
+	// no usable Retry-After. 0 turns off every retry, including waits on 429s
+	// that do carry one, which are otherwise bounded by RateLimitTotalWait.
 	MaxRetries int
 	// InitialBackoff is the initial delay before the first retry.
 	InitialBackoff time.Duration
@@ -70,10 +84,8 @@ type RetryConfig struct {
 	// takes DefaultRateLimitMaxWait.
 	RateLimitMaxWait time.Duration
 	// RateLimitTotalWait bounds the time one request spends rate-limited, from
-	// sending the first attempt that got a 429: the waits and the throttled
-	// attempts both count.
-	// Waits on a 429 do not count against MaxRetries, since a rate-limited
-	// request was never processed. Unset takes DefaultRateLimitTotalWait.
+	// sending the first attempt that got a 429 with a Retry-After: the waits and
+	// the throttled attempts both count. Unset takes DefaultRateLimitTotalWait.
 	RateLimitTotalWait time.Duration
 	// RetryableStatusCodes are HTTP status codes that should trigger a retry.
 	// If nil, defaults to 429, 500, 502, 503, 504.
@@ -160,13 +172,12 @@ func ReplaceRetryTransport(base http.RoundTripper, config RetryConfig) *RetryTra
 }
 
 func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// retries counts the failures MaxRetries bounds. Rate-limited attempts are
-	// counted apart, in rateLimited, because PostHog rejected them before doing
-	// any work. rateLimitedSince is when the first of them was sent: the
-	// rate-limit budget covers the attempts as well as the waits between them,
-	// since a slow 429 with a short Retry-After would otherwise barely count.
-	var retries, rateLimited int
+	// retries counts the failures MaxRetries bounds. 429s that carry a
+	// Retry-After are bounded by RateLimitTotalWait instead, measured from when
+	// the first of them was sent, because PostHog rejected them unprocessed.
+	var retries int
 	var rateLimitedSince time.Time
+	var rateLimitSlept time.Duration
 	for attempt := 0; ; attempt++ {
 		if err := req.Context().Err(); err != nil {
 			return nil, fmt.Errorf("(attempt: %d) context error: %w", attempt+1, err)
@@ -181,26 +192,25 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		decision := t.decide(req, resp, err)
-		if decision.rateLimited && rateLimitedSince.IsZero() {
-			rateLimitedSince = sent
+		if !decision.retry {
+			return t.stop(req, attempt+1, resp, err, decision, false)
 		}
-		var rateLimitElapsed time.Duration
-		if !rateLimitedSince.IsZero() {
-			rateLimitElapsed = time.Since(rateLimitedSince)
-		}
+
 		var backoff time.Duration
-		exhausted := false
-		switch {
-		case !decision.retry:
-		case decision.rateLimited:
-			backoff, decision = t.rateLimitBackoff(decision, rateLimited, resp, rateLimitElapsed)
-		case retries >= t.Config.MaxRetries:
-			exhausted = true
-		default:
+		if decision.rateLimited {
+			if rateLimitedSince.IsZero() {
+				rateLimitedSince = sent
+			}
+			var stopReason string
+			backoff, stopReason = t.rateLimitBackoff(decision.retryAfter, time.Since(rateLimitedSince))
+			if stopReason != "" {
+				return t.stopRateLimited(req, attempt+1, resp, stopReason, rateLimitSlept)
+			}
+		} else {
+			if retries >= t.Config.MaxRetries {
+				return t.stop(req, attempt+1, resp, err, decision, true)
+			}
 			backoff = t.calculateBackoff(retries)
-		}
-		if !decision.retry || exhausted {
-			return t.stop(req, attempt+1, resp, err, decision, exhausted, rateLimitElapsed)
 		}
 
 		// No body to close before looping: attempt already drained and closed it.
@@ -211,31 +221,19 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("(attempt: %d) sleeping: %w", attempt+1, err)
 		}
 		if decision.rateLimited {
-			rateLimited++
+			rateLimitSlept += backoff
 		} else {
 			retries++
 		}
 	}
 }
 
-// stop ends the loop with the last attempt's outcome. A rate-limited response
-// is returned with the time already spent waiting and the reason for stopping
-// written onto it, so the caller's error can say both; PostHog's own message
-// only says when the key frees up.
-func (t *RetryTransport) stop(req *http.Request, attempt int, resp *http.Response, err error, decision retryDecision, exhausted bool, rateLimitElapsed time.Duration) (*http.Response, error) {
+// stop ends the loop with the last attempt's outcome, for every failure but a
+// 429 that carried a Retry-After.
+func (t *RetryTransport) stop(req *http.Request, attempt int, resp *http.Response, err error, decision retryDecision, exhausted bool) (*http.Response, error) {
 	message, reason := t.stopped(decision, exhausted)
 	fields := attemptFields(req, attempt, resp, err)
 	fields["reason"] = reason
-
-	if decision.rateLimited {
-		waited := rateLimitElapsed.Round(time.Second).String()
-		fields["rate_limit_waited"] = waited
-		tflog.Warn(req.Context(), "giving up on rate-limited request", fields)
-		resp.Header.Set(RateLimitWaitedHeader, waited)
-		resp.Header.Set(RateLimitStopReasonHeader, reason)
-		return resp, nil
-	}
-
 	tflog.Debug(req.Context(), message, fields)
 	if err != nil {
 		if exhausted {
@@ -249,6 +247,19 @@ func (t *RetryTransport) stop(req *http.Request, attempt int, resp *http.Respons
 	return resp, nil
 }
 
+// stopRateLimited returns a 429 the transport will not wait on again, with the
+// time slept and the reason written onto it for RateLimitStop.
+func (t *RetryTransport) stopRateLimited(req *http.Request, attempt int, resp *http.Response, reason string, slept time.Duration) (*http.Response, error) {
+	waited := slept.Round(time.Second).String()
+	fields := attemptFields(req, attempt, resp, nil)
+	fields["reason"] = reason
+	fields["rate_limit_waited"] = waited
+	tflog.Warn(req.Context(), "giving up on rate-limited request", fields)
+	resp.Header.Set(RateLimitWaitedHeader, waited)
+	resp.Header.Set(RateLimitStopReasonHeader, reason)
+	return resp, nil
+}
+
 func (t *RetryTransport) logRetry(req *http.Request, attempt int, resp *http.Response, err error, decision retryDecision, backoff time.Duration) {
 	if t.Config.OnRetry != nil {
 		t.Config.OnRetry(attempt, resp, err)
@@ -258,60 +269,32 @@ func (t *RetryTransport) logRetry(req *http.Request, attempt int, resp *http.Res
 	if decision.rateLimited {
 		// A wait of up to a minute, repeated across parallel requests, looks
 		// like a hung plan unless it is visible without TF_LOG=DEBUG.
-		fields["retry_after"] = resp.Header.Get("Retry-After")
+		fields["retry_after"] = decision.retryAfter.String()
 		tflog.Warn(req.Context(), "PostHog rate limit reached for this API key; waiting before retrying", fields)
 		return
 	}
 	tflog.Debug(req.Context(), "retrying request", fields)
 }
 
-// rateLimitBackoff is how long to wait before sending a rate-limited request
-// again. When it should not be sent again, the returned decision says so and
-// why. waited is the time since this request was first rate-limited.
-func (t *RetryTransport) rateLimitBackoff(decision retryDecision, rateLimited int, resp *http.Response, waited time.Duration) (time.Duration, retryDecision) {
-	stop := func(reason string) (time.Duration, retryDecision) {
-		decision.retry = false
-		decision.reason = reason
-		return 0, decision
-	}
-	// NoRetryConfig has to mean no retries at all, so MaxRetries = 0 turns off
-	// waiting on 429s as well, although they are otherwise not counted by it.
+// rateLimitBackoff is how long to wait before sending a request again after a
+// 429 that asked for retryAfter, given the time since the request was first
+// rate-limited. A non-empty stopReason means not to send it again.
+func (t *RetryTransport) rateLimitBackoff(retryAfter, rateLimitedFor time.Duration) (backoff time.Duration, stopReason string) {
+	// NoRetryConfig has to mean no retries at all.
 	if t.Config.MaxRetries == 0 {
-		return stop("retries are disabled")
-	}
-	backoff, ok := t.rateLimitWait(rateLimited, resp)
-	if !ok {
-		return stop(fmt.Sprintf("PostHog asked to wait longer than %s, which means the hourly limit", t.Config.RateLimitMaxWait))
-	}
-	if waited+backoff > t.Config.RateLimitTotalWait {
-		return stop(fmt.Sprintf("waiting again would pass the %s rate-limit budget", t.Config.RateLimitTotalWait))
-	}
-	return backoff, decision
-}
-
-// maxRateLimitJitter caps the jitter added to a Retry-After wait.
-const maxRateLimitJitter = 2 * time.Second
-
-// rateLimitWait is the wait PostHog asked for in Retry-After, or the computed
-// backoff when it gave none. ok is false when the ask is longer than
-// RateLimitMaxWait, which is not waited at all: a shorter wait would only be
-// rejected again.
-//
-// Every wait is positive, or the total budget would never fill and the loop
-// would never end.
-func (t *RetryTransport) rateLimitWait(rateLimited int, resp *http.Response) (time.Duration, bool) {
-	retryAfter, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
-	if !ok {
-		// calculateBackoff goes to zero or below with a JitterFactor of 1 or more.
-		return max(t.calculateBackoff(rateLimited), t.Config.InitialBackoff), true
+		return 0, "retries are disabled"
 	}
 	if retryAfter > t.Config.RateLimitMaxWait {
-		return 0, false
+		return 0, fmt.Sprintf("PostHog's Retry-After of %s is longer than the %s the provider waits for one 429", retryAfter, t.Config.RateLimitMaxWait)
 	}
 	// Parallel requests rejected together get the same Retry-After, and the
 	// window frees one slot at a time. Spread them out, never sooner than asked.
 	jitter := min(time.Duration(float64(retryAfter)*t.Config.JitterFactor), maxRateLimitJitter)
-	return retryAfter + time.Duration(rand.Float64()*float64(jitter)), true
+	backoff = retryAfter + time.Duration(rand.Float64()*float64(jitter))
+	if rateLimitedFor+backoff > t.Config.RateLimitTotalWait {
+		return 0, fmt.Sprintf("waiting again would pass the %s rate-limit budget", t.Config.RateLimitTotalWait)
+	}
+	return backoff, ""
 }
 
 // attempt sends the request once under its own deadline, response body
@@ -385,9 +368,11 @@ type retryDecision struct {
 	// a replay could apply it twice. The write may still have landed, and the
 	// caller has to know that before running again.
 	mayHaveApplied bool
-	// rateLimited marks a 429. Its retries wait as long as PostHog asks and
-	// are bounded by the rate-limit budget instead of MaxRetries.
+	// rateLimited marks a 429 with a usable Retry-After, kept in retryAfter.
+	// Its retries wait as long as PostHog asks and are bounded by the
+	// rate-limit budget instead of MaxRetries.
 	rateLimited bool
+	retryAfter  time.Duration
 	// reason is written to the debug log, so an operator can tell "ran out of
 	// attempts" apart from "never tried again, because replaying this method
 	// could have created the resource twice".
@@ -415,7 +400,12 @@ func (t *RetryTransport) decide(req *http.Request, resp *http.Response, err erro
 	// proxy in front of an app that already committed the write, and nothing in
 	// the response or the error says which happened.
 	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
-		return retryDecision{retry: true, rateLimited: true, reason: "rate limited"}
+		if retryAfter, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After")); ok {
+			return retryDecision{retry: true, rateLimited: true, retryAfter: retryAfter, reason: "rate limited"}
+		}
+		// Without a Retry-After, possibly from a proxy in front of PostHog,
+		// there is no ask to honour, so it gets the ordinary bounded retries.
+		return retryDecision{retry: true, reason: "rate limited without Retry-After"}
 	}
 	if !safeToReplay(req, err) {
 		return retryDecision{
