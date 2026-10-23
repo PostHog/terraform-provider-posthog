@@ -249,14 +249,13 @@ func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) (
 			break
 		}
 
-		// Parse the next URL - handles both absolute and relative URLs
+		// Parse the next URL - handles both absolute and relative URLs. A link
+		// that cannot be followed is an error rather than the end of the list:
+		// callers such as the feature flag data source treat the result as
+		// complete, and a missing entry would look like one that does not exist.
 		parsed, err := url.Parse(*page.Next)
 		if err != nil {
-			tflog.Warn(ctx, "failed to parse pagination URL", map[string]any{
-				"next_url": *page.Next,
-				"error":    err.Error(),
-			})
-			break
+			return nil, fmt.Errorf("invalid pagination URL %q: %w", *page.Next, err)
 		}
 		path = parsed.Path
 		if parsed.RawQuery != "" {

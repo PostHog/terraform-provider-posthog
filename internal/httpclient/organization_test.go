@@ -194,3 +194,20 @@ func TestResolveOrganizationID_EmptyPassthrough(t *testing.T) {
 	require.NoError(t, err, "empty organization id should pass through without error")
 	assert.Equal(t, "", resolved, "empty organization id should be returned unchanged")
 }
+
+func TestListProjects_ListsTheResolvedOrganizationsProjects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/organizations/"+testOrgUUID+"/projects/", r.URL.Path)
+		name := "production"
+		writeJSONResponse(t, w, PaginatedResponse[Project]{Results: []Project{{ID: 42, Name: &name}}})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client(), server.URL, testAPIKey, testClientVersion)
+	projects, err := client.ListProjects(context.Background(), testOrgUUID)
+
+	require.NoError(t, err)
+	require.Len(t, projects, 1)
+	assert.Equal(t, int64(42), projects[0].ID)
+	assert.Equal(t, "production", *projects[0].Name)
+}
