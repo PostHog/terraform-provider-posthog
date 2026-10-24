@@ -41,21 +41,15 @@ func TestFeatureFlag_NameRoundTrip(t *testing.T) {
 func TestFeatureFlag_EvaluationRuntime(t *testing.T) {
 	skipIfNotAcceptance(t)
 	key := acctest.RandomWithPrefix("tf-acc-runtime")
-	config := func(runtime string) string {
-		return fmt.Sprintf(`provider "posthog" {}
-resource "posthog_feature_flag" "test" {
- key = %q
- evaluation_runtime = %q
-}`, key, runtime)
-	}
+
 	var steps []resource.TestStep
 	for _, runtime := range []string{"server", "client", "all"} {
 		steps = append(steps,
-			resource.TestStep{Config: config(runtime), Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestStep{Config: testAccFeatureFlagRuntime(key, runtime), Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("posthog_feature_flag.test", "evaluation_runtime", runtime),
 				checkFeatureFlagAPIField("evaluation_runtime", runtime),
 			)},
-			resource.TestStep{Config: config(runtime), PlanOnly: true},
+			resource.TestStep{Config: testAccFeatureFlagRuntime(key, runtime), PlanOnly: true},
 			resource.TestStep{ResourceName: "posthog_feature_flag.test", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"filters", "rollout_percentage"}},
 		)
 	}
@@ -94,11 +88,7 @@ func TestFeatureFlag_EvaluationRuntimeDefaultAndOmitted(t *testing.T) {
 func TestFeatureFlag_EvaluationRuntimeDrift(t *testing.T) {
 	skipIfNotAcceptance(t)
 	key := acctest.RandomWithPrefix("tf-acc-runtime-drift")
-	config := fmt.Sprintf(`provider "posthog" {}
-resource "posthog_feature_flag" "test" {
- key = %q
- evaluation_runtime = "server"
-}`, key)
+	config := testAccFeatureFlagRuntime(key, "server")
 	var flagID string
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -171,7 +161,7 @@ func TestFeatureFlag_EvaluationRuntimeSavedPlan(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			{Config: testAccFeatureFlagBasic(key), Check: func(s *terraform.State) error {
+			{Config: testAccFeatureFlagRuntime(key, "all"), Check: func(s *terraform.State) error {
 				flagID = s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID
 				return nil
 			}},
@@ -183,6 +173,8 @@ func TestFeatureFlag_EvaluationRuntimeSavedPlan(t *testing.T) {
 					checkFeatureFlagAPIField("evaluation_runtime", "server"),
 				),
 			},
+			{Config: testAccFeatureFlagWithName(key, "unrelated update", true), PlanOnly: true},
+			{Config: testAccFeatureFlagRuntime(key, "client"), Check: checkFeatureFlagAPIField("evaluation_runtime", "client")},
 		},
 	})
 }
@@ -196,4 +188,88 @@ func (c changeFlagRuntimeAfterPlan) CheckPlan(ctx context.Context, _ plancheck.C
 	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
 	runtime := "server"
 	_, _, resp.Error = client.UpdateFeatureFlag(ctx, os.Getenv("POSTHOG_PROJECT_ID"), *c.flagID, httpclient.FeatureFlagRequest{Key: c.key, EvaluationRuntime: &runtime})
+}
+
+func testAccFeatureFlagRuntime(key, runtime string) string {
+	return fmt.Sprintf(`provider "posthog" {}
+resource "posthog_feature_flag" "test" {
+ key = %q
+ evaluation_runtime = %q
+}`, key, runtime)
+}
+
+func TestFeatureFlag_NameDrift(t *testing.T) {
+	skipIfNotAcceptance(t)
+	key := acctest.RandomWithPrefix("tf-acc-name-drift")
+	config := testAccFeatureFlagWithName(key, "  configured description  ", true)
+	var flagID string
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{Config: config, Check: func(s *terraform.State) error {
+				flagID = s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID
+				return nil
+			}},
+			{Config: config, PreConfig: func() {
+				client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+				name := "remote edit"
+				_, _, err := client.UpdateFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), flagID, httpclient.FeatureFlagRequest{Key: key, Name: &name})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}, PlanOnly: true, ExpectNonEmptyPlan: true},
+			{Config: config, Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "  configured description  "),
+				checkFeatureFlagAPIField("name", "configured description"),
+			)},
+			{Config: config, PlanOnly: true},
+		},
+	})
+}
+
+// Start with actual released-provider state: name is null and runtime is absent.
+func TestFeatureFlag_UpgradeFromV1_0_26(t *testing.T) {
+	skipIfNotAcceptance(t)
+	// Reattach the development provider at the same address as the released one.
+	t.Setenv(resource.EnvTfAccProviderNamespace, "posthog")
+	key := acctest.RandomWithPrefix("tf-acc-runtime-upgrade")
+	source := `terraform {
+ required_providers {
+  posthog = { source = "posthog/posthog" }
+ }
+}
+`
+	releasedSource := strings.Replace(source, `source = "posthog/posthog"`, `source = "posthog/posthog", version = "1.0.26"`, 1)
+	var flagID string
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() { testAccPreCheck(t) },
+		Steps: []resource.TestStep{
+			{Config: releasedSource + testAccFeatureFlagBasic(key),
+				ExternalProviders: map[string]resource.ExternalProvider{"posthog": {Source: "posthog/posthog", VersionConstraint: "1.0.26"}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "name"),
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "evaluation_runtime"),
+					func(s *terraform.State) error {
+						flagID = s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID
+						return nil
+					},
+				),
+			},
+			{Config: source + testAccFeatureFlagBasic(key), ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, PlanOnly: true},
+			{Config: source + testAccFeatureFlagRuntime(key, "server"), ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", ""),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "evaluation_runtime", "server"),
+					checkFeatureFlagAPIField("evaluation_runtime", "server"),
+					func(s *terraform.State) error {
+						if got := s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID; got != flagID {
+							return fmt.Errorf("upgrade replaced flag: %s -> %s", flagID, got)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: source + testAccFeatureFlagRuntime(key, "server"), ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, PlanOnly: true},
+		},
+	})
 }
