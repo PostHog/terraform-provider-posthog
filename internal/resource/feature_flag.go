@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -30,6 +35,7 @@ type FeatureFlagTFModel struct {
 	core.BaseProjectID
 	Key                        types.String         `tfsdk:"key"`
 	Name                       types.String         `tfsdk:"name"`
+	EvaluationRuntime          types.String         `tfsdk:"evaluation_runtime"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
 	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
@@ -65,10 +71,17 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"name": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.",
+				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags. Empty strings are preserved. PostHog trims surrounding whitespace; Terraform retains the configured spelling when only that whitespace differs.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"evaluation_runtime": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Where the flag is evaluated: `server`, `client`, or `all`. PostHog defaults new flags to `all`. When omitted, the existing runtime is preserved, including on import; updates leave it unknown until the API response so a saved plan cannot overwrite a newer remote value. This controls remote evaluation; it does not restrict server-side local evaluation.",
+				Validators:          []validator.String{stringvalidator.OneOf("server", "client", "all")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"active": schema.BoolAttribute{
 				Optional:            true,
@@ -133,10 +146,23 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// Existing flags may carry the deprecated setting in state, but a new flag with
-// the opt-in cannot produce the saved dashboard it promises.
+// Omitted runtime values are read-only during updates. The deprecated usage
+// dashboard option is rejected only for new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() || !req.State.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	if !req.State.Raw.IsNull() {
+		var configuredRuntime types.String
+		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("evaluation_runtime"), &configuredRuntime)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		// Keep no-op plans stable, but do not freeze an omitted runtime into a
+		// saved update plan: another caller may change it before apply.
+		if configuredRuntime.IsNull() && !req.Plan.Raw.Equal(req.State.Raw) {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("evaluation_runtime"), types.StringUnknown())...)
+		}
 		return
 	}
 
@@ -172,6 +198,10 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	if !model.Name.IsNull() {
 		name := model.Name.ValueString()
 		req.Name = &name
+	}
+
+	if !model.EvaluationRuntime.IsNull() && !model.EvaluationRuntime.IsUnknown() {
+		req.EvaluationRuntime = model.EvaluationRuntime.ValueStringPointer()
 	}
 
 	if !model.Active.IsNull() {
@@ -252,6 +282,10 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Name = &name
 	}
 
+	if !plan.EvaluationRuntime.IsNull() && !plan.EvaluationRuntime.IsUnknown() {
+		req.EvaluationRuntime = plan.EvaluationRuntime.ValueStringPointer()
+	}
+
 	if !plan.Active.IsNull() {
 		active := plan.Active.ValueBool()
 		req.Active = &active
@@ -314,12 +348,22 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	return req, diags
 }
 
+// DRF uses Python str.strip(), which also removes the four ASCII separators.
+func trimFeatureFlagName(name string) string {
+	return strings.TrimFunc(name, func(r rune) bool { return unicode.IsSpace(r) || (r >= '\u001c' && r <= '\u001f') })
+}
+
 func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.FeatureFlag, model *FeatureFlagTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	model.ID = types.Int64Value(resp.ID)
 	model.Key = types.StringValue(resp.Key)
-	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	// The API trims names on write. Keep the planned/prior spelling only when
+	// that normalization explains the difference; real remote edits remain drift.
+	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || trimFeatureFlagName(model.Name.ValueString()) != *resp.Name {
+		model.Name = types.StringPointerValue(resp.Name)
+	}
+	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)
 	model.Active = core.PtrToBool(resp.Active)
 	model.EnsureExperienceContinuity = core.PtrToBool(resp.EnsureExperienceContinuity)
 

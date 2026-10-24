@@ -4,6 +4,8 @@
 
 ### Features
 
+- **`posthog_feature_flag`:** New `evaluation_runtime` attribute accepts `server`, `client`, or `all`, so each flag can declare its runtime in Terraform. Omitted values preserve the existing runtime; new flags use PostHog's `all` default.
+
 - **New Data Source:** `posthog_feature_flags` - Lists a project's feature flags (`id`, `key`, `name`, `active`, `archived`), so a `for_each` `import {}` block can adopt flags that already exist and create the rest without anyone writing a flag ID. The project can be given by `project_name` instead of `project_id`, for a project created in the same configuration whose ID is not known until apply; a name that matches no project returns no flags rather than an error, and a name shared by two projects is an error. Archived flags are included, because an archived flag still holds its key and a new flag with that key cannot be created; deleted flags are not, nor are the flags PostHog creates internally for surveys and product tours. Listing takes one request per 100 flags, in two passes: unarchived flags, then archived ones.
 - **`posthog_project_settings`:** New `anonymize_ips` attribute - manages the "Discard client IP data" project setting (`/api/environments/{id}/`), previously only editable from the UI. ([#146](https://github.com/PostHog/terraform-provider-posthog/issues/146))
 - **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing and notification destinations are managed as code). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
@@ -14,6 +16,8 @@
 - **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
 
 ### Fixes
+
+- **`posthog_feature_flag`:** Empty and whitespace-padded names no longer fail apply with "Provider produced inconsistent result after apply". Empty API names stay empty strings, and configured names are preserved when the API only trims surrounding whitespace. Substantive remote name changes still appear as drift.
 
 - **`posthog_project_settings`:** Updates send only configured settings, so applying a saved plan preserves changes made to omitted settings in PostHog. Omitted settings become unknown and show as `(known after apply)` when the plan changes, so references to them can also be unknown until apply. Their current PostHog values refresh into state after the update.
 - **Paginated lists:** a page whose link to the next page cannot be parsed now fails the read instead of silently ending the list there. This affects `posthog_role` and organization lookups as well; a truncated list there looked like a role or organization that does not exist.
