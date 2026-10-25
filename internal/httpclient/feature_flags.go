@@ -10,6 +10,9 @@ type FeatureFlag struct {
 	Key                        string                 `json:"key"`
 	Name                       *string                `json:"name,omitempty"`
 	EvaluationRuntime          *string                `json:"evaluation_runtime,omitempty"`
+	BucketingIdentifier        *string                `json:"bucketing_identifier,omitempty"`
+	EvaluationContexts         []string               `json:"evaluation_contexts,omitempty"`
+	IsRemoteConfiguration      *bool                  `json:"is_remote_configuration,omitempty"`
 	Active                     *bool                  `json:"active,omitempty"`
 	Filters                    map[string]interface{} `json:"filters,omitempty"`
 	RolloutPercentage          *int32                 `json:"rollout_percentage,omitempty"`
@@ -23,6 +26,10 @@ type FeatureFlagRequest struct {
 	Key                        string                 `json:"key"`
 	Name                       *string                `json:"name,omitempty"`
 	EvaluationRuntime          *string                `json:"evaluation_runtime,omitempty"`
+	BucketingIdentifier        *string                `json:"bucketing_identifier,omitempty"`
+	EvaluationContexts         *[]string              `json:"evaluation_contexts,omitempty"`
+	IsRemoteConfiguration      *bool                  `json:"is_remote_configuration,omitempty"`
+	Archived                   *bool                  `json:"archived,omitempty"`
 	Active                     *bool                  `json:"active,omitempty"`
 	Filters                    map[string]interface{} `json:"filters,omitempty"`
 	Tags                       []string               `json:"tags,omitempty"`

@@ -14,10 +14,34 @@ PostHog Feature Flag resource
 
 ```terraform
 resource "posthog_feature_flag" "backend_rollout" {
-  key                = "backend-rollout"
-  name               = ""
-  evaluation_runtime = "server"
-  rollout_percentage = 50
+  key                 = "backend-rollout"
+  name                = ""
+  evaluation_runtime  = "server"
+  evaluation_contexts = ["api"]
+  rollout_percentage  = 50
+}
+
+resource "posthog_feature_flag" "signup_flow" {
+  key                          = "signup-flow"
+  bucketing_identifier         = "device_id"
+  ensure_experience_continuity = false
+  rollout_percentage           = 25
+}
+
+resource "posthog_feature_flag" "retired" {
+  key      = "retired-checkout"
+  active   = false
+  archived = true
+}
+
+resource "posthog_feature_flag" "app_configuration" {
+  key                     = "app-configuration"
+  is_remote_configuration = true
+  active                  = true
+  filters = jsonencode({
+    groups   = [{ rollout_percentage = 100 }]
+    payloads = { "true" = jsonencode({ theme = "blue" }) }
+  })
 }
 ```
 
@@ -31,12 +55,16 @@ resource "posthog_feature_flag" "backend_rollout" {
 ### Optional
 
 - `active` (Boolean) Whether the feature flag is active
+- `archived` (Boolean) Whether the flag is archived and hidden from the default flag list. Archived flags must have `active = false`. Unarchiving does not enable the flag. When omitted, updates preserve the remote setting.
+- `bucketing_identifier` (String) Identifier used to assign rollout buckets and variants: `distinct_id` (the API default) or `device_id`. Device bucketing cannot be combined with `ensure_experience_continuity = true`. When omitted, updates preserve the remote setting.
 - `create_usage_dashboard` (Boolean, Deprecated) Deprecated create-time option. PostHog no longer creates a saved usage dashboard when a flag is created, so `true` is rejected for new flags instead of silently doing nothing. Omit this attribute for new configurations. Existing flags with this setting remain readable, and usage charts are available on the flag's Usage tab.
 - `deleted` (Boolean) Whether the feature flag is soft-deleted. Terraform will restore soft-deleted flags on apply.
 - `ensure_experience_continuity` (Boolean) Whether to persist the flag across authentication steps (PostHog's UI labels this as 'Persist flag across authentication steps'). Flags with experience continuity enabled cannot be evaluated by server-side local evaluation; set this to false for flags that must be evaluated locally.
+- `evaluation_contexts` (Set of String) Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. Requires evaluation contexts support on the PostHog server.
 - `evaluation_runtime` (String) Where the flag is evaluated: `server`, `client`, or `all`. PostHog defaults new flags to `all`. When omitted, the existing runtime is preserved, including on import; updates leave it unknown until the API response so a saved plan cannot overwrite a newer remote value. This controls remote evaluation; it does not restrict server-side local evaluation.
 - `filters` (String) Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields` and an undeclared `feature_enrollment` marker owned by Early Access Features.
 - `ignore_filter_fields` (Set of String) Top-level keys inside `filters` that Terraform does not track for drift (state mirrors config for them, so changes made outside Terraform don't show as a diff). When unset, defaults to the keys other PostHog products wire into a flag — `["feature_enrollment", "super_groups", "holdout_groups", "holdout"]` (Early Access Features and Experiments). Set to `[]` to track other filter keys, including Experiment wiring, or provide your own set to replace the default. `feature_enrollment` is always ignored when absent from `filters`: PostHog owns this marker while an Early Access Feature is linked and preserves it on flag updates, so Terraform cannot clear it by omission. A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).
+- `is_remote_configuration` (Boolean) Whether the flag delivers remote configuration. Payloads are configured through `filters.payloads`. On creation, PostHog defaults missing or zero rollout percentages to 100; when supplying filters, provide explicit nonzero group rollout percentages. A top-level `rollout_percentage` must match the first group when both are configured. When omitted, updates preserve the remote setting.
 - `name` (String) Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags. Empty strings are preserved. PostHog trims surrounding whitespace; Terraform retains the configured spelling when only that whitespace differs.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `rollout_percentage` (Number) Rollout percentage (0-100)

@@ -8,7 +8,9 @@ import (
 	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -36,6 +38,10 @@ type FeatureFlagTFModel struct {
 	Key                        types.String         `tfsdk:"key"`
 	Name                       types.String         `tfsdk:"name"`
 	EvaluationRuntime          types.String         `tfsdk:"evaluation_runtime"`
+	BucketingIdentifier        types.String         `tfsdk:"bucketing_identifier"`
+	Archived                   types.Bool           `tfsdk:"archived"`
+	EvaluationContexts         types.Set            `tfsdk:"evaluation_contexts"`
+	IsRemoteConfiguration      types.Bool           `tfsdk:"is_remote_configuration"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
 	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
@@ -82,6 +88,32 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				MarkdownDescription: "Where the flag is evaluated: `server`, `client`, or `all`. PostHog defaults new flags to `all`. When omitted, the existing runtime is preserved, including on import; updates leave it unknown until the API response so a saved plan cannot overwrite a newer remote value. This controls remote evaluation; it does not restrict server-side local evaluation.",
 				Validators:          []validator.String{stringvalidator.OneOf("server", "client", "all")},
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"bucketing_identifier": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Identifier used to assign rollout buckets and variants: `distinct_id` (the API default) or `device_id`. Device bucketing cannot be combined with `ensure_experience_continuity = true`. When omitted, updates preserve the remote setting.",
+				Validators:          []validator.String{stringvalidator.OneOf("distinct_id", "device_id")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"archived": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag is archived and hidden from the default flag list. Archived flags must have `active = false`. Unarchiving does not enable the flag. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+			},
+			"evaluation_contexts": schema.SetAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. Requires evaluation contexts support on the PostHog server.",
+				Validators:          []validator.Set{setvalidator.SizeAtMost(50), setvalidator.ValueStringsAre(stringvalidator.UTF8LengthBetween(1, 255), canonicalFeatureFlagContextValidator{})},
+			},
+			"is_remote_configuration": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag delivers remote configuration. Payloads are configured through `filters.payloads`. On creation, PostHog defaults missing or zero rollout percentages to 100; when supplying filters, provide explicit nonzero group rollout percentages. A top-level `rollout_percentage` must match the first group when both are configured. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
 			},
 			"active": schema.BoolAttribute{
 				Optional:            true,
@@ -146,31 +178,56 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// Omitted runtime values are read-only during updates. The deprecated usage
+// Omitted settings are read-only during updates. The deprecated usage
 // dashboard option is rejected only for new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
 	}
-	if !req.State.Raw.IsNull() {
-		var configuredRuntime types.String
-		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("evaluation_runtime"), &configuredRuntime)...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
-		// Keep no-op plans stable, but do not freeze an omitted runtime into a
-		// saved update plan: another caller may change it before apply.
-		if configuredRuntime.IsNull() && !req.Plan.Raw.Equal(req.State.Raw) {
-			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("evaluation_runtime"), types.StringUnknown())...)
-		}
-		return
-	}
-
 	var plan FeatureFlagTFModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if plan.Archived.ValueBool() && plan.Active.ValueBool() {
+		resp.Diagnostics.AddAttributeError(path.Root("archived"), "Cannot archive an active flag", "Set active = false when archived = true.")
+	}
+	if plan.BucketingIdentifier.ValueString() == "device_id" && plan.EnsureExperienceContinuity.ValueBool() {
+		var state FeatureFlagTFModel
+		if !req.State.Raw.IsNull() {
+			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		}
+		if state.BucketingIdentifier.ValueString() != "device_id" || !state.EnsureExperienceContinuity.ValueBool() {
+			resp.Diagnostics.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
+		}
+	}
+	if !req.State.Raw.IsNull() {
+		// Keep no-op plans stable, but do not freeze omitted settings into a
+		// saved update plan: another caller may change them before apply.
+		if !req.Plan.Raw.Equal(req.State.Raw) {
+			var config FeatureFlagTFModel
+			resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			for _, setting := range []struct {
+				name                string
+				configured, unknown attr.Value
+			}{
+				{"evaluation_runtime", config.EvaluationRuntime, types.StringUnknown()},
+				{"bucketing_identifier", config.BucketingIdentifier, types.StringUnknown()},
+				{"archived", config.Archived, types.BoolUnknown()},
+				{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
+				{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+			} {
+				if setting.configured.IsNull() {
+					resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
+				}
+			}
+		}
+		return
+	}
+	resp.Diagnostics.Append(validateRemoteConfigurationCreate(plan)...)
 	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
 		return
 	}
@@ -194,6 +251,10 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		)
 		return req, diags
 	}
+	diags.Append(validateRemoteConfigurationCreate(model)...)
+	if diags.HasError() {
+		return req, diags
+	}
 
 	if !model.Name.IsNull() {
 		name := model.Name.ValueString()
@@ -202,6 +263,20 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 
 	if !model.EvaluationRuntime.IsNull() && !model.EvaluationRuntime.IsUnknown() {
 		req.EvaluationRuntime = model.EvaluationRuntime.ValueStringPointer()
+	}
+	if !model.BucketingIdentifier.IsNull() && !model.BucketingIdentifier.IsUnknown() {
+		req.BucketingIdentifier = model.BucketingIdentifier.ValueStringPointer()
+	}
+	if !model.Archived.IsNull() && !model.Archived.IsUnknown() {
+		req.Archived = model.Archived.ValueBoolPointer()
+	}
+	if !model.IsRemoteConfiguration.IsNull() && !model.IsRemoteConfiguration.IsUnknown() {
+		req.IsRemoteConfiguration = model.IsRemoteConfiguration.ValueBoolPointer()
+	}
+	if !model.EvaluationContexts.IsNull() && !model.EvaluationContexts.IsUnknown() {
+		contexts := []string{}
+		diags.Append(model.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
+		req.EvaluationContexts = &contexts
 	}
 
 	if !model.Active.IsNull() {
@@ -285,6 +360,20 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	if !plan.EvaluationRuntime.IsNull() && !plan.EvaluationRuntime.IsUnknown() {
 		req.EvaluationRuntime = plan.EvaluationRuntime.ValueStringPointer()
 	}
+	if !plan.BucketingIdentifier.IsNull() && !plan.BucketingIdentifier.IsUnknown() {
+		req.BucketingIdentifier = plan.BucketingIdentifier.ValueStringPointer()
+	}
+	if !plan.Archived.IsNull() && !plan.Archived.IsUnknown() {
+		req.Archived = plan.Archived.ValueBoolPointer()
+	}
+	if !plan.IsRemoteConfiguration.IsNull() && !plan.IsRemoteConfiguration.IsUnknown() {
+		req.IsRemoteConfiguration = plan.IsRemoteConfiguration.ValueBoolPointer()
+	}
+	if !plan.EvaluationContexts.IsNull() && !plan.EvaluationContexts.IsUnknown() {
+		contexts := []string{}
+		diags.Append(plan.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
+		req.EvaluationContexts = &contexts
+	}
 
 	if !plan.Active.IsNull() {
 		active := plan.Active.ValueBool()
@@ -364,6 +453,12 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 		model.Name = types.StringPointerValue(resp.Name)
 	}
 	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)
+	model.BucketingIdentifier = types.StringPointerValue(resp.BucketingIdentifier)
+	model.Archived = types.BoolPointerValue(resp.Archived)
+	model.IsRemoteConfiguration = types.BoolPointerValue(resp.IsRemoteConfiguration)
+	contexts, d := types.SetValueFrom(ctx, types.StringType, resp.EvaluationContexts)
+	diags.Append(d...)
+	model.EvaluationContexts = contexts
 	model.Active = core.PtrToBool(resp.Active)
 	model.EnsureExperienceContinuity = core.PtrToBool(resp.EnsureExperienceContinuity)
 

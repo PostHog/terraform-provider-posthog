@@ -249,6 +249,10 @@ func TestFeatureFlag_UpgradeFromV1_0_26(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "name"),
 					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "evaluation_runtime"),
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "archived"),
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "bucketing_identifier"),
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "evaluation_contexts"),
+					resource.TestCheckNoResourceAttr("posthog_feature_flag.test", "is_remote_configuration"),
 					func(s *terraform.State) error {
 						flagID = s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID
 						return nil
@@ -260,6 +264,10 @@ func TestFeatureFlag_UpgradeFromV1_0_26(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", ""),
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "evaluation_runtime", "server"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "archived", "false"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "bucketing_identifier", "distinct_id"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "evaluation_contexts.#", "0"),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "is_remote_configuration", "false"),
 					checkFeatureFlagAPIField("evaluation_runtime", "server"),
 					func(s *terraform.State) error {
 						if got := s.RootModule().Resources["posthog_feature_flag.test"].Primary.ID; got != flagID {
