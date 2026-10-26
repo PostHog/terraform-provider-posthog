@@ -588,6 +588,13 @@ func TestPlannedFiltersForRollout(t *testing.T) {
 			planRollout:  types.Int64Value(25),
 			stateFilters: stateFilters,
 		},
+		{
+			name:         "filters without release conditions get one with the new percentage",
+			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planRollout:  types.Int64Value(25),
+			stateFilters: jsontypes.NewNormalizedValue(`{"payloads":{"true":"{}"}}`),
+			want:         `{"groups":[{"rollout_percentage":25}],"payloads":{"true":"{}"}}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -605,6 +612,15 @@ func TestPlannedFiltersForRollout(t *testing.T) {
 			assert.JSONEq(t, tc.want, planned.ValueString())
 		})
 	}
+}
+
+func TestPlannedFiltersForRollout_InvalidStateFilters(t *testing.T) {
+	plan := FeatureFlagTFModel{Filters: jsontypes.NewNormalizedUnknown(), RolloutPercentage: types.Int64Value(25)}
+	state := FeatureFlagTFModel{Filters: jsontypes.NewNormalizedValue(`not json`), RolloutPercentage: types.Int64Value(100)}
+
+	_, ok, err := plannedFiltersForRollout(plan, state)
+	assert.Error(t, err)
+	assert.False(t, ok)
 }
 
 func TestFeatureFlagMapResponseToModel_EnsureExperienceContinuity(t *testing.T) {
