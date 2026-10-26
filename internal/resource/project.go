@@ -79,7 +79,7 @@ func (o ProjectOps) BuildCreateRequest(ctx context.Context, model ProjectTFModel
 		Name: &name,
 	}
 
-	if !model.Timezone.IsNull() && !model.Timezone.IsUnknown() {
+	if core.IsKnown(model.Timezone) {
 		tz := model.Timezone.ValueString()
 		req.Timezone = &tz
 	}

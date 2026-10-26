@@ -132,6 +132,9 @@ func (c *PosthogClient) doRequest(ctx context.Context, method, path string, body
 
 	tflog.Debug(ctx, "received response", map[string]any{"status": resp.StatusCode})
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return respBody, HTTPStatusCode(resp.StatusCode), rateLimitError(resp, respBody)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return respBody, HTTPStatusCode(resp.StatusCode), fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -211,6 +214,24 @@ func doDelete(c *PosthogClient, ctx context.Context, path string) (HTTPStatusCod
 	return status, nil
 }
 
+// rateLimitError explains a 429 the retry transport stopped waiting on. PostHog's
+// body only says when the key frees up, which on its own reads as though the
+// provider never waited.
+func rateLimitError(resp *http.Response, body []byte) error {
+	waited, reason, ok := middleware.RateLimitStop(resp)
+	if !ok {
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+	after := ""
+	if waited > 0 {
+		after = " after waiting " + waited.String()
+	}
+	return fmt.Errorf("API error (status %d): rate limited by PostHog%s; stopped because %s. "+
+		"PostHog limits each personal API key per minute and per hour: lower Terraform's -parallelism, "+
+		"use a separate API key per configuration, or run again later. PostHog said: %s",
+		resp.StatusCode, after, reason, string(body))
+}
+
 // listAll fetches all pages from a paginated endpoint, following Next links until exhausted.
 func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) ([]T, error) {
 	var all []T
@@ -228,14 +249,13 @@ func listAll[T any](c *PosthogClient, ctx context.Context, initialPath string) (
 			break
 		}
 
-		// Parse the next URL - handles both absolute and relative URLs
+		// Parse the next URL - handles both absolute and relative URLs. A link
+		// that cannot be followed is an error rather than the end of the list:
+		// callers such as the feature flag data source treat the result as
+		// complete, and a missing entry would look like one that does not exist.
 		parsed, err := url.Parse(*page.Next)
 		if err != nil {
-			tflog.Warn(ctx, "failed to parse pagination URL", map[string]any{
-				"next_url": *page.Next,
-				"error":    err.Error(),
-			})
-			break
+			return nil, fmt.Errorf("invalid pagination URL %q: %w", *page.Next, err)
 		}
 		path = parsed.Path
 		if parsed.RawQuery != "" {

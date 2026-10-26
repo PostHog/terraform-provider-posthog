@@ -180,7 +180,7 @@ func (o OrganizationMemberOps) BuildCreateRequest(_ context.Context, model Organ
 	var diags diag.Diagnostics
 
 	req := httpclient.OrganizationMemberRequest{}
-	if !model.Level.IsNull() && !model.Level.IsUnknown() {
+	if core.IsKnown(model.Level) {
 		req.Level = levelFromString(model.Level.ValueString())
 	}
 

@@ -413,7 +413,7 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	// Only reflected when the configuration declares it. Adopting a snooze set in the
 	// PostHog UI would make the next apply revert it, which is the operator's call to make,
 	// not Terraform's.
-	if !model.SnoozeUntil.IsNull() && !model.SnoozeUntil.IsUnknown() {
+	if core.IsKnown(model.SnoozeUntil) {
 		model.SnoozeUntil = core.PtrToStringNullIfEmptyTrimmed(resp.SnoozeUntil)
 	}
 
@@ -481,7 +481,7 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 // blockedWindowsFromSet builds the schedule restriction a request sends. A null set returns nil,
 // which marshals to null and clears quiet hours.
 func blockedWindowsFromSet(ctx context.Context, set types.Set) (*httpclient.LogsAlertSchedule, diag.Diagnostics) {
-	if set.IsNull() || set.IsUnknown() {
+	if !core.IsKnown(set) {
 		return nil, nil
 	}
 	var windows []BlockedWindowTFModel
@@ -504,7 +504,7 @@ func blockedWindowsFromSet(ctx context.Context, set types.Set) (*httpclient.Logs
 func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSchedule, current types.Set) (types.Set, diag.Diagnostics) {
 	objectType := types.ObjectType{AttrTypes: blockedWindowAttrTypes}
 	if schedule == nil || len(schedule.BlockedWindows) == 0 {
-		if !current.IsNull() && !current.IsUnknown() {
+		if core.IsKnown(current) {
 			return types.SetValueFrom(ctx, objectType, []BlockedWindowTFModel{})
 		}
 		return types.SetNull(objectType), nil

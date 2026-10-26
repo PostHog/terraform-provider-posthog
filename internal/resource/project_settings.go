@@ -12,10 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -88,7 +84,7 @@ func (o ProjectSettingsOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: `Manages environment-level settings for a PostHog project (environment).
 
-These settings live on the PostHog environment object (` + "`/api/environments/{id}/`" + `), which is distinct from the organization-scoped ` + "`posthog_project`" + ` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state.
+These settings live on the PostHog environment object (` + "`/api/environments/{id}/`" + `), which is distinct from the organization-scoped ` + "`posthog_project`" + ` resource. Each setting is optional - omitted attributes are left at whatever value PostHog currently has, and PostHog's server-side default is read back into state. Updates send only configured settings. When a plan changes settings, omitted attributes become unknown, show as ` + "`(known after apply)`" + `, and refresh from PostHog after the update. References to omitted attributes can also be unknown until apply.
 
 ~> **Singleton:** There is only one settings object per project. This resource is a singleton - creating multiple instances for the same project will cause conflicts.
 
@@ -110,33 +106,21 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"autocapture_exceptions_opt_in": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether exception autocapture is enabled.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"session_recording_opt_in": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether session recording (recording user sessions) is enabled.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"surveys_opt_in": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether surveys are enabled.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"cookieless_server_hash_mode": schema.Int64Attribute{
 				Optional:            true,
@@ -145,33 +129,21 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 				Validators: []validator.Int64{
 					int64validator.AtLeast(0),
 				},
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
 			},
 			"autocapture_web_vitals_opt_in": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether web vitals autocapture is enabled.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"capture_performance_opt_in": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether network performance capture is enabled for session replay. This must be `true` for `session_recording_network_payload_capture_config` to have any effect — without it, session replay does not capture network requests at all.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"anonymize_ips": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether to discard the client IP address at ingestion (shown in PostHog as **Discard client IP data**). Enabling this degrades IP-based event matching for destinations that rely on it (for example Meta Conversions API), since `$ip` is never stored.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"session_recording_network_payload_capture_config": schema.SingleNestedAttribute{
 				Optional: true,
@@ -189,27 +161,18 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 						MarkdownDescription: "Whether to record the bodies of network requests in session replay.",
 					},
 				},
-				PlanModifiers: []planmodifier.Object{
-					objectplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"app_urls": schema.ListAttribute{
 				Optional:            true,
 				Computed:            true,
 				ElementType:         types.StringType,
 				MarkdownDescription: "The project's authorized domains — shown in PostHog settings as **Web analytics domains** (and used as the toolbar's Authorized URLs). These are the domains tracked in web analytics and where the toolbar is enabled. Maps to the team `app_urls` field. Wildcards are not allowed; order is preserved.",
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"recording_domains": schema.ListAttribute{
 				Optional:            true,
 				Computed:            true,
 				ElementType:         types.StringType,
 				MarkdownDescription: "Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.",
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"test_account_filters": schema.StringAttribute{
 				CustomType: jsontypes.NormalizedType{},
@@ -219,23 +182,60 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 					"Managing it here makes that shared definition owned by Terraform, so a UI edit surfaces as drift instead of silently changing what all filtered insights measure. " +
 					"Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. " +
 					"A filter object may reference a cohort (`{\"key\":\"id\",\"type\":\"cohort\",\"value\":<cohort_id>,\"operator\":\"in\"}`); PostHog injects a read-only `cohort_name` into such objects, which this provider strips from state so the filter round-trips without a perpetual diff.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"test_account_filters_default_checked": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether the **internal and test users** filters (`test_account_filters`) are applied by default across the project. PostHog may report this as null until it is first set.",
-				PlanModifiers: []planmodifier.Bool{
-					boolplanmodifier.UseStateForUnknown(),
-				},
 			},
 		},
 	}
 }
 
 func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+	req, diags := o.buildRequest(ctx, model)
+	diags.Append(networkCaptureWarning(model.NetworkPayloadCapture, model.CapturePerformanceOptIn)...)
+	return req, diags
+}
+
+// ModifyResourcePlan plans no change when every configured setting already
+// matches state. Otherwise the plan is left as the framework built it, with the
+// settings the config leaves out unknown until the update reads them back.
+func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+	var config, state, plan types.Object
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	prior := state.Attributes()
+
+	// A changed project_id is a replacement the framework has already planned.
+	// It is compared plan to state because the config leaves it null when the
+	// provider-level project applies.
+	if !plan.Attributes()["project_id"].Equal(prior["project_id"]) {
+		return
+	}
+	for name, configured := range config.Attributes() {
+		if name == "project_id" || configured.IsNull() {
+			continue
+		}
+		if !configured.Equal(prior[name]) {
+			return
+		}
+	}
+
+	// Restore the whole prior state, not only the omitted settings: required
+	// children of an omitted computed object can make the framework propose
+	// changes even when every configured setting still matches state.
+	resp.Plan.Raw = req.State.Raw
+}
+
+func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	req := httpclient.EnvironmentSettingsRequest{
 		HeatmapsOptIn:              util.BoolPtrFromValue(model.HeatmapsOptIn),
@@ -251,7 +251,7 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 	// An unset block stays nil so the PATCH omits the field entirely (leave
 	// untouched). When set, both children are sent: PostHog replaces the whole
 	// JSON blob, so a partial object would wipe the missing key server-side.
-	if !model.NetworkPayloadCapture.IsNull() && !model.NetworkPayloadCapture.IsUnknown() {
+	if core.IsKnown(model.NetworkPayloadCapture) {
 		var cfg NetworkPayloadCaptureModel
 		diags.Append(model.NetworkPayloadCapture.As(ctx, &cfg, basetypes.ObjectAsOptions{})...)
 		if !diags.HasError() {
@@ -259,19 +259,6 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 				RecordHeaders: util.BoolPtrFromValue(cfg.RecordHeaders),
 				RecordBody:    util.BoolPtrFromValue(cfg.RecordBody),
 			}
-		}
-		// ValueBool is false for null and unknown too, which is the intent:
-		// warn unless performance capture is known to be enabled in this plan
-		// (an unset attribute carries the last-read server value, so users who
-		// enabled it outside Terraform are not nagged after the first refresh).
-		if !model.CapturePerformanceOptIn.ValueBool() {
-			diags.AddWarning(
-				"session_recording_network_payload_capture_config has no effect without capture_performance_opt_in",
-				"Session replay only captures network requests when network performance capture is enabled, "+
-					"so the configured payload capture settings will do nothing until capture_performance_opt_in is true. "+
-					"Set capture_performance_opt_in = true in this resource, or ignore this warning if network capture "+
-					"is already enabled for the project outside Terraform.",
-			)
 		}
 	}
 
@@ -287,7 +274,7 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 	// attribute leaves PostHog's current value untouched. A pointer to the parsed
 	// slice is used (rather than a bare slice) so an explicit empty array "[]" is
 	// sent to clear the filters instead of being dropped by omitempty.
-	if !model.TestAccountFilters.IsNull() && !model.TestAccountFilters.IsUnknown() {
+	if core.IsKnown(model.TestAccountFilters) {
 		var filters []interface{}
 		if err := json.Unmarshal([]byte(model.TestAccountFilters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid test_account_filters JSON", fmt.Sprintf("Could not parse test_account_filters: %s", err.Error()))
@@ -301,8 +288,35 @@ func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model Projec
 	return req, diags
 }
 
-func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, _ ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
-	return o.BuildCreateRequest(ctx, plan)
+func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, state ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+	req, diags := o.buildRequest(ctx, plan)
+	// An omitted capture_performance_opt_in is unknown in an update plan, so the
+	// warning goes by the value PostHog last reported. The request still omits it.
+	capturePerformance := plan.CapturePerformanceOptIn
+	if capturePerformance.IsUnknown() {
+		capturePerformance = state.CapturePerformanceOptIn
+	}
+	diags.Append(networkCaptureWarning(plan.NetworkPayloadCapture, capturePerformance)...)
+	return req, diags
+}
+
+// networkCaptureWarning warns when network payload capture is configured but
+// capture_performance_opt_in, which it depends on, is not known to be on.
+func networkCaptureWarning(payload types.Object, capturePerformance types.Bool) diag.Diagnostics {
+	var diags diag.Diagnostics
+	// ValueBool is false for null and unknown too: warn unless performance
+	// capture is known to be enabled.
+	if payload.IsNull() || payload.IsUnknown() || capturePerformance.ValueBool() {
+		return diags
+	}
+	diags.AddWarning(
+		"session_recording_network_payload_capture_config has no effect without capture_performance_opt_in",
+		"Session replay only captures network requests when network performance capture is enabled, "+
+			"so the configured payload capture settings will do nothing until capture_performance_opt_in is true. "+
+			"Set capture_performance_opt_in = true in this resource, or ignore this warning if network capture "+
+			"is already enabled for the project outside Terraform.",
+	)
+	return diags
 }
 
 func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {

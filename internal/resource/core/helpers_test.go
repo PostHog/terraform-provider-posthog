@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -505,6 +506,28 @@ func TestShouldClearString(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got := ShouldClearString(tc.plan, tc.state)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestIsKnown(t *testing.T) {
+	tests := map[string]struct {
+		input attr.Value
+		want  bool
+	}{
+		"null string":         {input: types.StringNull(), want: false},
+		"unknown string":      {input: types.StringUnknown(), want: false},
+		"empty string":        {input: types.StringValue(""), want: true},
+		"set string":          {input: types.StringValue("x"), want: true},
+		"null bool":           {input: types.BoolNull(), want: false},
+		"unknown list":        {input: types.ListUnknown(types.StringType), want: false},
+		"empty list":          {input: types.ListValueMust(types.StringType, nil), want: true},
+		"false bool is known": {input: types.BoolValue(false), want: true},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsKnown(tc.input))
 		})
 	}
 }

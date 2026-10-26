@@ -163,15 +163,15 @@ func (o EarlyAccessFeatureOps) BuildCreateRequest(_ context.Context, model Early
 		Stage: model.Stage.ValueString(),
 	}
 
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
+	if core.IsKnown(model.Description) {
 		req.Description = util.StringPtr(model.Description.ValueString())
 	}
-	if !model.DocumentationURL.IsNull() && !model.DocumentationURL.IsUnknown() {
+	if core.IsKnown(model.DocumentationURL) {
 		req.DocumentationURL = util.StringPtr(model.DocumentationURL.ValueString())
 	}
 	req.Payload = rawFromNormalized(model.Payload)
 
-	if !model.FeatureFlagID.IsNull() && !model.FeatureFlagID.IsUnknown() {
+	if core.IsKnown(model.FeatureFlagID) {
 		flagID := model.FeatureFlagID.ValueInt64()
 		req.FeatureFlagID = &flagID
 	}
@@ -224,7 +224,7 @@ func (o EarlyAccessFeatureOps) MapResponseToModel(_ context.Context, resp httpcl
 // the config itself declares an empty payload.
 func earlyAccessFeaturePayloadForState(raw json.RawMessage, current jsontypes.Normalized) jsontypes.Normalized {
 	if isEmptyJSONObjectOrNull(raw) {
-		if !current.IsNull() && !current.IsUnknown() && isEmptyJSONObjectOrNull(json.RawMessage(current.ValueString())) {
+		if core.IsKnown(current) && isEmptyJSONObjectOrNull(json.RawMessage(current.ValueString())) {
 			return current
 		}
 		return jsontypes.NewNormalizedNull()

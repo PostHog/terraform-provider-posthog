@@ -126,22 +126,22 @@ func (o ActionOps) BuildCreateRequest(ctx context.Context, model ActionTFModel) 
 		Name: &name,
 	}
 
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
+	if core.IsKnown(model.Description) {
 		desc := model.Description.ValueString()
 		req.Description = &desc
 	}
 
-	if !model.PostToSlack.IsNull() && !model.PostToSlack.IsUnknown() {
+	if core.IsKnown(model.PostToSlack) {
 		v := model.PostToSlack.ValueBool()
 		req.PostToSlack = &v
 	}
 
-	if !model.SlackMessageFormat.IsNull() && !model.SlackMessageFormat.IsUnknown() {
+	if core.IsKnown(model.SlackMessageFormat) {
 		v := model.SlackMessageFormat.ValueString()
 		req.SlackMessageFormat = &v
 	}
 
-	if !model.StepsJSON.IsNull() && !model.StepsJSON.IsUnknown() {
+	if core.IsKnown(model.StepsJSON) {
 		raw := strings.TrimSpace(model.StepsJSON.ValueString())
 		if raw != "" {
 			var steps []map[string]interface{}

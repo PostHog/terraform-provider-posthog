@@ -4,15 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -30,6 +39,11 @@ type FeatureFlagTFModel struct {
 	core.BaseProjectID
 	Key                        types.String         `tfsdk:"key"`
 	Name                       types.String         `tfsdk:"name"`
+	EvaluationRuntime          types.String         `tfsdk:"evaluation_runtime"`
+	BucketingIdentifier        types.String         `tfsdk:"bucketing_identifier"`
+	Archived                   types.Bool           `tfsdk:"archived"`
+	EvaluationContexts         types.Set            `tfsdk:"evaluation_contexts"`
+	IsRemoteConfiguration      types.Bool           `tfsdk:"is_remote_configuration"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
 	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
@@ -65,10 +79,43 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"name": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.",
+				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags. Empty strings are preserved. PostHog trims surrounding whitespace; Terraform retains the configured spelling when only that whitespace differs.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"evaluation_runtime": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Where the flag is evaluated: `server`, `client`, or `all`. PostHog defaults new flags to `all`. When omitted, the existing runtime is preserved, including on import; updates leave it unknown until the API response so a saved plan cannot overwrite a newer remote value. This controls remote evaluation; it does not restrict server-side local evaluation.",
+				Validators:          []validator.String{stringvalidator.OneOf("server", "client", "all")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"bucketing_identifier": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Identifier used to assign rollout buckets and variants: `distinct_id` (the API default) or `device_id`. Device bucketing cannot be combined with `ensure_experience_continuity = true`. When omitted, updates preserve the remote setting.",
+				Validators:          []validator.String{stringvalidator.OneOf("distinct_id", "device_id")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"archived": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag is archived and hidden from the default flag list. Archived flags must have `active = false`. Unarchiving does not enable the flag. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+			},
+			"evaluation_contexts": schema.SetAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. PostHog applies contexts only when evaluation contexts are enabled for your organization; otherwise the apply fails with an error that says so.",
+				Validators:          []validator.Set{setvalidator.SizeAtMost(50), setvalidator.ValueStringsAre(stringvalidator.UTF8LengthBetween(1, 255), canonicalFeatureFlagContextValidator{})},
+			},
+			"is_remote_configuration": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag delivers remote configuration. Payloads are configured through `filters.payloads`. On creation, PostHog defaults missing or zero rollout percentages to 100; when supplying filters, provide explicit nonzero group rollout percentages. A top-level `rollout_percentage` must match the first group when both are configured. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
 			},
 			"active": schema.BoolAttribute{
 				Optional:            true,
@@ -102,9 +149,12 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Rollout percentage (0-100)",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Rollout percentage (0-100) of the flag's first release condition (`filters.groups[0]`). " +
+					"Without `filters`, changing it changes only that condition's rollout and keeps the flag's other conditions, targeting, variants and payloads, " +
+					"so a flag created in the PostHog UI and imported keeps its targeting. " +
+					"With `filters`, leave it out or set it to the first condition's `rollout_percentage`.",
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},
@@ -112,7 +162,8 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"tags": schema.SetAttribute{
 				ElementType:         types.StringType,
 				Optional:            true,
-				MarkdownDescription: "Set of tags for the feature flag",
+				Computed:            true,
+				MarkdownDescription: "Set of tags for the feature flag. When omitted, the flag keeps the tags it has in PostHog; set `[]` to remove them.",
 			},
 			"deleted": schema.BoolAttribute{
 				Optional:            true,
@@ -133,26 +184,142 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// Existing flags may carry the deprecated setting in state, but a new flag with
-// the opt-in cannot produce the saved dashboard it promises.
+// ModifyResourcePlan plans what an update leaves on the flag for settings the config leaves out,
+// and rejects options PostHog cannot honor on new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() || !req.State.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
 		return
 	}
-
-	var plan FeatureFlagTFModel
+	var plan, config FeatureFlagTFModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
+	resp.Diagnostics.Append(validateRolloutMatchesFilters(config)...)
+
+	if !req.State.Raw.IsNull() {
+		// A plan that changes nothing keeps the state's values, so it stays empty.
+		if !req.Plan.Raw.Equal(req.State.Raw) {
+			var state FeatureFlagTFModel
+			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			planOmittedSettingsUnknown(ctx, config, resp)
+			planUnconfiguredFilters(ctx, plan, config, state, resp)
+		}
 		return
 	}
 
-	resp.Diagnostics.AddError(
-		"Unsupported create_usage_dashboard",
-		"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
-	)
+	resp.Diagnostics.Append(validateRemoteConfigurationCreate(plan)...)
+	if plan.CreateUsageDashboard.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Unsupported create_usage_dashboard",
+			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
+		)
+	}
+}
+
+// planOmittedSettingsUnknown plans the settings the config leaves out as unknown, so an update
+// does not send them and PostHog keeps its current values. Planning them from state instead would
+// let a saved plan, or one made with -refresh=false, overwrite changes made in PostHog since.
+func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	for _, setting := range []struct {
+		name                string
+		configured, unknown attr.Value
+	}{
+		{"evaluation_runtime", config.EvaluationRuntime, types.StringUnknown()},
+		{"bucketing_identifier", config.BucketingIdentifier, types.StringUnknown()},
+		{"archived", config.Archived, types.BoolUnknown()},
+		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
+		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+		{"tags", config.Tags, types.SetUnknown(types.StringType)},
+	} {
+		if setting.configured.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
+		}
+	}
+}
+
+// planUnconfiguredFilters plans the filters an update leaves on the flag when the config does not
+// set them. When rollout_percentage changes, the plan shows the flag's current filters with the
+// new rollout, instead of "(known after apply)", which would hide that the update rewrites the
+// flag's release conditions.
+func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	if !config.Filters.IsNull() {
+		// The configured filters own the rollout, so read rollout_percentage back from them.
+		if config.RolloutPercentage.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("rollout_percentage"), types.Int64Unknown())...)
+		}
+		return
+	}
+	planned, ok, err := plannedFiltersForRollout(plan, state)
+	if err != nil {
+		// BuildUpdateRequest reports the same error at apply.
+		return
+	}
+	if ok {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), planned)...)
+		return
+	}
+	// Otherwise the update leaves the filters to PostHog. Plan them as they are, so a rename shows
+	// only the rename instead of every release condition turning "(known after apply)". Not when
+	// the rollout is only known at apply: then the filters may still change.
+	if plan.Filters.IsUnknown() && core.IsKnown(plan.RolloutPercentage) && core.IsKnown(state.Filters) {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), state.Filters)...)
+	}
+}
+
+// validateRolloutMatchesFilters rejects a rollout_percentage that differs from the first release
+// condition in the configured filters. The update would send the rollout_percentage while the
+// plan promises the filters as written, so the apply could never succeed.
+func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !core.IsKnown(config.Filters) || !core.IsKnown(config.RolloutPercentage) {
+		return diags
+	}
+	var filters struct {
+		Groups []struct {
+			RolloutPercentage *float64 `json:"rollout_percentage"`
+		} `json:"groups"`
+	}
+	if json.Unmarshal([]byte(config.Filters.ValueString()), &filters) != nil {
+		return diags // The JSON type reports malformed JSON.
+	}
+	want := config.RolloutPercentage.ValueInt64()
+	found := "none"
+	if len(filters.Groups) > 0 && filters.Groups[0].RolloutPercentage != nil {
+		// PostHog accepts fractional rollouts, so compare without truncating.
+		if *filters.Groups[0].RolloutPercentage == float64(want) {
+			return diags
+		}
+		found = strconv.FormatFloat(*filters.Groups[0].RolloutPercentage, 'f', -1, 64)
+	}
+	diags.AddAttributeError(path.Root("rollout_percentage"), "rollout_percentage does not match filters",
+		fmt.Sprintf("rollout_percentage is %d, but the first release condition in filters has rollout_percentage %s. "+
+			"Set the rollout in one place: remove rollout_percentage, or set filters.groups[0].rollout_percentage to %d.", want, found, want))
+	return diags
+}
+
+// plannedFiltersForRollout returns the filters an update leaves on the flag when the config
+// does not set them and rollout_percentage changes: the flag's current filters with the new
+// percentage on the first release condition. ok is false when there is nothing to plan: the
+// filters are already known, the percentage does not change or is unknown until apply, or the
+// flag has no filters yet.
+func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes.Normalized, ok bool, err error) {
+	if !plan.Filters.IsUnknown() || !rolloutChanges(plan, state) || !core.IsKnown(state.Filters) {
+		return planned, false, nil
+	}
+	filters, err := filtersWithRollout(state.Filters, plan.RolloutPercentage)
+	if err != nil {
+		return planned, false, err
+	}
+	value, err := marshalJSON(filters)
+	if err != nil {
+		return planned, false, err
+	}
+	return jsontypes.NewNormalizedValue(value), true, nil
 }
 
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
@@ -168,11 +335,17 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		)
 		return req, diags
 	}
+	diags.Append(validateRemoteConfigurationCreate(model)...)
+	if diags.HasError() {
+		return req, diags
+	}
 
 	if !model.Name.IsNull() {
 		name := model.Name.ValueString()
 		req.Name = &name
 	}
+
+	diags.Append(applyFeatureFlagSettings(ctx, model, &req)...)
 
 	if !model.Active.IsNull() {
 		active := model.Active.ValueBool()
@@ -184,49 +357,12 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		req.EnsureExperienceContinuity = &ensureExperienceContinuity
 	}
 
-	// Handle filters and rollout_percentage
-	var filters map[string]interface{}
-
-	// Check both IsNull and IsUnknown since filters is Computed
-	if !model.Filters.IsNull() && !model.Filters.IsUnknown() {
-		if err := json.Unmarshal([]byte(model.Filters.ValueString()), &filters); err != nil {
-			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
-			return req, diags
-		}
-	} else {
-		// Create default filters structure
-		filters = map[string]interface{}{
-			"groups": []interface{}{
-				map[string]interface{}{},
-			},
-		}
+	filters, err := filtersWithRollout(model.Filters, model.RolloutPercentage)
+	if err != nil {
+		diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
+		return req, diags
 	}
-
-	// If rollout_percentage is provided, add it to the first group in filters
-	// rollout_percentage is a convenience field that maps to filters.groups[0].rollout_percentage
-	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if !model.RolloutPercentage.IsNull() && !model.RolloutPercentage.IsUnknown() {
-		percentage := int32(model.RolloutPercentage.ValueInt64())
-		groups, ok := filters["groups"].([]interface{})
-		if !ok || len(groups) == 0 {
-			groups = []interface{}{map[string]interface{}{}}
-		}
-		firstGroup, ok := groups[0].(map[string]interface{})
-		if !ok {
-			firstGroup = map[string]interface{}{}
-			groups[0] = firstGroup
-		}
-		firstGroup["rollout_percentage"] = percentage
-		filters["groups"] = groups
-	}
-
 	req.Filters = filters
-
-	if !model.Tags.IsNull() {
-		tags, d := core.ExtractTags(ctx, model.Tags)
-		diags.Append(d...)
-		req.Tags = tags
-	}
 
 	// Always set deleted to false on create
 	deleted := false
@@ -252,6 +388,8 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Name = &name
 	}
 
+	diags.Append(applyFeatureFlagSettings(ctx, plan, &req)...)
+
 	if !plan.Active.IsNull() {
 		active := plan.Active.ValueBool()
 		req.Active = &active
@@ -262,49 +400,25 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.EnsureExperienceContinuity = &ensureExperienceContinuity
 	}
 
-	// Handle filters and rollout_percentage
+	// Filters the config leaves out are sent only when rollout_percentage changes, and then as
+	// the flag's current filters with the new percentage. PostHog keeps the filters an update
+	// leaves out, so a rename does not write back filters that may have changed in the UI since
+	// the plan was made. ModifyResourcePlan usually plans these filters already; they are still
+	// unknown here when the rollout was unknown at plan time or the flag had no filters.
 	var filters map[string]interface{}
-
-	// Check both IsNull and IsUnknown since filters is Computed
-	if !plan.Filters.IsNull() && !plan.Filters.IsUnknown() {
-		if err := json.Unmarshal([]byte(plan.Filters.ValueString()), &filters); err != nil {
-			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
-			return req, diags
-		}
-	} else if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() {
-		// If only rollout_percentage is provided, create default filters structure
-		filters = map[string]interface{}{
-			"groups": []interface{}{
-				map[string]interface{}{},
-			},
-		}
+	var err error
+	switch {
+	case core.IsKnown(plan.Filters) && (!plan.Filters.Equal(state.Filters) || rolloutChanges(plan, state)):
+		filters, err = filtersWithRollout(plan.Filters, plan.RolloutPercentage)
+	case rolloutChanges(plan, state):
+		filters, err = filtersWithRollout(state.Filters, plan.RolloutPercentage)
 	}
-
-	// If rollout_percentage is provided, add it to the first group in filters
-	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() && filters != nil {
-		percentage := int32(plan.RolloutPercentage.ValueInt64())
-		groups, ok := filters["groups"].([]interface{})
-		if !ok || len(groups) == 0 {
-			groups = []interface{}{map[string]interface{}{}}
-		}
-		firstGroup, ok := groups[0].(map[string]interface{})
-		if !ok {
-			firstGroup = map[string]interface{}{}
-			groups[0] = firstGroup
-		}
-		firstGroup["rollout_percentage"] = percentage
-		filters["groups"] = groups
+	if err != nil {
+		diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
+		return req, diags
 	}
-
 	if filters != nil {
 		req.Filters = filters
-	}
-
-	if !plan.Tags.IsNull() {
-		tags, d := core.ExtractTags(ctx, plan.Tags)
-		diags.Append(d...)
-		req.Tags = tags
 	}
 
 	// Always include deleted - the plan modifier ensures it defaults to false
@@ -319,7 +433,24 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	model.ID = types.Int64Value(resp.ID)
 	model.Key = types.StringValue(resp.Key)
-	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	// The API trims names on write. Keep the planned/prior spelling only when
+	// that normalization explains the difference; real remote edits remain drift.
+	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || strings.TrimSpace(model.Name.ValueString()) != *resp.Name {
+		model.Name = types.StringPointerValue(resp.Name)
+	}
+	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)
+	model.BucketingIdentifier = types.StringPointerValue(resp.BucketingIdentifier)
+	model.Archived = types.BoolPointerValue(resp.Archived)
+	model.IsRemoteConfiguration = types.BoolPointerValue(resp.IsRemoteConfiguration)
+	// PostHog versions without evaluation contexts leave the field out. Read that as no contexts
+	// rather than null, which would not match `evaluation_contexts = []` in a configuration.
+	contextNames := resp.EvaluationContexts
+	if contextNames == nil {
+		contextNames = []string{}
+	}
+	contexts, d := types.SetValueFrom(ctx, types.StringType, contextNames)
+	diags.Append(d...)
+	model.EvaluationContexts = contexts
 	model.Active = core.PtrToBool(resp.Active)
 	model.EnsureExperienceContinuity = core.PtrToBool(resp.EnsureExperienceContinuity)
 
@@ -350,7 +481,12 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.RolloutPercentage = extractRolloutPercentage(resp)
 
 	// Set tags
-	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
+	// A flag without tags reads as null, unless the configuration says `tags = []`.
+	configuredTags := model.Tags
+	if !core.IsKnown(configuredTags) {
+		configuredTags = types.SetNull(types.StringType)
+	}
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, configuredTags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 
@@ -416,7 +552,9 @@ func normalizeFeatureFlagFiltersForState(apiData map[string]interface{}, stateJS
 // at any depth (never authored by the user). Unlike defaultIgnoredFilterKeys (top-level keys),
 // these must be stripped recursively. Add future server-only enrichments here.
 var serverComputedFilterKeys = map[string]struct{}{
-	"cohort_name": {}, // API attaches this next to a cohort property's numeric value id
+	"cohort_name":    {}, // API attaches this next to a cohort property's numeric value id
+	"cohort_deleted": {}, // API sets this when the cohort is deleted or missing, so the flag can't evaluate the condition
+	"cohort_missing": {}, // API sets this when no cohort with that id exists in the project
 }
 
 // normalizeFeatureFlagFilterValue walks the API tree keeping every value, dropping unconfigured
@@ -472,7 +610,22 @@ func isEmptyFeatureFlagFilterValue(value interface{}) bool {
 }
 
 func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
-	return client.CreateFeatureFlag(ctx, model.GetEffectiveProjectID(), req)
+	projectID := model.GetEffectiveProjectID()
+	flag, err := client.CreateFeatureFlag(ctx, projectID, req)
+	if err != nil {
+		return flag, err
+	}
+	if err := checkEvaluationContextsApplied(req, flag); err != nil {
+		// The flag is not saved to state, and it would be serving in every context rather than the
+		// configured ones. Delete it: PostHog frees a deleted flag's key, so the next apply can
+		// create it again.
+		id := strconv.FormatInt(flag.ID, 10)
+		if _, deleteErr := client.DeleteFeatureFlag(ctx, projectID, id); deleteErr != nil {
+			return flag, fmt.Errorf("%w. PostHog created the flag anyway (ID %d), and it is serving without evaluation contexts. Deleting it failed: %v. Delete it in PostHog, or import it with ID %s/%s, before applying again", err, flag.ID, deleteErr, projectID, id)
+		}
+		return flag, fmt.Errorf("%w. The flag PostHog created was deleted again, so nothing was left behind", err)
+	}
+	return flag, nil
 }
 
 func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
@@ -480,11 +633,64 @@ func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClien
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	flag, status, err := client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	if err != nil {
+		return flag, status, err
+	}
+	return flag, status, checkEvaluationContextsApplied(req, flag)
 }
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+// rolloutChanges reports whether the plan sets a rollout percentage the flag does not have.
+func rolloutChanges(plan, state FeatureFlagTFModel) bool {
+	return core.IsKnown(plan.RolloutPercentage) && !plan.RolloutPercentage.Equal(state.RolloutPercentage)
+}
+
+// filtersWithRollout parses filters, or starts a single release condition when there are none,
+// and applies the rollout percentage to the first condition.
+func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64) (map[string]interface{}, error) {
+	var filters map[string]interface{}
+	if core.IsKnown(filtersJSON) {
+		if err := json.Unmarshal([]byte(filtersJSON.ValueString()), &filters); err != nil {
+			return nil, err
+		}
+	}
+	if filters == nil {
+		filters = map[string]interface{}{"groups": []interface{}{map[string]interface{}{}}}
+	}
+	return withFirstGroupRollout(filters, percentage), nil
+}
+
+// withFirstGroupRollout returns filters with rollout_percentage, a shorthand for the first
+// release condition's rollout, applied to that condition. The other release conditions and filter
+// keys are kept, and the filters passed in are left unchanged. A null or unknown percentage
+// returns the filters as they are.
+func withFirstGroupRollout(filters map[string]interface{}, percentage types.Int64) map[string]interface{} {
+	if !core.IsKnown(percentage) {
+		return filters
+	}
+	groups, _ := filters["groups"].([]interface{})
+	groups = slices.Clone(groups)
+	if len(groups) == 0 {
+		groups = []interface{}{map[string]interface{}{}}
+	}
+	first, _ := groups[0].(map[string]interface{})
+	first = maps.Clone(first)
+	if first == nil {
+		first = map[string]interface{}{}
+	}
+	first["rollout_percentage"] = int32(percentage.ValueInt64())
+	groups[0] = first
+
+	result := maps.Clone(filters)
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+	result["groups"] = groups
+	return result
 }
 
 func extractRolloutPercentage(resp httpclient.FeatureFlag) types.Int64 {
