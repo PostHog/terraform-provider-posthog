@@ -689,3 +689,25 @@ func TestFeatureFlagMapResponseToModel_ExplicitEmptyIgnoreStillPreservesEAFOwner
 		})
 	}
 }
+
+func TestValidateRolloutMatchesFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		filters   jsontypes.Normalized
+		rollout   types.Int64
+		wantError bool
+	}{
+		{"matching", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":50},{"rollout_percentage":10}]}`), types.Int64Value(50), false},
+		{"different", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Value(70), true},
+		{"first condition without a rollout", jsontypes.NewNormalizedValue(`{"groups":[{"properties":[]}]}`), types.Int64Value(55), true},
+		{"no release conditions", jsontypes.NewNormalizedValue(`{"payloads":{}}`), types.Int64Value(55), true},
+		{"only filters", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Null(), false},
+		{"only rollout", jsontypes.NewNormalizedNull(), types.Int64Value(55), false},
+		{"filters unknown until apply", jsontypes.NewNormalizedUnknown(), types.Int64Value(55), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			diags := validateRolloutMatchesFilters(FeatureFlagTFModel{Filters: tc.filters, RolloutPercentage: tc.rollout})
+			assert.Equal(t, tc.wantError, diags.HasError(), diags)
+		})
+	}
+}

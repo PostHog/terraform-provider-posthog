@@ -217,7 +217,7 @@ func TestFeatureFlag_DefaultIgnoresServerWiredKeys(t *testing.T) {
 // with a targeted release condition, a second condition, variants and payloads, into a config
 // that sets only rollout_percentage. Changing the percentage must change only the first
 // condition's rollout: the update used to send filters rebuilt from nothing, which replaced the
-// flag's targeting with a rollout to everyone and dropped its variants and payloads.
+// flag's targeting and its other conditions with a rollout to everyone.
 func TestFeatureFlag_RolloutPercentageKeepsAdoptedTargeting(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -345,6 +345,54 @@ func TestFeatureFlag_RolloutPercentageKeepsAdoptedTargeting(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "name", "Renamed"),
 					checkTargetingKept,
 				),
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_FiltersRolloutChange changes the first condition's rollout inside filters, with
+// rollout_percentage left out. The planned rollout_percentage used to keep the old value, which then
+// overrode the configured filters, so the change never applied and every apply failed.
+func TestFeatureFlag_FiltersRolloutChange(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	config := func(rollout int) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key     = %q
+  filters = jsonencode({ groups = [{ rollout_percentage = %d }] })
+}
+`, rKey, rollout)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{Config: config(100), Check: testCheckFiltersRolloutPercentage("posthog_feature_flag.test", 0, 100)},
+			{
+				Config: config(50),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testCheckFiltersRolloutPercentage("posthog_feature_flag.test", 0, 50),
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "rollout_percentage", "50"),
+				),
+			},
+			{Config: config(50), PlanOnly: true},
+			{
+				// Both set, and different: rejected at plan time instead of failing every apply.
+				Config: fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key                = %q
+  rollout_percentage = 70
+  filters            = jsonencode({ groups = [{ rollout_percentage = 50 }] })
+}
+`, rKey),
+				ExpectError: regexp.MustCompile(`rollout_percentage does not match filters`),
 			},
 		},
 	})

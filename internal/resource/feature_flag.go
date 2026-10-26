@@ -152,7 +152,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				MarkdownDescription: "Rollout percentage (0-100) of the flag's first release condition (`filters.groups[0]`). " +
 					"Without `filters`, changing it changes only that condition's rollout and keeps the flag's other conditions, targeting, variants and payloads, " +
 					"so a flag created in the PostHog UI and imported keeps its targeting. A saved plan that changes it sends the release conditions as they were when the plan was made. " +
-					"With `filters`, it overrides the first condition's rollout in them.",
+					"With `filters`, leave it out or set it to the first condition's `rollout_percentage`.",
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},
@@ -193,6 +193,7 @@ func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mod
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(validateRolloutMatchesFilters(config)...)
 
 	if !req.State.Raw.IsNull() {
 		// A plan that changes nothing keeps the state's values, so it stays empty.
@@ -230,6 +231,9 @@ func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, 
 		{"archived", config.Archived, types.BoolUnknown()},
 		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
 		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+		// Read from the first release condition, which the update may leave to PostHog or set
+		// through filters.
+		{"rollout_percentage", config.RolloutPercentage, types.Int64Unknown()},
 	} {
 		if setting.configured.IsNull() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
@@ -252,16 +256,33 @@ func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFla
 	}
 	if ok {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), planned)...)
-		return
 	}
+}
 
-	// The update leaves filters out, so PostHog keeps whatever rollout the first condition has
-	// by then. Unless the config sets rollout_percentage, plan it as unknown too: pinning it to
-	// state fails the apply with "inconsistent result" when the rollout was changed in PostHog
-	// after the plan was made (a saved plan, or -refresh=false).
-	if plan.Filters.IsUnknown() && config.RolloutPercentage.IsNull() {
-		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("rollout_percentage"), types.Int64Unknown())...)
+// validateRolloutMatchesFilters rejects a rollout_percentage that differs from the first release
+// condition in the configured filters. The update would send the rollout_percentage while the
+// plan promises the filters as written, so the apply could never succeed.
+func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !known(config.Filters) || !known(config.RolloutPercentage) {
+		return diags
 	}
+	var filters struct {
+		Groups []struct {
+			RolloutPercentage *float64 `json:"rollout_percentage"`
+		} `json:"groups"`
+	}
+	if json.Unmarshal([]byte(config.Filters.ValueString()), &filters) != nil {
+		return diags // The JSON type reports malformed JSON.
+	}
+	want := config.RolloutPercentage.ValueInt64()
+	if len(filters.Groups) > 0 && filters.Groups[0].RolloutPercentage != nil && int64(*filters.Groups[0].RolloutPercentage) == want {
+		return diags
+	}
+	diags.AddAttributeError(path.Root("rollout_percentage"), "rollout_percentage does not match filters",
+		fmt.Sprintf("rollout_percentage is %d, but the first release condition in filters has a different rollout_percentage. "+
+			"Set the rollout in one place: remove rollout_percentage, or set filters.groups[0].rollout_percentage to %d.", want, want))
+	return diags
 }
 
 // plannedFiltersForRollout returns the filters an update leaves on the flag when the config
