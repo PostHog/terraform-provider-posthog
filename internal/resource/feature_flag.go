@@ -151,7 +151,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				Computed: true,
 				MarkdownDescription: "Rollout percentage (0-100) of the flag's first release condition (`filters.groups[0]`). " +
 					"Without `filters`, changing it changes only that condition's rollout and keeps the flag's other conditions, targeting, variants and payloads, " +
-					"so a flag created in the PostHog UI and imported keeps its targeting. A saved plan that changes it sends the release conditions as they were when the plan was made. " +
+					"so a flag created in the PostHog UI and imported keeps its targeting. " +
 					"With `filters`, leave it out or set it to the first condition's `rollout_percentage`.",
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
@@ -276,12 +276,17 @@ func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
 		return diags // The JSON type reports malformed JSON.
 	}
 	want := config.RolloutPercentage.ValueInt64()
-	if len(filters.Groups) > 0 && filters.Groups[0].RolloutPercentage != nil && int64(*filters.Groups[0].RolloutPercentage) == want {
-		return diags
+	found := "none"
+	if len(filters.Groups) > 0 && filters.Groups[0].RolloutPercentage != nil {
+		// PostHog accepts fractional rollouts, so compare without truncating.
+		if *filters.Groups[0].RolloutPercentage == float64(want) {
+			return diags
+		}
+		found = strconv.FormatFloat(*filters.Groups[0].RolloutPercentage, 'f', -1, 64)
 	}
 	diags.AddAttributeError(path.Root("rollout_percentage"), "rollout_percentage does not match filters",
-		fmt.Sprintf("rollout_percentage is %d, but the first release condition in filters has a different rollout_percentage. "+
-			"Set the rollout in one place: remove rollout_percentage, or set filters.groups[0].rollout_percentage to %d.", want, want))
+		fmt.Sprintf("rollout_percentage is %d, but the first release condition in filters has rollout_percentage %s. "+
+			"Set the rollout in one place: remove rollout_percentage, or set filters.groups[0].rollout_percentage to %d.", want, found, want))
 	return diags
 }
 

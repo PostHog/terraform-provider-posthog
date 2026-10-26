@@ -494,7 +494,7 @@ func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
 		want         string // empty: the update sends no filters
 	}{
 		{
-			// Filters not in the config, with a rollout known only at apply: the update keeps
+			// Filters unknown in the plan and a changed rollout: the update keeps
 			// the flag's release conditions and changes only the first one's rollout.
 			name:         "unconfigured filters keep the flag's current conditions",
 			planFilters:  jsontypes.NewNormalizedUnknown(),
@@ -704,6 +704,9 @@ func TestValidateRolloutMatchesFilters(t *testing.T) {
 		{"only filters", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Null(), false},
 		{"only rollout", jsontypes.NewNormalizedNull(), types.Int64Value(55), false},
 		{"filters unknown until apply", jsontypes.NewNormalizedUnknown(), types.Int64Value(55), false},
+		{"rollout unknown until apply", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Unknown(), false},
+		{"fractional first condition", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":50.5}]}`), types.Int64Value(50), true},
+		{"filters that do not parse", jsontypes.NewNormalizedValue(`not json`), types.Int64Value(50), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			diags := validateRolloutMatchesFilters(FeatureFlagTFModel{Filters: tc.filters, RolloutPercentage: tc.rollout})
