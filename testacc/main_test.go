@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/provider"
 )
 
@@ -78,4 +79,10 @@ func getTestUserEmail() string {
 // getProjectID returns the POSTHOG_PROJECT_ID environment variable.
 func getProjectID() string {
 	return os.Getenv("POSTHOG_PROJECT_ID")
+}
+
+// testAccAPIClient calls the PostHog API directly, for tests that change resources outside
+// Terraform or check what PostHog stored.
+func testAccAPIClient() httpclient.PosthogClient {
+	return httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
 }
