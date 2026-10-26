@@ -303,16 +303,6 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 
 	req.Filters = filters
 
-	if core.IsKnown(model.Tags) {
-		// Sent even when empty, so `tags = []` removes the flag's tags.
-		tags, d := core.ExtractTags(ctx, model.Tags)
-		diags.Append(d...)
-		if tags == nil {
-			tags = []string{}
-		}
-		req.Tags = &tags
-	}
-
 	// Always set deleted to false on create
 	deleted := false
 	req.Deleted = &deleted
@@ -388,16 +378,6 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Filters = filters
 	}
 
-	if core.IsKnown(plan.Tags) {
-		// Sent even when empty, so `tags = []` removes the flag's tags.
-		tags, d := core.ExtractTags(ctx, plan.Tags)
-		diags.Append(d...)
-		if tags == nil {
-			tags = []string{}
-		}
-		req.Tags = &tags
-	}
-
 	// Always include deleted - the plan modifier ensures it defaults to false
 	deleted := plan.Deleted.ValueBool()
 	req.Deleted = &deleted
@@ -458,8 +438,12 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.RolloutPercentage = extractRolloutPercentage(resp)
 
 	// Set tags
-	// Keep `tags = []` as an empty set rather than null, so it matches the configuration.
-	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
+	// A flag without tags reads as null, unless the configuration says `tags = []`.
+	configuredTags := model.Tags
+	if !core.IsKnown(configuredTags) {
+		configuredTags = types.SetNull(types.StringType)
+	}
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, configuredTags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 
@@ -622,8 +606,16 @@ func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogCli
 			return flag, status, err
 		}
 		if err := checkEvaluationContextsApplied(req, flag); err != nil {
-			return flag, status, fmt.Errorf("%w. Nothing else in this update was applied, apart from disabling the flag if requested", err)
+			if first.Active != nil {
+				return flag, status, fmt.Errorf("%w. The flag was disabled; nothing else in this update was applied", err)
+			}
+			return flag, status, fmt.Errorf("%w. Nothing else in this update was applied", err)
 		}
+		flag, status, err = client.UpdateFeatureFlag(ctx, projectID, id, req)
+		if err != nil {
+			return flag, status, fmt.Errorf("evaluation_contexts were applied, but the rest of the update failed: %w", err)
+		}
+		return flag, status, checkEvaluationContextsApplied(req, flag)
 	}
 	flag, status, err := client.UpdateFeatureFlag(ctx, projectID, id, req)
 	if err != nil {

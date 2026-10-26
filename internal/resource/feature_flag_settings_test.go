@@ -231,14 +231,30 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 		requested   *[]string
 		gateOn      bool // whether PostHog applies evaluation contexts
 		disable     bool // the update sets active = false instead of true
+		wantFirst   map[string]interface{}
 		wantPatches int
-		wantError   bool
+		wantError   string
 	}{
-		{name: "contexts ignored: nothing else is sent", stored: []string{}, requested: &[]string{"web"}, gateOn: false, wantPatches: 1, wantError: true},
-		{name: "contexts applied: then the full update", stored: []string{}, requested: &[]string{"web"}, gateOn: true, wantPatches: 2},
+		{
+			name: "contexts ignored: nothing else is sent", stored: []string{}, requested: &[]string{"web"},
+			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}}, wantPatches: 1,
+			wantError: "Nothing else in this update was applied",
+		},
+		{
+			name: "contexts ignored while disabling: only the deactivation lands", stored: []string{}, requested: &[]string{"web"}, disable: true,
+			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}, "active": false}, wantPatches: 1,
+			wantError: "The flag was disabled",
+		},
+		{
+			name: "contexts applied: then the full update", stored: []string{}, requested: &[]string{"web"}, gateOn: true,
+			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}}, wantPatches: 2,
+		},
+		{
+			name: "disabling while clearing contexts: disabled in the first request", stored: []string{"web"}, requested: &[]string{}, gateOn: true, disable: true,
+			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{}, "active": false}, wantPatches: 2,
+		},
 		{name: "contexts unchanged: one update", stored: []string{"web"}, requested: &[]string{"web"}, wantPatches: 1},
-		{name: "contexts not configured: one update", stored: []string{"web"}, requested: nil, wantPatches: 1},
-		{name: "disabling while clearing contexts: disabled in the first request", stored: []string{"web"}, requested: &[]string{}, gateOn: true, disable: true, wantPatches: 2},
+		{name: "contexts not configured: one update", stored: []string{"web"}, wantPatches: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stored := tc.stored
@@ -248,7 +264,7 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				patches = append(patches, body)
 				if contexts, ok := body["evaluation_contexts"].([]interface{}); ok && tc.gateOn {
-					stored = nil
+					stored = []string{}
 					for _, c := range contexts {
 						stored = append(stored, c.(string))
 					}
@@ -272,17 +288,16 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 				Key: "flag", Active: &active, EvaluationContexts: tc.requested,
 			})
 
-			assert.Equal(t, tc.wantError, err != nil, err)
-			require.Len(t, patches, tc.wantPatches)
-			if tc.wantPatches == 2 || tc.wantError {
-				if tc.disable {
-					assert.Equal(t, false, patches[0]["active"], "a deactivation goes with the contexts")
-				} else {
-					assert.NotContains(t, patches[0], "active", "an activation waits for the contexts")
-				}
-			}
-			if !tc.wantError {
+			if tc.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantError)
+			} else {
+				require.NoError(t, err)
 				assert.Equal(t, active, patches[len(patches)-1]["active"])
+			}
+			require.Len(t, patches, tc.wantPatches)
+			if tc.wantFirst != nil {
+				assert.Equal(t, tc.wantFirst, patches[0])
 			}
 		})
 	}
@@ -298,6 +313,7 @@ func TestFeatureFlagMapResponseToModel_Tags(t *testing.T) {
 		{name: "tags from PostHog", prior: types.SetNull(types.StringType), api: []string{"ui"}, want: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("ui")})},
 		{name: "cleared with tags = []", prior: types.SetValueMust(types.StringType, []attr.Value{}), api: nil, want: types.SetValueMust(types.StringType, []attr.Value{})},
 		{name: "never set", prior: types.SetNull(types.StringType), api: nil, want: types.SetNull(types.StringType)},
+		{name: "omitted on create or update", prior: types.SetUnknown(types.StringType), api: nil, want: types.SetNull(types.StringType)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := FeatureFlagTFModel{Tags: tc.prior}

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -237,7 +238,7 @@ func TestFeatureFlag_AdoptedFlagKeepsTags(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if len(f.Tags) != len(want) {
+			if !slices.Equal(slices.Sorted(slices.Values(f.Tags)), slices.Sorted(slices.Values(want))) {
 				return fmt.Errorf("PostHog has tags %v, want %v", f.Tags, want)
 			}
 			return nil
