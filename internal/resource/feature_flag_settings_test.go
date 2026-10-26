@@ -230,6 +230,7 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 		stored      []string // the flag's contexts in state and in PostHog
 		requested   *[]string
 		gateOn      bool // whether PostHog applies evaluation contexts
+		disable     bool // the update sets active = false instead of true
 		wantPatches int
 		wantError   bool
 	}{
@@ -237,6 +238,7 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 		{name: "contexts applied: then the full update", stored: []string{}, requested: &[]string{"web"}, gateOn: true, wantPatches: 2},
 		{name: "contexts unchanged: one update", stored: []string{"web"}, requested: &[]string{"web"}, wantPatches: 1},
 		{name: "contexts not configured: one update", stored: []string{"web"}, requested: nil, wantPatches: 1},
+		{name: "disabling while clearing contexts: disabled in the first request", stored: []string{"web"}, requested: &[]string{}, gateOn: true, disable: true, wantPatches: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stored := tc.stored
@@ -265,7 +267,7 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 				EvaluationContexts: contexts,
 			}
 			state.ID = types.Int64Value(7)
-			active := true
+			active := !tc.disable
 			_, _, err := FeatureFlagOps{}.Update(context.Background(), client, state, httpclient.FeatureFlagRequest{
 				Key: "flag", Active: &active, EvaluationContexts: tc.requested,
 			})
@@ -273,10 +275,14 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 			assert.Equal(t, tc.wantError, err != nil, err)
 			require.Len(t, patches, tc.wantPatches)
 			if tc.wantPatches == 2 || tc.wantError {
-				assert.NotContains(t, patches[0], "active", "the first request carries only the contexts")
+				if tc.disable {
+					assert.Equal(t, false, patches[0]["active"], "a deactivation goes with the contexts")
+				} else {
+					assert.NotContains(t, patches[0], "active", "an activation waits for the contexts")
+				}
 			}
 			if !tc.wantError {
-				assert.Equal(t, true, patches[len(patches)-1]["active"])
+				assert.Equal(t, active, patches[len(patches)-1]["active"])
 			}
 		})
 	}
