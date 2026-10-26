@@ -133,6 +133,7 @@ func TestFeatureFlagModifyPlanOmittedSettings(t *testing.T) {
 		require.False(t, resp.Plan.Get(context.Background(), &plan).HasError())
 		assert.True(t, plan.EvaluationRuntime.IsUnknown())
 		assert.True(t, plan.EvaluationContexts.IsUnknown())
+		assert.True(t, plan.Tags.IsUnknown())
 		assert.Equal(t, types.BoolValue(false), plan.Archived)
 	})
 
@@ -221,4 +222,82 @@ func TestFeatureFlagMapResponseToModel_MissingContextsAreEmpty(t *testing.T) {
 	diags := FeatureFlagOps{}.MapResponseToModel(context.Background(), httpclient.FeatureFlag{ID: 1, Key: "flag"}, &model)
 	require.False(t, diags.HasError(), diags)
 	assert.Equal(t, types.SetValueMust(types.StringType, []attr.Value{}), model.EvaluationContexts)
+}
+
+func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stored      []string // the flag's contexts in state and in PostHog
+		requested   *[]string
+		gateOn      bool // whether PostHog applies evaluation contexts
+		wantPatches int
+		wantError   bool
+	}{
+		{name: "contexts ignored: nothing else is sent", stored: []string{}, requested: &[]string{"web"}, gateOn: false, wantPatches: 1, wantError: true},
+		{name: "contexts applied: then the full update", stored: []string{}, requested: &[]string{"web"}, gateOn: true, wantPatches: 2},
+		{name: "contexts unchanged: one update", stored: []string{"web"}, requested: &[]string{"web"}, wantPatches: 1},
+		{name: "contexts not configured: one update", stored: []string{"web"}, requested: nil, wantPatches: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := tc.stored
+			var patches []map[string]interface{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				patches = append(patches, body)
+				if contexts, ok := body["evaluation_contexts"].([]interface{}); ok && tc.gateOn {
+					stored = nil
+					for _, c := range contexts {
+						stored = append(stored, c.(string))
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(httpclient.FeatureFlag{ID: 7, Key: "flag", EvaluationContexts: stored})
+			}))
+			defer server.Close()
+			client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+
+			contexts, diags := types.SetValueFrom(context.Background(), types.StringType, tc.stored)
+			require.False(t, diags.HasError(), diags)
+			state := FeatureFlagTFModel{
+				BaseProjectID:      core.BaseProjectID{ProjectID: types.StringValue("1")},
+				Key:                types.StringValue("flag"),
+				EvaluationContexts: contexts,
+			}
+			state.ID = types.Int64Value(7)
+			active := true
+			_, _, err := FeatureFlagOps{}.Update(context.Background(), client, state, httpclient.FeatureFlagRequest{
+				Key: "flag", Active: &active, EvaluationContexts: tc.requested,
+			})
+
+			assert.Equal(t, tc.wantError, err != nil, err)
+			require.Len(t, patches, tc.wantPatches)
+			if tc.wantPatches == 2 || tc.wantError {
+				assert.NotContains(t, patches[0], "active", "the first request carries only the contexts")
+			}
+			if !tc.wantError {
+				assert.Equal(t, true, patches[len(patches)-1]["active"])
+			}
+		})
+	}
+}
+
+func TestFeatureFlagMapResponseToModel_Tags(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		prior types.Set
+		api   []string
+		want  types.Set
+	}{
+		{name: "tags from PostHog", prior: types.SetNull(types.StringType), api: []string{"ui"}, want: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("ui")})},
+		{name: "cleared with tags = []", prior: types.SetValueMust(types.StringType, []attr.Value{}), api: nil, want: types.SetValueMust(types.StringType, []attr.Value{})},
+		{name: "never set", prior: types.SetNull(types.StringType), api: nil, want: types.SetNull(types.StringType)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := FeatureFlagTFModel{Tags: tc.prior}
+			diags := FeatureFlagOps{}.MapResponseToModel(context.Background(), httpclient.FeatureFlag{ID: 1, Key: "flag", Tags: tc.api}, &model)
+			require.False(t, diags.HasError(), diags)
+			assert.Equal(t, tc.want, model.Tags)
+		})
+	}
 }

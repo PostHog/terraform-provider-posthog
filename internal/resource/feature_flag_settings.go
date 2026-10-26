@@ -39,6 +39,19 @@ func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req
 	return diags
 }
 
+// contextsChange reports whether an update sets evaluation contexts the flag does not have yet.
+// model is the flag's state; a null or unknown state reads as no contexts.
+func contextsChange(ctx context.Context, req httpclient.FeatureFlagRequest, model FeatureFlagTFModel) bool {
+	if req.EvaluationContexts == nil {
+		return false
+	}
+	var current []string
+	if core.IsKnown(model.EvaluationContexts) {
+		_ = model.EvaluationContexts.ElementsAs(ctx, &current, false)
+	}
+	return !slices.Equal(slices.Sorted(slices.Values(*req.EvaluationContexts)), slices.Sorted(slices.Values(current)))
+}
+
 // checkEvaluationContextsApplied reports when PostHog accepted a create or update but kept the
 // flag's previous evaluation contexts. PostHog skips them without an error unless evaluation
 // contexts are enabled for the organization, which otherwise surfaces only as Terraform's

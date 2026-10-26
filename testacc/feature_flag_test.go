@@ -210,6 +210,85 @@ func TestFeatureFlag_DefaultIgnoresServerWiredKeys(t *testing.T) {
 	})
 }
 
+// TestFeatureFlag_AdoptedFlagKeepsTags adopts a flag tagged in the PostHog UI into a config that
+// leaves out tags. Every apply used to fail with "inconsistent result", because the plan expected no
+// tags while PostHog kept them. Omitted tags are now left as they are, and tags = [] removes them.
+func TestFeatureFlag_AdoptedFlagKeepsTags(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	projectID := os.Getenv("POSTHOG_PROJECT_ID")
+	client := testAccAPIClient()
+
+	var flagID int64
+	createTaggedFlag := func() {
+		f, err := (&client).CreateFeatureFlag(context.Background(), projectID, httpclient.FeatureFlagRequest{
+			Key:  rKey,
+			Tags: &[]string{"ui", "beta"},
+		})
+		if err != nil {
+			t.Fatalf("Failed to create tagged flag externally: %v", err)
+		}
+		flagID = f.ID
+	}
+	checkAPITags := func(want ...string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			f, _, err := (&client).GetFeatureFlag(context.Background(), projectID, fmt.Sprintf("%d", flagID))
+			if err != nil {
+				return err
+			}
+			if len(f.Tags) != len(want) {
+				return fmt.Errorf("PostHog has tags %v, want %v", f.Tags, want)
+			}
+			return nil
+		}
+	}
+	config := func(name, tags string) string {
+		return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key  = %q
+  name = %q
+  %s
+}
+`, rKey, name, tags)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				PreConfig:          createTaggedFlag,
+				Config:             config("Adopted", ""),
+				ResourceName:       "posthog_feature_flag.test",
+				ImportState:        true,
+				ImportStatePersist: true,
+				ImportStateIdFunc: func(*terraform.State) (string, error) {
+					return fmt.Sprintf("%s/%d", projectID, flagID), nil
+				},
+			},
+			{
+				Config: config("Adopted", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "2"),
+					checkAPITags("ui", "beta"),
+				),
+			},
+			{Config: config("Adopted", ""), PlanOnly: true},
+			{
+				Config: config("Adopted", "tags = []"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_feature_flag.test", "tags.#", "0"),
+					checkAPITags(),
+				),
+			},
+			{Config: config("Adopted", "tags = []"), PlanOnly: true},
+		},
+	})
+}
+
 // TestFeatureFlag_DefaultIgnoresEarlyAccessEnrollment links an Early Access Feature to a
 // Terraform-managed flag outside Terraform, as the PostHog UI does. In an active stage PostHog
 // marks the flag with filters.feature_enrollment and keeps it when an update omits it, so the
