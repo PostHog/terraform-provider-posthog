@@ -261,37 +261,36 @@ func TestFeatureFlagModifyPlanUnconfiguredFilters(t *testing.T) {
 	})
 }
 
-func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
+func TestFeatureFlagUpdateSetsContextsBeforeEnabling(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		stored      []string // the flag's contexts in state and in PostHog
 		requested   *[]string
+		wasActive   bool // the flag's state before the update
+		active      bool // what the update sets
 		gateOn      bool // whether PostHog applies evaluation contexts
-		disable     bool // the update sets active = false instead of true
 		wantFirst   map[string]interface{}
 		wantPatches int
 		wantError   string
 	}{
 		{
-			name: "contexts ignored: nothing else is sent", stored: []string{}, requested: &[]string{"web"},
+			name: "enabling with ignored contexts: the flag stays disabled", stored: []string{}, requested: &[]string{"web"}, active: true,
 			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}}, wantPatches: 1,
-			wantError: "Nothing else in this update was applied",
+			wantError: "The flag was not enabled",
 		},
 		{
-			name: "contexts ignored while disabling: only the deactivation lands", stored: []string{}, requested: &[]string{"web"}, disable: true,
-			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}, "active": false}, wantPatches: 1,
-			wantError: "The flag was disabled",
-		},
-		{
-			name: "contexts applied: then the full update", stored: []string{}, requested: &[]string{"web"}, gateOn: true,
+			name: "enabling with applied contexts: contexts first, then the rest", stored: []string{}, requested: &[]string{"web"}, active: true, gateOn: true,
 			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{"web"}}, wantPatches: 2,
 		},
 		{
-			name: "disabling while clearing contexts: disabled in the first request", stored: []string{"web"}, requested: &[]string{}, gateOn: true, disable: true,
-			wantFirst: map[string]interface{}{"key": "flag", "evaluation_contexts": []interface{}{}, "active": false}, wantPatches: 2,
+			name: "an active flag changes contexts and targeting in one request", stored: []string{"web"}, requested: &[]string{"web", "mobile"}, wasActive: true, active: true, gateOn: true,
+			wantPatches: 1,
 		},
-		{name: "contexts unchanged: one update", stored: []string{"web"}, requested: &[]string{"web"}, wantPatches: 1},
-		{name: "contexts not configured: one update", stored: []string{"web"}, wantPatches: 1},
+		{
+			name: "disabling while clearing contexts: one request", stored: []string{"web"}, requested: &[]string{}, wasActive: true, gateOn: true,
+			wantPatches: 1,
+		},
+		{name: "enabling with unchanged contexts: one request", stored: []string{"web"}, requested: &[]string{"web"}, active: true, wantPatches: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stored := tc.stored
@@ -317,10 +316,11 @@ func TestFeatureFlagUpdateSendsChangedContextsFirst(t *testing.T) {
 			state := FeatureFlagTFModel{
 				BaseProjectID:      core.BaseProjectID{ProjectID: types.StringValue("1")},
 				Key:                types.StringValue("flag"),
+				Active:             types.BoolValue(tc.wasActive),
 				EvaluationContexts: contexts,
 			}
 			state.ID = types.Int64Value(7)
-			active := !tc.disable
+			active := tc.active
 			_, _, err := FeatureFlagOps{}.Update(context.Background(), client, state, httpclient.FeatureFlagRequest{
 				Key: "flag", Active: &active, EvaluationContexts: tc.requested,
 			})
