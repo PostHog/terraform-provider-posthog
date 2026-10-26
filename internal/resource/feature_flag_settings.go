@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -42,10 +43,7 @@ func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req
 	return diags
 }
 
-func known(v interface {
-	IsNull() bool
-	IsUnknown() bool
-}) bool {
+func known(v attr.Value) bool {
 	return !v.IsNull() && !v.IsUnknown()
 }
 
@@ -81,7 +79,7 @@ func (v canonicalFeatureFlagContextValidator) ValidateString(ctx context.Context
 		return
 	}
 	value := req.ConfigValue.ValueString()
-	if value != strings.ToLower(pythonStrip(value)) {
+	if value != strings.ToLower(strings.TrimSpace(value)) {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid evaluation context", v.Description(ctx))
 	}
 }

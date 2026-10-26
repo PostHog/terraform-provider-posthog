@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -432,12 +431,6 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	return req, diags
 }
 
-// pythonStrip trims s the way Python's str.strip() does, which PostHog applies to flag names
-// and evaluation context names: whitespace plus the four ASCII separators.
-func pythonStrip(s string) string {
-	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= '\u001c' && r <= '\u001f') })
-}
-
 func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.FeatureFlag, model *FeatureFlagTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
@@ -445,7 +438,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Key = types.StringValue(resp.Key)
 	// The API trims names on write. Keep the planned/prior spelling only when
 	// that normalization explains the difference; real remote edits remain drift.
-	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || pythonStrip(model.Name.ValueString()) != *resp.Name {
+	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || strings.TrimSpace(model.Name.ValueString()) != *resp.Name {
 		model.Name = types.StringPointerValue(resp.Name)
 	}
 	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)

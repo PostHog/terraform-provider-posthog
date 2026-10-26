@@ -30,13 +30,16 @@ func TestFeatureFlagSettingsRequests(t *testing.T) {
 	}{
 		{"omitted", FeatureFlagTFModel{}, nil},
 		{"unknown", FeatureFlagTFModel{
-			Archived: types.BoolUnknown(), BucketingIdentifier: types.StringUnknown(),
+			Archived: types.BoolUnknown(), BucketingIdentifier: types.StringUnknown(), EvaluationRuntime: types.StringUnknown(),
 			EvaluationContexts: types.SetUnknown(types.StringType), IsRemoteConfiguration: types.BoolUnknown(),
 		}, nil},
 		{"explicit_false_and_empty", FeatureFlagTFModel{
-			Archived: types.BoolValue(false), BucketingIdentifier: types.StringValue("distinct_id"),
+			Archived: types.BoolValue(false), BucketingIdentifier: types.StringValue("distinct_id"), EvaluationRuntime: types.StringValue("server"),
 			EvaluationContexts: types.SetValueMust(types.StringType, nil), IsRemoteConfiguration: types.BoolValue(false),
-		}, map[string]interface{}{"archived": false, "bucketing_identifier": "distinct_id", "evaluation_contexts": []interface{}{}, "is_remote_configuration": false}},
+		}, map[string]interface{}{
+			"archived": false, "bucketing_identifier": "distinct_id", "evaluation_runtime": "server",
+			"evaluation_contexts": []interface{}{}, "is_remote_configuration": false,
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			create, diags := (FeatureFlagOps{}).BuildCreateRequest(context.Background(), tc.model)
@@ -48,7 +51,7 @@ func TestFeatureFlagSettingsRequests(t *testing.T) {
 				require.NoError(t, err)
 				var body map[string]interface{}
 				require.NoError(t, json.Unmarshal(raw, &body))
-				for _, field := range []string{"archived", "bucketing_identifier", "evaluation_contexts", "is_remote_configuration"} {
+				for _, field := range []string{"archived", "bucketing_identifier", "evaluation_runtime", "evaluation_contexts", "is_remote_configuration"} {
 					if tc.want == nil {
 						assert.NotContains(t, body, field)
 					} else {

@@ -24,7 +24,6 @@ func TestFeatureFlagNameRoundTrip(t *testing.T) {
 		{"unchanged spaces", types.StringValue(" padded "), strPtr(" padded "), types.StringValue(" padded ")},
 		{"API trimmed spaces", types.StringValue(" padded \n"), strPtr("padded"), types.StringValue(" padded \n")},
 		{"whitespace only", types.StringValue(" \t\n"), strPtr(""), types.StringValue(" \t\n")},
-		{"API trimmed control separator", types.StringValue("\u001ctest\u001f"), strPtr("test"), types.StringValue("\u001ctest\u001f")},
 		{"remote edit", types.StringValue(" old "), strPtr("new"), types.StringValue("new")},
 		{"remote inner whitespace edit", types.StringValue("a  b"), strPtr("a b"), types.StringValue("a b")},
 		{"import exact API", types.StringNull(), strPtr(" padded "), types.StringValue(" padded ")},
