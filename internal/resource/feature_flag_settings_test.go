@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -79,31 +81,151 @@ func TestFeatureFlagRemoteConfigurationCreate(t *testing.T) {
 	}
 }
 
-func TestFeatureFlagGrandfatheredDevicePersistence(t *testing.T) {
+// modifyFeatureFlagPlan runs ModifyResourcePlan on an existing flag. Attributes missing from
+// prior, planned or config are null.
+func modifyFeatureFlagPlan(t *testing.T, prior, planned, config map[string]tftypes.Value) tfresource.ModifyPlanResponse {
+	t.Helper()
 	ctx := context.Background()
 	ops := FeatureFlagOps{}
 	schema := ops.Schema()
 	objectType := schema.Type().TerraformType(ctx).(tftypes.Object)
-	for _, existing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "new_combination", true: "existing_combination"}[existing], func(t *testing.T) {
-			prior := make(map[string]tftypes.Value)
-			for name, typ := range objectType.AttributeTypes {
-				prior[name] = tftypes.NewValue(typ, nil)
+	object := func(values map[string]tftypes.Value) tftypes.Value {
+		all := make(map[string]tftypes.Value)
+		for name, typ := range objectType.AttributeTypes {
+			all[name] = tftypes.NewValue(typ, nil)
+		}
+		maps.Copy(all, values)
+		return tftypes.NewValue(objectType, all)
+	}
+	req := tfresource.ModifyPlanRequest{
+		Config: tfsdk.Config{Schema: schema, Raw: object(config)},
+		State:  tfsdk.State{Schema: schema, Raw: object(prior)},
+		Plan:   tfsdk.Plan{Schema: schema, Raw: object(planned)},
+	}
+	resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
+	ops.ModifyResourcePlan(ctx, req, &resp)
+	return resp
+}
+
+func TestFeatureFlagModifyPlanSettingCombinations(t *testing.T) {
+	str := func(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
+	boolean := func(b bool) tftypes.Value { return tftypes.NewValue(tftypes.Bool, b) }
+	with := func(values map[string]tftypes.Value) map[string]tftypes.Value {
+		values["key"] = str("flag")
+		return values
+	}
+
+	for _, tc := range []struct {
+		name                   string
+		prior, planned, config map[string]tftypes.Value
+		wantPath, wantSummary  string // empty: no error
+	}{
+		{
+			name:        "new device bucketing with experience continuity",
+			prior:       with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(false)}),
+			planned:     with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
+			config:      with(map[string]tftypes.Value{"ensure_experience_continuity": boolean(true)}),
+			wantPath:    "bucketing_identifier",
+			wantSummary: "Incompatible flag settings",
+		},
+		{
+			name:    "flag that already combines them keeps it",
+			prior:   with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
+			planned: with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true), "name": str("rename")}),
+			config:  with(map[string]tftypes.Value{"name": str("rename")}),
+		},
+		{
+			name:        "config archives an active flag",
+			prior:       with(map[string]tftypes.Value{"archived": boolean(false), "active": boolean(true)}),
+			planned:     with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(true)}),
+			config:      with(map[string]tftypes.Value{"archived": boolean(true)}),
+			wantPath:    "archived",
+			wantSummary: "Cannot archive an active flag",
+		},
+		{
+			// archived = true comes from state: the flag was archived in PostHog.
+			name:        "config enables a flag archived in PostHog",
+			prior:       with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(false)}),
+			planned:     with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(true)}),
+			config:      with(map[string]tftypes.Value{"active": boolean(true)}),
+			wantPath:    "active",
+			wantSummary: "Cannot enable an archived flag",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := modifyFeatureFlagPlan(t, tc.prior, tc.planned, tc.config)
+			if tc.wantSummary == "" {
+				assert.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+				return
 			}
-			prior["key"] = tftypes.NewValue(tftypes.String, "grandfathered")
-			prior["bucketing_identifier"] = tftypes.NewValue(tftypes.String, "device_id")
-			prior["ensure_experience_continuity"] = tftypes.NewValue(tftypes.Bool, existing)
-			planned := maps.Clone(prior)
-			planned["name"] = tftypes.NewValue(tftypes.String, "unrelated update")
-			planned["ensure_experience_continuity"] = tftypes.NewValue(tftypes.Bool, true)
-			req := tfresource.ModifyPlanRequest{
-				Config: tfsdk.Config{Schema: schema, Raw: tftypes.NewValue(objectType, planned)},
-				State:  tfsdk.State{Schema: schema, Raw: tftypes.NewValue(objectType, prior)},
-				Plan:   tfsdk.Plan{Schema: schema, Raw: tftypes.NewValue(objectType, planned)},
+			require.Len(t, resp.Diagnostics.Errors(), 1, resp.Diagnostics)
+			got := resp.Diagnostics.Errors()[0]
+			assert.Equal(t, tc.wantSummary, got.Summary())
+			withPath, ok := got.(diag.DiagnosticWithPath)
+			require.True(t, ok)
+			assert.Equal(t, path.Root(tc.wantPath), withPath.Path())
+		})
+	}
+}
+
+func TestFeatureFlagModifyPlanOmittedSettings(t *testing.T) {
+	prior := map[string]tftypes.Value{
+		"key":                tftypes.NewValue(tftypes.String, "flag"),
+		"evaluation_runtime": tftypes.NewValue(tftypes.String, "server"),
+		"archived":           tftypes.NewValue(tftypes.Bool, false),
+	}
+	renamed := maps.Clone(prior)
+	renamed["name"] = tftypes.NewValue(tftypes.String, "rename")
+	config := map[string]tftypes.Value{
+		"key":      tftypes.NewValue(tftypes.String, "flag"),
+		"name":     tftypes.NewValue(tftypes.String, "rename"),
+		"archived": tftypes.NewValue(tftypes.Bool, false),
+	}
+
+	t.Run("an update plans omitted settings unknown and keeps configured ones", func(t *testing.T) {
+		resp := modifyFeatureFlagPlan(t, prior, renamed, config)
+		require.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+		var plan FeatureFlagTFModel
+		require.False(t, resp.Plan.Get(context.Background(), &plan).HasError())
+		assert.True(t, plan.EvaluationRuntime.IsUnknown())
+		assert.True(t, plan.EvaluationContexts.IsUnknown())
+		assert.Equal(t, types.BoolValue(false), plan.Archived)
+	})
+
+	t.Run("a plan with no changes keeps the state's values", func(t *testing.T) {
+		resp := modifyFeatureFlagPlan(t, prior, prior, map[string]tftypes.Value{"key": prior["key"]})
+		require.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+		var plan FeatureFlagTFModel
+		require.False(t, resp.Plan.Get(context.Background(), &plan).HasError())
+		assert.Equal(t, types.StringValue("server"), plan.EvaluationRuntime)
+	})
+}
+
+func TestCheckEvaluationContextsApplied(t *testing.T) {
+	contexts := func(names ...string) *[]string { return &names }
+	for _, tc := range []struct {
+		name      string
+		requested *[]string
+		applied   []string
+		wantError bool
+	}{
+		{"not requested", nil, []string{"web"}, false},
+		{"applied in another order", contexts("web", "api"), []string{"api", "web"}, false},
+		{"cleared", contexts(), nil, false},
+		{"ignored when setting", contexts("web"), nil, true},
+		{"ignored when clearing", contexts(), []string{"web"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkEvaluationContextsApplied(
+				httpclient.FeatureFlagRequest{EvaluationContexts: tc.requested},
+				httpclient.FeatureFlag{EvaluationContexts: tc.applied},
+			)
+			if tc.wantError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "PostHog did not apply evaluation_contexts")
+				return
 			}
-			resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
-			ops.ModifyResourcePlan(ctx, req, &resp)
-			assert.Equal(t, !existing, resp.Diagnostics.HasError(), resp.Diagnostics)
+			assert.NoError(t, err)
 		})
 	}
 }

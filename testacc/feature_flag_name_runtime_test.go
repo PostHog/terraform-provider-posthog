@@ -105,7 +105,7 @@ func TestFeatureFlag_EvaluationRuntimeDrift(t *testing.T) {
 
 func setFeatureFlagRuntime(t *testing.T, id, key, runtime string) {
 	t.Helper()
-	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+	client := testAccAPIClient()
 	_, _, err := client.UpdateFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), id, httpclient.FeatureFlagRequest{Key: key, EvaluationRuntime: &runtime})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ resource "posthog_feature_flag" "test" {
 func checkFeatureFlagAPIField(field, want string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs := s.RootModule().Resources["posthog_feature_flag.test"]
-		client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+		client := testAccAPIClient()
 		flag, _, err := client.GetFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
 		if err != nil {
 			return err
@@ -136,13 +136,9 @@ func checkFeatureFlagAPIField(field, want string) resource.TestCheckFunc {
 		var got *string
 		switch field {
 		case "name":
-			if flag.Name != nil {
-				got = flag.Name
-			}
+			got = flag.Name
 		case "evaluation_runtime":
-			if flag.EvaluationRuntime != nil {
-				got = flag.EvaluationRuntime
-			}
+			got = flag.EvaluationRuntime
 		}
 		if got == nil {
 			return fmt.Errorf("API %s is null, want %q", field, want)
@@ -166,8 +162,13 @@ func TestFeatureFlag_EvaluationRuntimeSavedPlan(t *testing.T) {
 				return nil
 			}},
 			{
-				Config:           testAccFeatureFlagWithName(key, "unrelated update", true),
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{changeFlagRuntimeAfterPlan{flagID: &flagID, key: key}}},
+				Config: testAccFeatureFlagWithName(key, "unrelated update", true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{runAfterPlan(func(ctx context.Context) error {
+					client := testAccAPIClient()
+					runtime := "server"
+					_, _, err := client.UpdateFeatureFlag(ctx, os.Getenv("POSTHOG_PROJECT_ID"), flagID, httpclient.FeatureFlagRequest{Key: key, EvaluationRuntime: &runtime})
+					return err
+				})}},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "evaluation_runtime", "server"),
 					checkFeatureFlagAPIField("evaluation_runtime", "server"),
@@ -177,17 +178,6 @@ func TestFeatureFlag_EvaluationRuntimeSavedPlan(t *testing.T) {
 			{Config: testAccFeatureFlagRuntime(key, "client"), Check: checkFeatureFlagAPIField("evaluation_runtime", "client")},
 		},
 	})
-}
-
-type changeFlagRuntimeAfterPlan struct {
-	flagID *string
-	key    string
-}
-
-func (c changeFlagRuntimeAfterPlan) CheckPlan(ctx context.Context, _ plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {
-	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
-	runtime := "server"
-	_, _, resp.Error = client.UpdateFeatureFlag(ctx, os.Getenv("POSTHOG_PROJECT_ID"), *c.flagID, httpclient.FeatureFlagRequest{Key: c.key, EvaluationRuntime: &runtime})
 }
 
 func testAccFeatureFlagRuntime(key, runtime string) string {
@@ -211,7 +201,7 @@ func TestFeatureFlag_NameDrift(t *testing.T) {
 				return nil
 			}},
 			{Config: config, PreConfig: func() {
-				client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+				client := testAccAPIClient()
 				name := "remote edit"
 				_, _, err := client.UpdateFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), flagID, httpclient.FeatureFlagRequest{Key: key, Name: &name})
 				if err != nil {

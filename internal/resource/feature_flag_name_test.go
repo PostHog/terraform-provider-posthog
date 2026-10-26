@@ -17,16 +17,17 @@ func TestFeatureFlagNameRoundTrip(t *testing.T) {
 		api   *string
 		want  types.String
 	}{
-		{"empty", types.StringValue(""), stringPtr(""), types.StringValue("")},
-		{"omitted", types.StringUnknown(), stringPtr(""), types.StringValue("")},
-		{"import empty", types.StringNull(), stringPtr(""), types.StringValue("")},
+		{"empty", types.StringValue(""), strPtr(""), types.StringValue("")},
+		{"omitted", types.StringUnknown(), strPtr(""), types.StringValue("")},
+		{"import empty", types.StringNull(), strPtr(""), types.StringValue("")},
 		{"null API", types.StringValue("old"), nil, types.StringNull()},
-		{"unchanged spaces", types.StringValue(" padded "), stringPtr(" padded "), types.StringValue(" padded ")},
-		{"API trimmed spaces", types.StringValue(" padded \n"), stringPtr("padded"), types.StringValue(" padded \n")},
-		{"whitespace only", types.StringValue(" \t\n"), stringPtr(""), types.StringValue(" \t\n")},
-		{"API trimmed control separator", types.StringValue("\u001ctest\u001f"), stringPtr("test"), types.StringValue("\u001ctest\u001f")},
-		{"remote edit", types.StringValue(" old "), stringPtr("new"), types.StringValue("new")},
-		{"import exact API", types.StringNull(), stringPtr(" padded "), types.StringValue(" padded ")},
+		{"unchanged spaces", types.StringValue(" padded "), strPtr(" padded "), types.StringValue(" padded ")},
+		{"API trimmed spaces", types.StringValue(" padded \n"), strPtr("padded"), types.StringValue(" padded \n")},
+		{"whitespace only", types.StringValue(" \t\n"), strPtr(""), types.StringValue(" \t\n")},
+		{"API trimmed control separator", types.StringValue("\u001ctest\u001f"), strPtr("test"), types.StringValue("\u001ctest\u001f")},
+		{"remote edit", types.StringValue(" old "), strPtr("new"), types.StringValue("new")},
+		{"remote inner whitespace edit", types.StringValue("a  b"), strPtr("a b"), types.StringValue("a b")},
+		{"import exact API", types.StringNull(), strPtr(" padded "), types.StringValue(" padded ")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := FeatureFlagTFModel{Name: tc.prior}
@@ -36,5 +37,3 @@ func TestFeatureFlagNameRoundTrip(t *testing.T) {
 		})
 	}
 }
-
-func stringPtr(s string) *string { return &s }

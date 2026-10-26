@@ -3,12 +3,67 @@ package resource
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/posthog/terraform-provider/internal/httpclient"
 )
+
+// bucketingByDevice is the bucketing_identifier PostHog refuses to combine with new uses of
+// ensure_experience_continuity.
+const bucketingByDevice = "device_id"
+
+// applyFeatureFlagSettings copies the flag settings the model knows into req. Omitted and unknown
+// settings are left out of the request, so PostHog keeps its values for them.
+func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req *httpclient.FeatureFlagRequest) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if known(model.EvaluationRuntime) {
+		req.EvaluationRuntime = model.EvaluationRuntime.ValueStringPointer()
+	}
+	if known(model.BucketingIdentifier) {
+		req.BucketingIdentifier = model.BucketingIdentifier.ValueStringPointer()
+	}
+	if known(model.Archived) {
+		req.Archived = model.Archived.ValueBoolPointer()
+	}
+	if known(model.IsRemoteConfiguration) {
+		req.IsRemoteConfiguration = model.IsRemoteConfiguration.ValueBoolPointer()
+	}
+	if known(model.EvaluationContexts) {
+		// An empty set is sent as [] so it clears the flag's contexts.
+		contexts := []string{}
+		diags.Append(model.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
+		req.EvaluationContexts = &contexts
+	}
+	return diags
+}
+
+func known(v interface {
+	IsNull() bool
+	IsUnknown() bool
+}) bool {
+	return !v.IsNull() && !v.IsUnknown()
+}
+
+// checkEvaluationContextsApplied reports when PostHog accepted a create or update but kept the
+// flag's previous evaluation contexts. PostHog skips them without an error unless evaluation
+// contexts are enabled for the organization, which otherwise surfaces only as Terraform's
+// generic "Provider produced inconsistent result after apply".
+func checkEvaluationContextsApplied(req httpclient.FeatureFlagRequest, flag httpclient.FeatureFlag) error {
+	if req.EvaluationContexts == nil {
+		return nil
+	}
+	requested := slices.Sorted(slices.Values(*req.EvaluationContexts))
+	applied := slices.Sorted(slices.Values(flag.EvaluationContexts))
+	if slices.Equal(requested, applied) {
+		return nil
+	}
+	return fmt.Errorf("PostHog did not apply evaluation_contexts (requested %q, the flag has %q); PostHog ignores evaluation contexts unless the feature is enabled for your organization", requested, applied)
+}
 
 // Validate before sending values the API would normalize and change in state.
 type canonicalFeatureFlagContextValidator struct{}
@@ -26,7 +81,7 @@ func (v canonicalFeatureFlagContextValidator) ValidateString(ctx context.Context
 		return
 	}
 	value := req.ConfigValue.ValueString()
-	if value != strings.ToLower(trimFeatureFlagName(value)) {
+	if value != strings.ToLower(pythonStrip(value)) {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid evaluation context", v.Description(ctx))
 	}
 }

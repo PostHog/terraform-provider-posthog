@@ -106,7 +106,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				ElementType:         types.StringType,
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. Requires evaluation contexts support on the PostHog server.",
+				MarkdownDescription: "Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. PostHog applies contexts only when evaluation contexts are enabled for your organization; otherwise the apply fails with an error that says so.",
 				Validators:          []validator.Set{setvalidator.SizeAtMost(50), setvalidator.ValueStringsAre(stringvalidator.UTF8LengthBetween(1, 255), canonicalFeatureFlagContextValidator{})},
 			},
 			"is_remote_configuration": schema.BoolAttribute{
@@ -178,64 +178,84 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// Omitted settings are read-only during updates. The deprecated usage
-// dashboard option is rejected only for new flags.
+// ModifyResourcePlan rejects setting combinations PostHog refuses, plans settings the config
+// leaves out as unknown on updates, and rejects options PostHog cannot honor on new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
 	}
-	var plan FeatureFlagTFModel
+	var plan, config FeatureFlagTFModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	var state *FeatureFlagTFModel
+	if !req.State.Raw.IsNull() {
+		state = &FeatureFlagTFModel{}
+		resp.Diagnostics.Append(req.State.Get(ctx, state)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if plan.Archived.ValueBool() && plan.Active.ValueBool() {
-		resp.Diagnostics.AddAttributeError(path.Root("archived"), "Cannot archive an active flag", "Set active = false when archived = true.")
-	}
-	if plan.BucketingIdentifier.ValueString() == "device_id" && plan.EnsureExperienceContinuity.ValueBool() {
-		var state FeatureFlagTFModel
-		if !req.State.Raw.IsNull() {
-			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-		}
-		if state.BucketingIdentifier.ValueString() != "device_id" || !state.EnsureExperienceContinuity.ValueBool() {
-			resp.Diagnostics.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
-		}
-	}
-	if !req.State.Raw.IsNull() {
-		// Keep no-op plans stable, but do not freeze omitted settings into a
-		// saved update plan: another caller may change them before apply.
+
+	resp.Diagnostics.Append(validateFeatureFlagSettingCombinations(plan, config, state)...)
+
+	if state != nil {
+		// A plan that changes nothing keeps the state's values, so it stays empty.
 		if !req.Plan.Raw.Equal(req.State.Raw) {
-			var config FeatureFlagTFModel
-			resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-			if resp.Diagnostics.HasError() {
-				return
-			}
-			for _, setting := range []struct {
-				name                string
-				configured, unknown attr.Value
-			}{
-				{"evaluation_runtime", config.EvaluationRuntime, types.StringUnknown()},
-				{"bucketing_identifier", config.BucketingIdentifier, types.StringUnknown()},
-				{"archived", config.Archived, types.BoolUnknown()},
-				{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
-				{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
-			} {
-				if setting.configured.IsNull() {
-					resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
-				}
-			}
+			planOmittedSettingsUnknown(ctx, config, resp)
 		}
-		return
-	}
-	resp.Diagnostics.Append(validateRemoteConfigurationCreate(plan)...)
-	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
 		return
 	}
 
-	resp.Diagnostics.AddError(
-		"Unsupported create_usage_dashboard",
-		"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
-	)
+	resp.Diagnostics.Append(validateRemoteConfigurationCreate(plan)...)
+	if plan.CreateUsageDashboard.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Unsupported create_usage_dashboard",
+			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
+		)
+	}
+}
+
+// validateFeatureFlagSettingCombinations rejects plans PostHog would refuse. state is nil for a
+// new flag.
+func validateFeatureFlagSettingCombinations(plan, config FeatureFlagTFModel, state *FeatureFlagTFModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	if plan.Archived.ValueBool() && plan.Active.ValueBool() {
+		if config.Archived.IsNull() {
+			// archived comes from PostHog, so the config is enabling a flag archived there.
+			diags.AddAttributeError(path.Root("active"), "Cannot enable an archived flag", "This flag is archived in PostHog. Set archived = false to enable it.")
+		} else {
+			diags.AddAttributeError(path.Root("archived"), "Cannot archive an active flag", "Set active = false when archived = true.")
+		}
+	}
+
+	// PostHog lets flags that already combine device bucketing with experience continuity keep it.
+	alreadyCombined := state != nil && state.BucketingIdentifier.ValueString() == bucketingByDevice && state.EnsureExperienceContinuity.ValueBool()
+	if plan.BucketingIdentifier.ValueString() == bucketingByDevice && plan.EnsureExperienceContinuity.ValueBool() && !alreadyCombined {
+		diags.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
+	}
+
+	return diags
+}
+
+// planOmittedSettingsUnknown plans the settings the config leaves out as unknown, so an update
+// does not send them and PostHog keeps its current values. Planning them from state instead would
+// let a saved plan, or one made with -refresh=false, overwrite changes made in PostHog since.
+func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	for _, setting := range []struct {
+		name                string
+		configured, unknown attr.Value
+	}{
+		{"evaluation_runtime", config.EvaluationRuntime, types.StringUnknown()},
+		{"bucketing_identifier", config.BucketingIdentifier, types.StringUnknown()},
+		{"archived", config.Archived, types.BoolUnknown()},
+		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
+		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+	} {
+		if setting.configured.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
+		}
+	}
 }
 
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
@@ -261,23 +281,7 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		req.Name = &name
 	}
 
-	if !model.EvaluationRuntime.IsNull() && !model.EvaluationRuntime.IsUnknown() {
-		req.EvaluationRuntime = model.EvaluationRuntime.ValueStringPointer()
-	}
-	if !model.BucketingIdentifier.IsNull() && !model.BucketingIdentifier.IsUnknown() {
-		req.BucketingIdentifier = model.BucketingIdentifier.ValueStringPointer()
-	}
-	if !model.Archived.IsNull() && !model.Archived.IsUnknown() {
-		req.Archived = model.Archived.ValueBoolPointer()
-	}
-	if !model.IsRemoteConfiguration.IsNull() && !model.IsRemoteConfiguration.IsUnknown() {
-		req.IsRemoteConfiguration = model.IsRemoteConfiguration.ValueBoolPointer()
-	}
-	if !model.EvaluationContexts.IsNull() && !model.EvaluationContexts.IsUnknown() {
-		contexts := []string{}
-		diags.Append(model.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
-		req.EvaluationContexts = &contexts
-	}
+	diags.Append(applyFeatureFlagSettings(ctx, model, &req)...)
 
 	if !model.Active.IsNull() {
 		active := model.Active.ValueBool()
@@ -357,23 +361,7 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.Name = &name
 	}
 
-	if !plan.EvaluationRuntime.IsNull() && !plan.EvaluationRuntime.IsUnknown() {
-		req.EvaluationRuntime = plan.EvaluationRuntime.ValueStringPointer()
-	}
-	if !plan.BucketingIdentifier.IsNull() && !plan.BucketingIdentifier.IsUnknown() {
-		req.BucketingIdentifier = plan.BucketingIdentifier.ValueStringPointer()
-	}
-	if !plan.Archived.IsNull() && !plan.Archived.IsUnknown() {
-		req.Archived = plan.Archived.ValueBoolPointer()
-	}
-	if !plan.IsRemoteConfiguration.IsNull() && !plan.IsRemoteConfiguration.IsUnknown() {
-		req.IsRemoteConfiguration = plan.IsRemoteConfiguration.ValueBoolPointer()
-	}
-	if !plan.EvaluationContexts.IsNull() && !plan.EvaluationContexts.IsUnknown() {
-		contexts := []string{}
-		diags.Append(plan.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
-		req.EvaluationContexts = &contexts
-	}
+	diags.Append(applyFeatureFlagSettings(ctx, plan, &req)...)
 
 	if !plan.Active.IsNull() {
 		active := plan.Active.ValueBool()
@@ -437,9 +425,10 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	return req, diags
 }
 
-// DRF uses Python str.strip(), which also removes the four ASCII separators.
-func trimFeatureFlagName(name string) string {
-	return strings.TrimFunc(name, func(r rune) bool { return unicode.IsSpace(r) || (r >= '\u001c' && r <= '\u001f') })
+// pythonStrip trims s the way Python's str.strip() does, which PostHog applies to flag names
+// and evaluation context names: whitespace plus the four ASCII separators.
+func pythonStrip(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= '\u001c' && r <= '\u001f') })
 }
 
 func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.FeatureFlag, model *FeatureFlagTFModel) diag.Diagnostics {
@@ -449,7 +438,7 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.Key = types.StringValue(resp.Key)
 	// The API trims names on write. Keep the planned/prior spelling only when
 	// that normalization explains the difference; real remote edits remain drift.
-	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || trimFeatureFlagName(model.Name.ValueString()) != *resp.Name {
+	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || pythonStrip(model.Name.ValueString()) != *resp.Name {
 		model.Name = types.StringPointerValue(resp.Name)
 	}
 	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)
@@ -613,7 +602,17 @@ func isEmptyFeatureFlagFilterValue(value interface{}) bool {
 }
 
 func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
-	return client.CreateFeatureFlag(ctx, model.GetEffectiveProjectID(), req)
+	projectID := model.GetEffectiveProjectID()
+	flag, err := client.CreateFeatureFlag(ctx, projectID, req)
+	if err != nil {
+		return flag, err
+	}
+	if err := checkEvaluationContextsApplied(req, flag); err != nil {
+		// The flag exists in PostHog but is not saved to state. Deleting it would not free its
+		// key, because PostHog keeps deleted flags' keys, so say how to adopt it instead.
+		return flag, fmt.Errorf("%w. PostHog created the flag anyway (ID %d): remove evaluation_contexts from the configuration and import the flag with ID %s/%d before applying again", err, flag.ID, projectID, flag.ID)
+	}
+	return flag, nil
 }
 
 func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
@@ -621,7 +620,11 @@ func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClien
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	flag, status, err := client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	if err != nil {
+		return flag, status, err
+	}
+	return flag, status, checkEvaluationContextsApplied(req, flag)
 }
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {

@@ -148,7 +148,7 @@ func TestFeatureFlag_SettingsSavedPlan(t *testing.T) {
 				return nil
 			}},
 			{Config: config,
-				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{changeFlagSettingsAfterPlan{flagID: &flagID, key: key}}},
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{runAfterPlan(func(ctx context.Context) error { return changeFeatureFlagSettings(ctx, flagID, key) })}},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "archived", "true"),
 					resource.TestCheckResourceAttr("posthog_feature_flag.test", "bucketing_identifier", "device_id"),
@@ -171,17 +171,16 @@ is_remote_configuration = false`), Check: resource.ComposeAggregateTestCheckFunc
 	})
 }
 
-type changeFlagSettingsAfterPlan struct {
-	flagID *string
-	key    string
-}
+// runAfterPlan runs its function between plan and apply, standing in for a change made in
+// PostHog after a saved plan was made.
+type runAfterPlan func(context.Context) error
 
-func (c changeFlagSettingsAfterPlan) CheckPlan(ctx context.Context, _ plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {
-	resp.Error = changeFeatureFlagSettings(ctx, *c.flagID, c.key)
+func (f runAfterPlan) CheckPlan(ctx context.Context, _ plancheck.CheckPlanRequest, resp *plancheck.CheckPlanResponse) {
+	resp.Error = f(ctx)
 }
 
 func changeFeatureFlagSettings(ctx context.Context, id, key string) error {
-	client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+	client := testAccAPIClient()
 	enabled, disabled, identifier, contexts := true, false, "device_id", []string{"web"}
 	_, _, err := client.UpdateFeatureFlag(ctx, os.Getenv("POSTHOG_PROJECT_ID"), id, httpclient.FeatureFlagRequest{
 		Key: key, Active: &disabled, Archived: &enabled, BucketingIdentifier: &identifier,
