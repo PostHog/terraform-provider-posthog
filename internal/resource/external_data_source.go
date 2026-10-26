@@ -167,7 +167,7 @@ func (o ExternalDataSourceOps) BuildCreateRequest(ctx context.Context, model Ext
 		"source_type": model.SourceType.ValueString(),
 		"payload":     payload,
 	}
-	if !model.Prefix.IsNull() && !model.Prefix.IsUnknown() {
+	if core.IsKnown(model.Prefix) {
 		req["prefix"] = model.Prefix.ValueString()
 	}
 

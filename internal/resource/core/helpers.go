@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -161,4 +162,9 @@ func OrganizationIDSchemaAttribute() schema.StringAttribute {
 			stringplanmodifier.UseStateForUnknown(),
 		},
 	}
+}
+
+// IsKnown reports whether a value is neither null nor unknown.
+func IsKnown(v attr.Value) bool {
+	return !v.IsNull() && !v.IsUnknown()
 }

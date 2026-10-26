@@ -264,7 +264,7 @@ func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFla
 // plan promises the filters as written, so the apply could never succeed.
 func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	if !known(config.Filters) || !known(config.RolloutPercentage) {
+	if !core.IsKnown(config.Filters) || !core.IsKnown(config.RolloutPercentage) {
 		return diags
 	}
 	var filters struct {
@@ -296,7 +296,7 @@ func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
 // filters are already known, the percentage does not change or is unknown until apply, or the
 // flag has no filters yet.
 func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes.Normalized, ok bool, err error) {
-	if !plan.Filters.IsUnknown() || !rolloutChanges(plan, state) || !known(state.Filters) {
+	if !plan.Filters.IsUnknown() || !rolloutChanges(plan, state) || !core.IsKnown(state.Filters) {
 		return planned, false, nil
 	}
 	filters, err := filtersWithRollout(state.Filters, plan.RolloutPercentage)
@@ -402,7 +402,7 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	var filters map[string]interface{}
 	var err error
 	switch {
-	case known(plan.Filters):
+	case core.IsKnown(plan.Filters):
 		filters, err = filtersWithRollout(plan.Filters, plan.RolloutPercentage)
 	case rolloutChanges(plan, state):
 		filters, err = filtersWithRollout(state.Filters, plan.RolloutPercentage)
@@ -641,14 +641,14 @@ func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogCli
 
 // rolloutChanges reports whether the plan sets a rollout percentage the flag does not have.
 func rolloutChanges(plan, state FeatureFlagTFModel) bool {
-	return known(plan.RolloutPercentage) && !plan.RolloutPercentage.Equal(state.RolloutPercentage)
+	return core.IsKnown(plan.RolloutPercentage) && !plan.RolloutPercentage.Equal(state.RolloutPercentage)
 }
 
 // filtersWithRollout parses filters, or starts a single release condition when there are none,
 // and applies the rollout percentage to the first condition.
 func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64) (map[string]interface{}, error) {
 	var filters map[string]interface{}
-	if known(filtersJSON) {
+	if core.IsKnown(filtersJSON) {
 		if err := json.Unmarshal([]byte(filtersJSON.ValueString()), &filters); err != nil {
 			return nil, err
 		}
@@ -664,7 +664,7 @@ func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64
 // condition's rollout, to filters in place. The other release conditions and filter keys are
 // left as they are. A null or unknown percentage changes nothing.
 func setFirstGroupRolloutPercentage(filters map[string]interface{}, percentage types.Int64) {
-	if !known(percentage) {
+	if !core.IsKnown(percentage) {
 		return
 	}
 	groups, ok := filters["groups"].([]interface{})

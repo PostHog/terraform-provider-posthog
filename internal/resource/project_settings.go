@@ -251,7 +251,7 @@ func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSetti
 	// An unset block stays nil so the PATCH omits the field entirely (leave
 	// untouched). When set, both children are sent: PostHog replaces the whole
 	// JSON blob, so a partial object would wipe the missing key server-side.
-	if !model.NetworkPayloadCapture.IsNull() && !model.NetworkPayloadCapture.IsUnknown() {
+	if core.IsKnown(model.NetworkPayloadCapture) {
 		var cfg NetworkPayloadCaptureModel
 		diags.Append(model.NetworkPayloadCapture.As(ctx, &cfg, basetypes.ObjectAsOptions{})...)
 		if !diags.HasError() {
@@ -274,7 +274,7 @@ func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSetti
 	// attribute leaves PostHog's current value untouched. A pointer to the parsed
 	// slice is used (rather than a bare slice) so an explicit empty array "[]" is
 	// sent to clear the filters instead of being dropped by omitempty.
-	if !model.TestAccountFilters.IsNull() && !model.TestAccountFilters.IsUnknown() {
+	if core.IsKnown(model.TestAccountFilters) {
 		var filters []interface{}
 		if err := json.Unmarshal([]byte(model.TestAccountFilters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid test_account_filters JSON", fmt.Sprintf("Could not parse test_account_filters: %s", err.Error()))

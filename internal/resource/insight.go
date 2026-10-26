@@ -143,7 +143,7 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 	// Build the query from either the raw HogQL SQL (query_sql) or the raw JSON
 	// payload (query_json). The schema enforces exactly one is set.
 	switch {
-	case !model.QuerySQL.IsNull() && !model.QuerySQL.IsUnknown():
+	case core.IsKnown(model.QuerySQL):
 		// Send the SQL verbatim: PostHog stores and echoes it byte-for-byte
 		// (including trailing newlines from file()/heredoc), so any trimming
 		// here would make the stored value diverge from config and produce an
@@ -154,7 +154,7 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 			return input, diags
 		}
 		input.Query = buildHogQLQuery(sql)
-	case !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown():
+	case core.IsKnown(model.QueryJSON):
 		raw := strings.TrimSpace(model.QueryJSON.ValueString())
 		if raw == "" {
 			diags.AddError("Invalid query_json", "query_json cannot be empty")
@@ -168,25 +168,25 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 		input.Query = query
 	}
 
-	if !model.Name.IsNull() && !model.Name.IsUnknown() {
+	if core.IsKnown(model.Name) {
 		name := model.Name.ValueString()
 		input.Name = &name
 	}
-	if !model.DerivedName.IsNull() && !model.DerivedName.IsUnknown() {
+	if core.IsKnown(model.DerivedName) {
 		derivedName := model.DerivedName.ValueString()
 		input.DerivedName = &derivedName
 	}
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
+	if core.IsKnown(model.Description) {
 		desc := model.Description.ValueString()
 		input.Description = &desc
 	}
-	if !model.CreateInFolder.IsNull() && !model.CreateInFolder.IsUnknown() {
+	if core.IsKnown(model.CreateInFolder) {
 		folder := model.CreateInFolder.ValueString()
 		input.CreateInFolder = &folder
 	}
 
 	// Tags
-	if !model.Tags.IsNull() && !model.Tags.IsUnknown() {
+	if core.IsKnown(model.Tags) {
 		tags, d := core.ExtractTags(ctx, model.Tags)
 		diags.Append(d...)
 		if diags.HasError() {
@@ -259,7 +259,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 
 	// Query - map the API response back into whichever attribute the config uses.
 	if resp.Query != nil {
-		if !model.QuerySQL.IsNull() && !model.QuerySQL.IsUnknown() {
+		if core.IsKnown(model.QuerySQL) {
 			// query_sql round-trips verbatim, so no normalization is needed.
 			sql, ok := extractHogQLSourceQuery(resp.Query)
 			if !ok {
@@ -277,7 +277,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 			// fields from user's config. This enables drift detection for
 			// user-specified fields while ignoring server-added fields.
 			userQueryJSON := ""
-			if !model.QueryJSON.IsNull() && !model.QueryJSON.IsUnknown() {
+			if core.IsKnown(model.QueryJSON) {
 				userQueryJSON = model.QueryJSON.ValueString()
 			}
 			normalizedQuery, err := normalizeQueryForState(resp.Query, userQueryJSON)

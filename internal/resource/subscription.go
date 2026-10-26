@@ -259,7 +259,7 @@ func (o SubscriptionOps) BuildCreateRequest(ctx context.Context, model Subscript
 	// create. [] both creates-as-unset and clears-on-update. (An empty selection on a
 	// dashboard sub is still rejected server-side, which is the intended validation error.)
 	ids := []int64{}
-	if !model.DashboardExportInsights.IsNull() && !model.DashboardExportInsights.IsUnknown() {
+	if core.IsKnown(model.DashboardExportInsights) {
 		diags.Append(model.DashboardExportInsights.ElementsAs(ctx, &ids, false)...)
 		if diags.HasError() {
 			return req, diags
@@ -268,7 +268,7 @@ func (o SubscriptionOps) BuildCreateRequest(ctx context.Context, model Subscript
 	req.DashboardExportInsights = ids
 
 	days := []string{}
-	if !model.ByWeekday.IsNull() && !model.ByWeekday.IsUnknown() {
+	if core.IsKnown(model.ByWeekday) {
 		diags.Append(model.ByWeekday.ElementsAs(ctx, &days, false)...)
 		if diags.HasError() {
 			return req, diags
@@ -375,7 +375,7 @@ func aiPromptConfigToModel(raw json.RawMessage, current jsontypes.Normalized) js
 // it adopts the API's normalized value.
 func reconcileStartDate(config types.String, apiValue string, diags *diag.Diagnostics) types.String {
 	apiState := normalizeDateTimeToModel(apiValue, diags)
-	if !config.IsNull() && !config.IsUnknown() && !apiState.IsNull() {
+	if core.IsKnown(config) && !apiState.IsNull() {
 		if cfgNorm, err := core.NormalizeRFC3339(config.ValueString()); err == nil && cfgNorm == apiState.ValueString() {
 			return config
 		}

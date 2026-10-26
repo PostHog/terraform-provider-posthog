@@ -7,40 +7,36 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/internal/resource/core"
 )
 
 // applyFeatureFlagSettings copies the flag settings the model knows into req. Omitted and unknown
 // settings are left out of the request, so PostHog keeps its values for them.
 func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req *httpclient.FeatureFlagRequest) diag.Diagnostics {
 	var diags diag.Diagnostics
-	if known(model.EvaluationRuntime) {
+	if core.IsKnown(model.EvaluationRuntime) {
 		req.EvaluationRuntime = model.EvaluationRuntime.ValueStringPointer()
 	}
-	if known(model.BucketingIdentifier) {
+	if core.IsKnown(model.BucketingIdentifier) {
 		req.BucketingIdentifier = model.BucketingIdentifier.ValueStringPointer()
 	}
-	if known(model.Archived) {
+	if core.IsKnown(model.Archived) {
 		req.Archived = model.Archived.ValueBoolPointer()
 	}
-	if known(model.IsRemoteConfiguration) {
+	if core.IsKnown(model.IsRemoteConfiguration) {
 		req.IsRemoteConfiguration = model.IsRemoteConfiguration.ValueBoolPointer()
 	}
-	if known(model.EvaluationContexts) {
+	if core.IsKnown(model.EvaluationContexts) {
 		// An empty set is sent as [] so it clears the flag's contexts.
 		contexts := []string{}
 		diags.Append(model.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
 		req.EvaluationContexts = &contexts
 	}
 	return diags
-}
-
-func known(v attr.Value) bool {
-	return !v.IsNull() && !v.IsUnknown()
 }
 
 // checkEvaluationContextsApplied reports when PostHog accepted a create or update but kept the
@@ -85,7 +81,7 @@ func validateRemoteConfigurationCreate(plan FeatureFlagTFModel) diag.Diagnostics
 	if !plan.IsRemoteConfiguration.ValueBool() {
 		return diags
 	}
-	if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() && plan.RolloutPercentage.ValueInt64() == 0 {
+	if core.IsKnown(plan.RolloutPercentage) && plan.RolloutPercentage.ValueInt64() == 0 {
 		diags.AddAttributeError(path.Root("rollout_percentage"), "Invalid remote configuration rollout", "PostHog changes a zero rollout to 100 when creating remote configuration. Omit rollout_percentage or set a nonzero percentage.")
 	}
 	if plan.Filters.IsNull() || plan.Filters.IsUnknown() {
@@ -101,7 +97,7 @@ func validateRemoteConfigurationCreate(plan FeatureFlagTFModel) diag.Diagnostics
 		condition, _ := group.(map[string]interface{})
 		percentage, ok := condition["rollout_percentage"].(float64)
 		// Both configured values must survive the API response unchanged.
-		if index == 0 && !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() && percentage != float64(plan.RolloutPercentage.ValueInt64()) {
+		if index == 0 && core.IsKnown(plan.RolloutPercentage) && percentage != float64(plan.RolloutPercentage.ValueInt64()) {
 			valid = false
 		}
 		if !ok || percentage == 0 {
