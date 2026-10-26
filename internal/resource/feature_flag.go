@@ -633,24 +633,7 @@ func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClien
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	projectID, id := model.GetEffectiveProjectID(), model.GetID()
-	enables := req.Active != nil && *req.Active && !model.Active.ValueBool()
-	if enables && contextsChange(ctx, req, model) {
-		// Set the contexts while the flag is still disabled, and enable it only once PostHog has
-		// stored them. PostHog ignores contexts unless the feature is enabled for the
-		// organization, and in one request it would still enable the flag, in every context.
-		flag, status, err := client.UpdateFeatureFlag(ctx, projectID, id, httpclient.FeatureFlagRequest{
-			Key:                model.Key.ValueString(),
-			EvaluationContexts: req.EvaluationContexts,
-		})
-		if err != nil {
-			return flag, status, err
-		}
-		if err := checkEvaluationContextsApplied(req, flag); err != nil {
-			return flag, status, fmt.Errorf("%w. The flag was not enabled, and nothing else in this update was applied", err)
-		}
-	}
-	flag, status, err := client.UpdateFeatureFlag(ctx, projectID, id, req)
+	flag, status, err := client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
 	if err != nil {
 		return flag, status, err
 	}

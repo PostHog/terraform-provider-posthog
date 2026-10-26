@@ -45,25 +45,6 @@ func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req
 	return diags
 }
 
-// contextsChange reports whether an update sets evaluation contexts the flag does not have yet.
-// model is the flag's state; a null or unknown state reads as no contexts.
-func contextsChange(ctx context.Context, req httpclient.FeatureFlagRequest, model FeatureFlagTFModel) bool {
-	if req.EvaluationContexts == nil {
-		return false
-	}
-	var current []string
-	if core.IsKnown(model.EvaluationContexts) {
-		// State written by this provider always holds strings, so this cannot fail.
-		_ = model.EvaluationContexts.ElementsAs(ctx, &current, false)
-	}
-	return !sameContexts(*req.EvaluationContexts, current)
-}
-
-// sameContexts reports whether two lists hold the same evaluation contexts, in any order.
-func sameContexts(a, b []string) bool {
-	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
-}
-
 // checkEvaluationContextsApplied reports when PostHog accepted a create or update but kept the
 // flag's previous evaluation contexts. PostHog skips them without an error unless evaluation
 // contexts are enabled for the organization, which otherwise surfaces only as Terraform's
@@ -72,11 +53,12 @@ func checkEvaluationContextsApplied(req httpclient.FeatureFlagRequest, flag http
 	if req.EvaluationContexts == nil {
 		return nil
 	}
-	if sameContexts(*req.EvaluationContexts, flag.EvaluationContexts) {
+	requested := slices.Sorted(slices.Values(*req.EvaluationContexts))
+	applied := slices.Sorted(slices.Values(flag.EvaluationContexts))
+	if slices.Equal(requested, applied) {
 		return nil
 	}
-	return fmt.Errorf("PostHog did not apply evaluation_contexts (requested %q, the flag has %q); PostHog ignores evaluation contexts unless the feature is enabled for your organization",
-		slices.Sorted(slices.Values(*req.EvaluationContexts)), slices.Sorted(slices.Values(flag.EvaluationContexts)))
+	return fmt.Errorf("PostHog did not apply evaluation_contexts (requested %q, the flag has %q); PostHog ignores evaluation contexts unless the feature is enabled for your organization", requested, applied)
 }
 
 // Validate before sending values the API would normalize and change in state.
