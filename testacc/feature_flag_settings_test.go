@@ -56,6 +56,7 @@ func TestFeatureFlag_BucketingIdentifier(t *testing.T) {
 
 func TestFeatureFlag_EvaluationContexts(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfEvaluationContextsDisabled(t)
 	key := acctest.RandomWithPrefix("tf-acc-test-contexts")
 	var steps []resource.TestStep
 	for _, contexts := range []struct{ config, count string }{
@@ -137,6 +138,7 @@ func TestFeatureFlag_SettingsValidation(t *testing.T) {
 
 func TestFeatureFlag_SettingsSavedPlan(t *testing.T) {
 	skipIfNotAcceptance(t)
+	skipIfEvaluationContextsDisabled(t)
 	key := acctest.RandomWithPrefix("tf-acc-test-settings-plan")
 	var flagID string
 	config := testAccFeatureFlagSettings(key, "active = false\n name = \"unrelated update\"")
@@ -169,6 +171,29 @@ is_remote_configuration = false`), Check: resource.ComposeAggregateTestCheckFunc
 			)},
 		},
 	})
+}
+
+// skipIfEvaluationContextsDisabled skips a test that needs PostHog to store evaluation contexts.
+// PostHog ignores them unless evaluation contexts are enabled for the organization, through the
+// flag-evaluation-tags feature flag, which a local stack may not have.
+func skipIfEvaluationContextsDisabled(t *testing.T) {
+	t.Helper()
+	ctx, projectID := context.Background(), os.Getenv("POSTHOG_PROJECT_ID")
+	client := testAccAPIClient()
+	contexts := []string{"web"}
+	flag, err := client.CreateFeatureFlag(ctx, projectID, httpclient.FeatureFlagRequest{
+		Key:                acctest.RandomWithPrefix("tf-acc-contexts-probe"),
+		EvaluationContexts: &contexts,
+	})
+	if err != nil {
+		t.Fatalf("failed to check whether PostHog stores evaluation contexts: %s", err)
+	}
+	if _, err := client.DeleteFeatureFlag(ctx, projectID, fmt.Sprintf("%d", flag.ID)); err != nil {
+		t.Logf("failed to delete probe flag %d, delete it by hand: %s", flag.ID, err)
+	}
+	if len(flag.EvaluationContexts) == 0 {
+		t.Skip("PostHog does not store evaluation contexts for this organization; enable the flag-evaluation-tags feature flag to run this test")
+	}
 }
 
 // runAfterPlan runs its function between plan and apply, standing in for a change made in

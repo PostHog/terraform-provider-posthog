@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/internal/resource/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -121,11 +125,20 @@ func TestFeatureFlagModifyPlanSettingCombinations(t *testing.T) {
 		wantPath, wantSummary  string // empty: no error
 	}{
 		{
-			name:        "new device bucketing with experience continuity",
+			name:        "config sets device bucketing with experience continuity",
+			prior:       with(map[string]tftypes.Value{"bucketing_identifier": str("distinct_id"), "ensure_experience_continuity": boolean(true)}),
+			planned:     with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
+			config:      with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
+			wantPath:    "bucketing_identifier",
+			wantSummary: "Incompatible flag settings",
+		},
+		{
+			// bucketing_identifier = "device_id" comes from state: it was set in PostHog.
+			name:        "config turns on continuity for a flag bucketed by device in PostHog",
 			prior:       with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(false)}),
 			planned:     with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
 			config:      with(map[string]tftypes.Value{"ensure_experience_continuity": boolean(true)}),
-			wantPath:    "bucketing_identifier",
+			wantPath:    "ensure_experience_continuity",
 			wantSummary: "Incompatible flag settings",
 		},
 		{
@@ -228,4 +241,53 @@ func TestCheckEvaluationContextsApplied(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestFeatureFlagCreateDeletesFlagWhenContextsIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		deleteFails bool
+		wantError   []string
+	}{
+		{"deleted", false, []string{"PostHog did not apply evaluation_contexts", "deleted again"}},
+		{"delete fails", true, []string{"PostHog did not apply evaluation_contexts", "serving without evaluation contexts", "Deleting it failed", "1/7"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var deleted bool
+			// PostHog with evaluation contexts disabled: it creates the flag but stores no contexts.
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.Method == http.MethodPatch {
+					if tc.deleteFails {
+						w.WriteHeader(http.StatusInternalServerError)
+						_, _ = w.Write([]byte(`{"detail":"server error"}`))
+						return
+					}
+					var body map[string]interface{}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					deleted = body["deleted"] == true
+				}
+				_, _ = w.Write([]byte(`{"id":7,"key":"flag","evaluation_contexts":[]}`))
+			}))
+			defer server.Close()
+			client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+			contexts := []string{"web"}
+
+			model := FeatureFlagTFModel{BaseProjectID: core.BaseProjectID{ProjectID: types.StringValue("1")}}
+			_, err := FeatureFlagOps{}.Create(context.Background(), client, model, httpclient.FeatureFlagRequest{Key: "flag", EvaluationContexts: &contexts})
+
+			require.Error(t, err)
+			for _, want := range tc.wantError {
+				assert.Contains(t, err.Error(), want)
+			}
+			assert.Equal(t, !tc.deleteFails, deleted)
+		})
+	}
+}
+
+func TestFeatureFlagMapResponseToModel_MissingContextsAreEmpty(t *testing.T) {
+	var model FeatureFlagTFModel
+	diags := FeatureFlagOps{}.MapResponseToModel(context.Background(), httpclient.FeatureFlag{ID: 1, Key: "flag"}, &model)
+	require.False(t, diags.HasError(), diags)
+	assert.Equal(t, types.SetValueMust(types.StringType, []attr.Value{}), model.EvaluationContexts)
 }

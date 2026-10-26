@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -232,7 +233,13 @@ func validateFeatureFlagSettingCombinations(plan, config FeatureFlagTFModel, sta
 	// PostHog lets flags that already combine device bucketing with experience continuity keep it.
 	alreadyCombined := state != nil && state.BucketingIdentifier.ValueString() == bucketingByDevice && state.EnsureExperienceContinuity.ValueBool()
 	if plan.BucketingIdentifier.ValueString() == bucketingByDevice && plan.EnsureExperienceContinuity.ValueBool() && !alreadyCombined {
-		diags.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
+		if config.BucketingIdentifier.IsNull() {
+			// bucketing_identifier comes from PostHog, so the config is turning continuity on.
+			diags.AddAttributeError(path.Root("ensure_experience_continuity"), "Incompatible flag settings",
+				`This flag uses device_id bucketing in PostHog. Set bucketing_identifier = "distinct_id", or keep ensure_experience_continuity = false.`)
+		} else {
+			diags.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
+		}
 	}
 
 	return diags
@@ -445,7 +452,13 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.BucketingIdentifier = types.StringPointerValue(resp.BucketingIdentifier)
 	model.Archived = types.BoolPointerValue(resp.Archived)
 	model.IsRemoteConfiguration = types.BoolPointerValue(resp.IsRemoteConfiguration)
-	contexts, d := types.SetValueFrom(ctx, types.StringType, resp.EvaluationContexts)
+	// PostHog versions without evaluation contexts leave the field out. Read that as no contexts
+	// rather than null, which would not match `evaluation_contexts = []` in a configuration.
+	contextNames := resp.EvaluationContexts
+	if contextNames == nil {
+		contextNames = []string{}
+	}
+	contexts, d := types.SetValueFrom(ctx, types.StringType, contextNames)
 	diags.Append(d...)
 	model.EvaluationContexts = contexts
 	model.Active = core.PtrToBool(resp.Active)
@@ -608,9 +621,14 @@ func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogCli
 		return flag, err
 	}
 	if err := checkEvaluationContextsApplied(req, flag); err != nil {
-		// The flag exists in PostHog but is not saved to state. Deleting it would not free its
-		// key, because PostHog keeps deleted flags' keys, so say how to adopt it instead.
-		return flag, fmt.Errorf("%w. PostHog created the flag anyway (ID %d): remove evaluation_contexts from the configuration and import the flag with ID %s/%d before applying again", err, flag.ID, projectID, flag.ID)
+		// The flag is not saved to state, and it would be serving in every context rather than the
+		// configured ones. Delete it: PostHog frees a deleted flag's key, so the next apply can
+		// create it again.
+		id := strconv.FormatInt(flag.ID, 10)
+		if _, deleteErr := client.DeleteFeatureFlag(ctx, projectID, id); deleteErr != nil {
+			return flag, fmt.Errorf("%w. PostHog created the flag anyway (ID %d), and it is serving without evaluation contexts. Deleting it failed: %v. Delete it in PostHog, or import it with ID %s/%s, before applying again", err, flag.ID, deleteErr, projectID, id)
+		}
+		return flag, fmt.Errorf("%w. The flag PostHog created was deleted again, so nothing was left behind", err)
 	}
 	return flag, nil
 }
