@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -147,9 +149,12 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 					"A key you also declare inside `filters` is always tracked (explicit config wins over the ignore list).",
 			},
 			"rollout_percentage": schema.Int64Attribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Rollout percentage (0-100)",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Rollout percentage (0-100) of the flag's first release condition (`filters.groups[0]`). " +
+					"Without `filters`, changing it changes only that condition's rollout and keeps the flag's other conditions, targeting, variants and payloads, " +
+					"so a flag created in the PostHog UI and imported keeps its targeting. " +
+					"With `filters`, leave it out or set it to the first condition's `rollout_percentage`.",
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.UseStateForUnknown(),
 				},
@@ -178,8 +183,8 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// ModifyResourcePlan plans settings the config leaves out as unknown on updates, and rejects
-// options PostHog cannot honor on new flags.
+// ModifyResourcePlan plans what an update leaves on the flag for settings the config leaves out,
+// and rejects options PostHog cannot honor on new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
@@ -190,11 +195,18 @@ func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mod
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(validateRolloutMatchesFilters(config)...)
 
 	if !req.State.Raw.IsNull() {
 		// A plan that changes nothing keeps the state's values, so it stays empty.
 		if !req.Plan.Raw.Equal(req.State.Raw) {
+			var state FeatureFlagTFModel
+			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
 			planOmittedSettingsUnknown(ctx, config, resp)
+			planUnconfiguredFilters(ctx, plan, config, state, resp)
 		}
 		return
 	}
@@ -226,6 +238,86 @@ func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, 
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
 		}
 	}
+}
+
+// planUnconfiguredFilters plans the filters an update leaves on the flag when the config does not
+// set them. When rollout_percentage changes, the plan shows the flag's current filters with the
+// new rollout, instead of "(known after apply)", which would hide that the update rewrites the
+// flag's release conditions.
+func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	if !config.Filters.IsNull() {
+		// The configured filters own the rollout, so read rollout_percentage back from them.
+		if config.RolloutPercentage.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("rollout_percentage"), types.Int64Unknown())...)
+		}
+		return
+	}
+	planned, ok, err := plannedFiltersForRollout(plan, state)
+	if err != nil {
+		// BuildUpdateRequest reports the same error at apply.
+		return
+	}
+	if ok {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), planned)...)
+		return
+	}
+	// Otherwise the update leaves the filters to PostHog. Plan them as they are, so a rename shows
+	// only the rename instead of every release condition turning "(known after apply)". Not when
+	// the rollout is only known at apply: then the filters may still change.
+	if plan.Filters.IsUnknown() && core.IsKnown(plan.RolloutPercentage) && core.IsKnown(state.Filters) {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), state.Filters)...)
+	}
+}
+
+// validateRolloutMatchesFilters rejects a rollout_percentage that differs from the first release
+// condition in the configured filters. The update would send the rollout_percentage while the
+// plan promises the filters as written, so the apply could never succeed.
+func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if !core.IsKnown(config.Filters) || !core.IsKnown(config.RolloutPercentage) {
+		return diags
+	}
+	var filters struct {
+		Groups []struct {
+			RolloutPercentage *float64 `json:"rollout_percentage"`
+		} `json:"groups"`
+	}
+	if json.Unmarshal([]byte(config.Filters.ValueString()), &filters) != nil {
+		return diags // The JSON type reports malformed JSON.
+	}
+	want := config.RolloutPercentage.ValueInt64()
+	found := "none"
+	if len(filters.Groups) > 0 && filters.Groups[0].RolloutPercentage != nil {
+		// PostHog accepts fractional rollouts, so compare without truncating.
+		if *filters.Groups[0].RolloutPercentage == float64(want) {
+			return diags
+		}
+		found = strconv.FormatFloat(*filters.Groups[0].RolloutPercentage, 'f', -1, 64)
+	}
+	diags.AddAttributeError(path.Root("rollout_percentage"), "rollout_percentage does not match filters",
+		fmt.Sprintf("rollout_percentage is %d, but the first release condition in filters has rollout_percentage %s. "+
+			"Set the rollout in one place: remove rollout_percentage, or set filters.groups[0].rollout_percentage to %d.", want, found, want))
+	return diags
+}
+
+// plannedFiltersForRollout returns the filters an update leaves on the flag when the config
+// does not set them and rollout_percentage changes: the flag's current filters with the new
+// percentage on the first release condition. ok is false when there is nothing to plan: the
+// filters are already known, the percentage does not change or is unknown until apply, or the
+// flag has no filters yet.
+func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes.Normalized, ok bool, err error) {
+	if !plan.Filters.IsUnknown() || !rolloutChanges(plan, state) || !core.IsKnown(state.Filters) {
+		return planned, false, nil
+	}
+	filters, err := filtersWithRollout(state.Filters, plan.RolloutPercentage)
+	if err != nil {
+		return planned, false, err
+	}
+	value, err := marshalJSON(filters)
+	if err != nil {
+		return planned, false, err
+	}
+	return jsontypes.NewNormalizedValue(value), true, nil
 }
 
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
@@ -263,42 +355,11 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		req.EnsureExperienceContinuity = &ensureExperienceContinuity
 	}
 
-	// Handle filters and rollout_percentage
-	var filters map[string]interface{}
-
-	// Check both IsNull and IsUnknown since filters is Computed
-	if core.IsKnown(model.Filters) {
-		if err := json.Unmarshal([]byte(model.Filters.ValueString()), &filters); err != nil {
-			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
-			return req, diags
-		}
-	} else {
-		// Create default filters structure
-		filters = map[string]interface{}{
-			"groups": []interface{}{
-				map[string]interface{}{},
-			},
-		}
+	filters, err := filtersWithRollout(model.Filters, model.RolloutPercentage)
+	if err != nil {
+		diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
+		return req, diags
 	}
-
-	// If rollout_percentage is provided, add it to the first group in filters
-	// rollout_percentage is a convenience field that maps to filters.groups[0].rollout_percentage
-	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if core.IsKnown(model.RolloutPercentage) {
-		percentage := int32(model.RolloutPercentage.ValueInt64())
-		groups, ok := filters["groups"].([]interface{})
-		if !ok || len(groups) == 0 {
-			groups = []interface{}{map[string]interface{}{}}
-		}
-		firstGroup, ok := groups[0].(map[string]interface{})
-		if !ok {
-			firstGroup = map[string]interface{}{}
-			groups[0] = firstGroup
-		}
-		firstGroup["rollout_percentage"] = percentage
-		filters["groups"] = groups
-	}
-
 	req.Filters = filters
 
 	if !model.Tags.IsNull() {
@@ -343,41 +404,23 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		req.EnsureExperienceContinuity = &ensureExperienceContinuity
 	}
 
-	// Handle filters and rollout_percentage
+	// Filters the config leaves out are sent only when rollout_percentage changes, and then as
+	// the flag's current filters with the new percentage. PostHog keeps the filters an update
+	// leaves out, so a rename does not write back filters that may have changed in the UI since
+	// the plan was made. ModifyResourcePlan usually plans these filters already; they are still
+	// unknown here when the rollout was unknown at plan time or the flag had no filters.
 	var filters map[string]interface{}
-
-	// Check both IsNull and IsUnknown since filters is Computed
-	if core.IsKnown(plan.Filters) {
-		if err := json.Unmarshal([]byte(plan.Filters.ValueString()), &filters); err != nil {
-			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
-			return req, diags
-		}
-	} else if core.IsKnown(plan.RolloutPercentage) {
-		// If only rollout_percentage is provided, create default filters structure
-		filters = map[string]interface{}{
-			"groups": []interface{}{
-				map[string]interface{}{},
-			},
-		}
+	var err error
+	switch {
+	case core.IsKnown(plan.Filters) && (!plan.Filters.Equal(state.Filters) || rolloutChanges(plan, state)):
+		filters, err = filtersWithRollout(plan.Filters, plan.RolloutPercentage)
+	case rolloutChanges(plan, state):
+		filters, err = filtersWithRollout(state.Filters, plan.RolloutPercentage)
 	}
-
-	// If rollout_percentage is provided, add it to the first group in filters
-	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if core.IsKnown(plan.RolloutPercentage) && filters != nil {
-		percentage := int32(plan.RolloutPercentage.ValueInt64())
-		groups, ok := filters["groups"].([]interface{})
-		if !ok || len(groups) == 0 {
-			groups = []interface{}{map[string]interface{}{}}
-		}
-		firstGroup, ok := groups[0].(map[string]interface{})
-		if !ok {
-			firstGroup = map[string]interface{}{}
-			groups[0] = firstGroup
-		}
-		firstGroup["rollout_percentage"] = percentage
-		filters["groups"] = groups
+	if err != nil {
+		diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
+		return req, diags
 	}
-
 	if filters != nil {
 		req.Filters = filters
 	}
@@ -604,6 +647,55 @@ func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogCli
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
 	return client.DeleteFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+// rolloutChanges reports whether the plan sets a rollout percentage the flag does not have.
+func rolloutChanges(plan, state FeatureFlagTFModel) bool {
+	return core.IsKnown(plan.RolloutPercentage) && !plan.RolloutPercentage.Equal(state.RolloutPercentage)
+}
+
+// filtersWithRollout parses filters, or starts a single release condition when there are none,
+// and applies the rollout percentage to the first condition.
+func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64) (map[string]interface{}, error) {
+	var filters map[string]interface{}
+	if core.IsKnown(filtersJSON) {
+		if err := json.Unmarshal([]byte(filtersJSON.ValueString()), &filters); err != nil {
+			return nil, err
+		}
+	}
+	if filters == nil {
+		filters = map[string]interface{}{"groups": []interface{}{map[string]interface{}{}}}
+	}
+	return withFirstGroupRollout(filters, percentage), nil
+}
+
+// withFirstGroupRollout returns filters with rollout_percentage, a shorthand for the first
+// release condition's rollout, applied to that condition. The other release conditions and filter
+// keys are kept, and the filters passed in are left unchanged. A null or unknown percentage
+// returns the filters as they are.
+func withFirstGroupRollout(filters map[string]interface{}, percentage types.Int64) map[string]interface{} {
+	if !core.IsKnown(percentage) {
+		return filters
+	}
+	groups, _ := filters["groups"].([]interface{})
+	groups = slices.Clone(groups)
+	if len(groups) == 0 {
+		groups = []interface{}{map[string]interface{}{}}
+	}
+	first, _ := groups[0].(map[string]interface{})
+	first = maps.Clone(first)
+	if first == nil {
+		first = map[string]interface{}{}
+	}
+	first["rollout_percentage"] = int32(percentage.ValueInt64())
+	groups[0] = first
+
+	result := maps.Clone(filters)
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+	result["groups"] = groups
+	return result
 }
 
 func extractRolloutPercentage(resp httpclient.FeatureFlag) types.Int64 {

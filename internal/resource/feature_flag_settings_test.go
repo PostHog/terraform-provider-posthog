@@ -222,3 +222,40 @@ func TestFeatureFlagMapResponseToModel_MissingContextsAreEmpty(t *testing.T) {
 	require.False(t, diags.HasError(), diags)
 	assert.Equal(t, types.SetValueMust(types.StringType, []attr.Value{}), model.EvaluationContexts)
 }
+
+func TestFeatureFlagModifyPlanUnconfiguredFilters(t *testing.T) {
+	filters := `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":25}]}`
+	str := func(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
+	num := func(n int64) tftypes.Value { return tftypes.NewValue(tftypes.Number, n) }
+	unknown := func(typ tftypes.Type) tftypes.Value { return tftypes.NewValue(typ, tftypes.UnknownValue) }
+	prior := map[string]tftypes.Value{"key": str("flag"), "filters": str(filters), "rollout_percentage": num(25)}
+
+	plannedFrom := func(t *testing.T, resp tfresource.ModifyPlanResponse) FeatureFlagTFModel {
+		t.Helper()
+		require.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
+		var plan FeatureFlagTFModel
+		require.False(t, resp.Plan.Get(context.Background(), &plan).HasError())
+		return plan
+	}
+
+	t.Run("a rename keeps filters and rollout as they are", func(t *testing.T) {
+		planned := map[string]tftypes.Value{"key": str("flag"), "name": str("Renamed"), "filters": unknown(tftypes.String), "rollout_percentage": num(25)}
+		plan := plannedFrom(t, modifyFeatureFlagPlan(t, prior, planned, map[string]tftypes.Value{"key": str("flag"), "name": str("Renamed")}))
+		assert.JSONEq(t, filters, plan.Filters.ValueString())
+		assert.Equal(t, types.Int64Value(25), plan.RolloutPercentage)
+	})
+
+	t.Run("a rollout known only at apply leaves filters unknown", func(t *testing.T) {
+		planned := map[string]tftypes.Value{"key": str("flag"), "filters": unknown(tftypes.String), "rollout_percentage": unknown(tftypes.Number)}
+		config := map[string]tftypes.Value{"key": str("flag"), "rollout_percentage": unknown(tftypes.Number)}
+		plan := plannedFrom(t, modifyFeatureFlagPlan(t, prior, planned, config))
+		assert.True(t, plan.Filters.IsUnknown())
+	})
+
+	t.Run("configured filters own the rollout", func(t *testing.T) {
+		changed := `{"groups":[{"rollout_percentage":50}]}`
+		planned := map[string]tftypes.Value{"key": str("flag"), "filters": str(changed), "rollout_percentage": num(25)}
+		plan := plannedFrom(t, modifyFeatureFlagPlan(t, prior, planned, map[string]tftypes.Value{"key": str("flag"), "filters": str(changed)}))
+		assert.True(t, plan.RolloutPercentage.IsUnknown())
+	})
+}
