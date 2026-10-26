@@ -14,10 +14,6 @@ import (
 	"github.com/posthog/terraform-provider/internal/httpclient"
 )
 
-// bucketingByDevice is the bucketing_identifier PostHog refuses to combine with new uses of
-// ensure_experience_continuity.
-const bucketingByDevice = "device_id"
-
 // applyFeatureFlagSettings copies the flag settings the model knows into req. Omitted and unknown
 // settings are left out of the request, so PostHog keeps its values for them.
 func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req *httpclient.FeatureFlagRequest) diag.Diagnostics {

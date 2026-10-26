@@ -178,8 +178,8 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
-// ModifyResourcePlan rejects setting combinations PostHog refuses, plans settings the config
-// leaves out as unknown on updates, and rejects options PostHog cannot honor on new flags.
+// ModifyResourcePlan plans settings the config leaves out as unknown on updates, and rejects
+// options PostHog cannot honor on new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
@@ -187,18 +187,11 @@ func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mod
 	var plan, config FeatureFlagTFModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-	var state *FeatureFlagTFModel
-	if !req.State.Raw.IsNull() {
-		state = &FeatureFlagTFModel{}
-		resp.Diagnostics.Append(req.State.Get(ctx, state)...)
-	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	resp.Diagnostics.Append(validateFeatureFlagSettingCombinations(plan, config, state)...)
-
-	if state != nil {
+	if !req.State.Raw.IsNull() {
 		// A plan that changes nothing keeps the state's values, so it stays empty.
 		if !req.Plan.Raw.Equal(req.State.Raw) {
 			planOmittedSettingsUnknown(ctx, config, resp)
@@ -213,35 +206,6 @@ func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.Mod
 			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
 		)
 	}
-}
-
-// validateFeatureFlagSettingCombinations rejects plans PostHog would refuse. state is nil for a
-// new flag.
-func validateFeatureFlagSettingCombinations(plan, config FeatureFlagTFModel, state *FeatureFlagTFModel) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	if plan.Archived.ValueBool() && plan.Active.ValueBool() {
-		if config.Archived.IsNull() {
-			// archived comes from PostHog, so the config is enabling a flag archived there.
-			diags.AddAttributeError(path.Root("active"), "Cannot enable an archived flag", "This flag is archived in PostHog. Set archived = false to enable it.")
-		} else {
-			diags.AddAttributeError(path.Root("archived"), "Cannot archive an active flag", "Set active = false when archived = true.")
-		}
-	}
-
-	// PostHog lets flags that already combine device bucketing with experience continuity keep it.
-	alreadyCombined := state != nil && state.BucketingIdentifier.ValueString() == bucketingByDevice && state.EnsureExperienceContinuity.ValueBool()
-	if plan.BucketingIdentifier.ValueString() == bucketingByDevice && plan.EnsureExperienceContinuity.ValueBool() && !alreadyCombined {
-		if config.BucketingIdentifier.IsNull() {
-			// bucketing_identifier comes from PostHog, so the config is turning continuity on.
-			diags.AddAttributeError(path.Root("ensure_experience_continuity"), "Incompatible flag settings",
-				`This flag uses device_id bucketing in PostHog. Set bucketing_identifier = "distinct_id", or keep ensure_experience_continuity = false.`)
-		} else {
-			diags.AddAttributeError(path.Root("bucketing_identifier"), "Incompatible flag settings", "Device bucketing requires ensure_experience_continuity = false.")
-		}
-	}
-
-	return diags
 }
 
 // planOmittedSettingsUnknown plans the settings the config leaves out as unknown, so an update

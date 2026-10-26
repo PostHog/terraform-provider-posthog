@@ -116,8 +116,8 @@ filters = jsonencode({
 func TestFeatureFlag_SettingsValidation(t *testing.T) {
 	skipIfNotAcceptance(t)
 	for _, tc := range []struct{ name, settings, message string }{
-		{"archive_active", "archived = true\n active = true", "Cannot archive an active flag"},
-		{"device_persistence", "bucketing_identifier = \"device_id\"\n ensure_experience_continuity = true", "Incompatible flag settings"},
+		{"archive_active", "archived = true\n active = true", `Cannot\s+archive\s+an\s+enabled\s+feature\s+flag`},
+		{"device_persistence", "bucketing_identifier = \"device_id\"\n ensure_experience_continuity = true", `Cannot\s+enable\s+'persist\s+across\s+authentication\s+steps'`},
 		{"invalid_bucketing", `bucketing_identifier = "session_id"`, "Attribute bucketing_identifier value must be one of"},
 		{"context_case", `evaluation_contexts = ["Web"]`, "Invalid evaluation context"},
 		{"context_whitespace", `evaluation_contexts = [" web "]`, "Invalid evaluation context"},

@@ -10,8 +10,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -112,76 +110,6 @@ func modifyFeatureFlagPlan(t *testing.T, prior, planned, config map[string]tftyp
 	resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
 	ops.ModifyResourcePlan(ctx, req, &resp)
 	return resp
-}
-
-func TestFeatureFlagModifyPlanSettingCombinations(t *testing.T) {
-	str := func(s string) tftypes.Value { return tftypes.NewValue(tftypes.String, s) }
-	boolean := func(b bool) tftypes.Value { return tftypes.NewValue(tftypes.Bool, b) }
-	with := func(values map[string]tftypes.Value) map[string]tftypes.Value {
-		values["key"] = str("flag")
-		return values
-	}
-
-	for _, tc := range []struct {
-		name                   string
-		prior, planned, config map[string]tftypes.Value
-		wantPath, wantSummary  string // empty: no error
-	}{
-		{
-			name:        "config sets device bucketing with experience continuity",
-			prior:       with(map[string]tftypes.Value{"bucketing_identifier": str("distinct_id"), "ensure_experience_continuity": boolean(true)}),
-			planned:     with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
-			config:      with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
-			wantPath:    "bucketing_identifier",
-			wantSummary: "Incompatible flag settings",
-		},
-		{
-			// bucketing_identifier = "device_id" comes from state: it was set in PostHog.
-			name:        "config turns on continuity for a flag bucketed by device in PostHog",
-			prior:       with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(false)}),
-			planned:     with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
-			config:      with(map[string]tftypes.Value{"ensure_experience_continuity": boolean(true)}),
-			wantPath:    "ensure_experience_continuity",
-			wantSummary: "Incompatible flag settings",
-		},
-		{
-			name:    "flag that already combines them keeps it",
-			prior:   with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true)}),
-			planned: with(map[string]tftypes.Value{"bucketing_identifier": str("device_id"), "ensure_experience_continuity": boolean(true), "name": str("rename")}),
-			config:  with(map[string]tftypes.Value{"name": str("rename")}),
-		},
-		{
-			name:        "config archives an active flag",
-			prior:       with(map[string]tftypes.Value{"archived": boolean(false), "active": boolean(true)}),
-			planned:     with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(true)}),
-			config:      with(map[string]tftypes.Value{"archived": boolean(true)}),
-			wantPath:    "archived",
-			wantSummary: "Cannot archive an active flag",
-		},
-		{
-			// archived = true comes from state: the flag was archived in PostHog.
-			name:        "config enables a flag archived in PostHog",
-			prior:       with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(false)}),
-			planned:     with(map[string]tftypes.Value{"archived": boolean(true), "active": boolean(true)}),
-			config:      with(map[string]tftypes.Value{"active": boolean(true)}),
-			wantPath:    "active",
-			wantSummary: "Cannot enable an archived flag",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			resp := modifyFeatureFlagPlan(t, tc.prior, tc.planned, tc.config)
-			if tc.wantSummary == "" {
-				assert.False(t, resp.Diagnostics.HasError(), resp.Diagnostics)
-				return
-			}
-			require.Len(t, resp.Diagnostics.Errors(), 1, resp.Diagnostics)
-			got := resp.Diagnostics.Errors()[0]
-			assert.Equal(t, tc.wantSummary, got.Summary())
-			withPath, ok := got.(diag.DiagnosticWithPath)
-			require.True(t, ok)
-			assert.Equal(t, path.Root(tc.wantPath), withPath.Path())
-		})
-	}
 }
 
 func TestFeatureFlagModifyPlanOmittedSettings(t *testing.T) {
