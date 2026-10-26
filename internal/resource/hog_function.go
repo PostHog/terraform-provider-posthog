@@ -162,47 +162,47 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 
 	req := httpclient.HogFunctionRequest{}
 
-	if !model.Type.IsNull() && !model.Type.IsUnknown() {
+	if core.IsKnown(model.Type) {
 		t := model.Type.ValueString()
 		req.Type = &t
 	}
 
-	if !model.Name.IsNull() && !model.Name.IsUnknown() {
+	if core.IsKnown(model.Name) {
 		name := model.Name.ValueString()
 		req.Name = &name
 	}
 
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
+	if core.IsKnown(model.Description) {
 		desc := model.Description.ValueString()
 		req.Description = &desc
 	}
 
-	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() {
+	if core.IsKnown(model.Enabled) {
 		enabled := model.Enabled.ValueBool()
 		req.Enabled = &enabled
 	}
 
-	if !model.Hog.IsNull() && !model.Hog.IsUnknown() {
+	if core.IsKnown(model.Hog) {
 		hog := model.Hog.ValueString()
 		req.Hog = &hog
 	}
 
-	if !model.IconURL.IsNull() && !model.IconURL.IsUnknown() {
+	if core.IsKnown(model.IconURL) {
 		iconURL := model.IconURL.ValueString()
 		req.IconURL = &iconURL
 	}
 
-	if !model.TemplateID.IsNull() && !model.TemplateID.IsUnknown() {
+	if core.IsKnown(model.TemplateID) {
 		templateID := model.TemplateID.ValueString()
 		req.TemplateID = &templateID
 	}
 
-	if !model.ExecutionOrder.IsNull() && !model.ExecutionOrder.IsUnknown() {
+	if core.IsKnown(model.ExecutionOrder) {
 		order := int(model.ExecutionOrder.ValueInt64())
 		req.ExecutionOrder = &order
 	}
 
-	if !model.InputsJSON.IsNull() && !model.InputsJSON.IsUnknown() {
+	if core.IsKnown(model.InputsJSON) {
 		raw := strings.TrimSpace(model.InputsJSON.ValueString())
 		if raw != "" {
 			var inputs map[string]interface{}
@@ -215,7 +215,7 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 	}
 
 	// Merge sensitive_inputs_json into inputs (sensitive values take precedence)
-	if !model.SensitiveInputsJSON.IsNull() && !model.SensitiveInputsJSON.IsUnknown() {
+	if core.IsKnown(model.SensitiveInputsJSON) {
 		raw := strings.TrimSpace(model.SensitiveInputsJSON.ValueString())
 		if raw != "" {
 			var sensitiveInputs map[string]interface{}
@@ -233,7 +233,7 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 		}
 	}
 
-	if !model.InputsSchemaJSON.IsNull() && !model.InputsSchemaJSON.IsUnknown() {
+	if core.IsKnown(model.InputsSchemaJSON) {
 		raw := strings.TrimSpace(model.InputsSchemaJSON.ValueString())
 		if raw != "" {
 			var inputsSchema []map[string]interface{}
@@ -245,7 +245,7 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 		}
 	}
 
-	if !model.FiltersJSON.IsNull() && !model.FiltersJSON.IsUnknown() {
+	if core.IsKnown(model.FiltersJSON) {
 		raw := strings.TrimSpace(model.FiltersJSON.ValueString())
 		if raw != "" {
 			var filters map[string]interface{}
@@ -257,7 +257,7 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 		}
 	}
 
-	if !model.MaskingJSON.IsNull() && !model.MaskingJSON.IsUnknown() {
+	if core.IsKnown(model.MaskingJSON) {
 		raw := strings.TrimSpace(model.MaskingJSON.ValueString())
 		if raw != "" {
 			var masking map[string]interface{}
@@ -269,7 +269,7 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 		}
 	}
 
-	if !model.MappingsJSON.IsNull() && !model.MappingsJSON.IsUnknown() {
+	if core.IsKnown(model.MappingsJSON) {
 		raw := strings.TrimSpace(model.MappingsJSON.ValueString())
 		if raw != "" {
 			var mappings []map[string]interface{}

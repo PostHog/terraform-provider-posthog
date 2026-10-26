@@ -116,17 +116,17 @@ func (o CohortOps) BuildCreateRequest(_ context.Context, model CohortTFModel) (h
 		Name: &name,
 	}
 
-	if !model.Description.IsNull() && !model.Description.IsUnknown() {
+	if core.IsKnown(model.Description) {
 		desc := model.Description.ValueString()
 		req.Description = &desc
 	}
 
-	if !model.IsStatic.IsNull() && !model.IsStatic.IsUnknown() {
+	if core.IsKnown(model.IsStatic) {
 		isStatic := model.IsStatic.ValueBool()
 		req.IsStatic = &isStatic
 	}
 
-	if !model.Filters.IsNull() && !model.Filters.IsUnknown() {
+	if core.IsKnown(model.Filters) {
 		var filters map[string]interface{}
 		if err := json.Unmarshal([]byte(model.Filters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))

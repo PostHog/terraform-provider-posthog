@@ -391,7 +391,7 @@ func (o LogsAlertOps) BuildCreateRequest(ctx context.Context, model LogsAlertTFM
 	req.DatapointsToAlarm = util.Int64PtrFromValue(model.DatapointsToAlarm)
 	req.CooldownMinutes = util.Int64PtrFromValue(model.CooldownMinutes)
 
-	if !model.BlockedWindows.IsNull() && !model.BlockedWindows.IsUnknown() {
+	if core.IsKnown(model.BlockedWindows) {
 		var windows []BlockedWindowTFModel
 		diags.Append(model.BlockedWindows.ElementsAs(ctx, &windows, false)...)
 		if diags.HasError() {
@@ -425,7 +425,7 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 	// Only reflected when the configuration declares it. Adopting a snooze set in the
 	// PostHog UI would make the next apply revert it, which is the operator's call to make,
 	// not Terraform's.
-	if !model.SnoozeUntil.IsNull() && !model.SnoozeUntil.IsUnknown() {
+	if core.IsKnown(model.SnoozeUntil) {
 		model.SnoozeUntil = core.PtrToStringNullIfEmptyTrimmed(resp.SnoozeUntil)
 	}
 
@@ -495,7 +495,7 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSchedule, current types.Set) (types.Set, diag.Diagnostics) {
 	objectType := types.ObjectType{AttrTypes: blockedWindowAttrTypes}
 	if schedule == nil || len(schedule.BlockedWindows) == 0 {
-		if !current.IsNull() && !current.IsUnknown() {
+		if core.IsKnown(current) {
 			return types.SetValueFrom(ctx, objectType, []BlockedWindowTFModel{})
 		}
 		return types.SetNull(objectType), nil

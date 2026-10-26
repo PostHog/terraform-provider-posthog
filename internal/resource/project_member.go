@@ -42,8 +42,8 @@ func (m ProjectMemberModel) GetID() string {
 }
 
 func (m ProjectMemberModel) HasValidID() bool {
-	hasRole := !m.Role.IsNull() && !m.Role.IsUnknown() && m.Role.ValueString() != ""
-	hasMember := !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() && m.OrganizationMember.ValueString() != ""
+	hasRole := core.IsKnown(m.Role) && m.Role.ValueString() != ""
+	hasMember := core.IsKnown(m.OrganizationMember) && m.OrganizationMember.ValueString() != ""
 	return hasRole || hasMember
 }
 
@@ -54,11 +54,11 @@ func (m *ProjectMemberModel) SetID(id string) error {
 
 func (m ProjectMemberModel) buildCompositeID(projectID string) string {
 	role := ""
-	if !m.Role.IsNull() && !m.Role.IsUnknown() {
+	if core.IsKnown(m.Role) {
 		role = m.Role.ValueString()
 	}
 	member := ""
-	if !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() {
+	if core.IsKnown(m.OrganizationMember) {
 		member = m.OrganizationMember.ValueString()
 	}
 	return httpclient.BuildProjectMemberCompositeID(projectID, role, member)
@@ -201,12 +201,12 @@ func buildProjectMemberRequest(model ProjectMemberModel) httpclient.ProjectAcces
 		AccessLevel: &accessLevel,
 	}
 
-	if !model.Role.IsNull() && !model.Role.IsUnknown() && model.Role.ValueString() != "" {
+	if core.IsKnown(model.Role) && model.Role.ValueString() != "" {
 		role := model.Role.ValueString()
 		req.Role = &role
 	}
 
-	if !model.OrganizationMember.IsNull() && !model.OrganizationMember.IsUnknown() && model.OrganizationMember.ValueString() != "" {
+	if core.IsKnown(model.OrganizationMember) && model.OrganizationMember.ValueString() != "" {
 		member := model.OrganizationMember.ValueString()
 		req.OrganizationMember = &member
 	}
