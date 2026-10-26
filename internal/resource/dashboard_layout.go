@@ -35,11 +35,11 @@ type TileTFModel struct {
 }
 
 func (t TileTFModel) IsInsightTile() bool {
-	return !t.InsightID.IsNull() && !t.InsightID.IsUnknown()
+	return core.IsKnown(t.InsightID)
 }
 
 func (t TileTFModel) IsTextTile() bool {
-	return !t.TextBody.IsNull() && !t.TextBody.IsUnknown()
+	return core.IsKnown(t.TextBody)
 }
 
 type DashboardLayoutTFModel struct {
@@ -605,7 +605,7 @@ func buildTilePatchItem(ctx context.Context, tileID int64, declared TileTFModel)
 		ID: tileID,
 	}
 
-	if !declared.LayoutsJSON.IsNull() && !declared.LayoutsJSON.IsUnknown() {
+	if core.IsKnown(declared.LayoutsJSON) {
 		var layouts map[string]interface{}
 		if err := json.Unmarshal([]byte(declared.LayoutsJSON.ValueString()), &layouts); err == nil {
 			item.Layouts = &layouts

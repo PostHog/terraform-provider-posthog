@@ -338,23 +338,23 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 		},
 	}
 
-	if !model.Name.IsNull() && !model.Name.IsUnknown() {
+	if core.IsKnown(model.Name) {
 		name := model.Name.ValueString()
 		req.Name = &name
 	}
 
-	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() {
+	if core.IsKnown(model.Enabled) {
 		enabled := model.Enabled.ValueBool()
 		req.Enabled = &enabled
 	}
 
 	if !model.ThresholdLower.IsNull() || !model.ThresholdUpper.IsNull() {
 		req.Threshold.Configuration.Bounds = &httpclient.ThresholdBounds{}
-		if !model.ThresholdLower.IsNull() && !model.ThresholdLower.IsUnknown() {
+		if core.IsKnown(model.ThresholdLower) {
 			lower := model.ThresholdLower.ValueFloat64()
 			req.Threshold.Configuration.Bounds.Lower = &lower
 		}
-		if !model.ThresholdUpper.IsNull() && !model.ThresholdUpper.IsUnknown() {
+		if core.IsKnown(model.ThresholdUpper) {
 			upper := model.ThresholdUpper.ValueFloat64()
 			req.Threshold.Configuration.Bounds.Upper = &upper
 		}
@@ -366,17 +366,17 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 
 	// `evaluation` is what tells the two apart: it is required on a SQL config and has no
 	// meaning on a Trends one. The schema already refuses having neither or both.
-	if !model.Evaluation.IsNull() && !model.Evaluation.IsUnknown() {
+	if core.IsKnown(model.Evaluation) {
 		evaluation := model.Evaluation.ValueString()
 		req.Config = &httpclient.AlertConfig{
 			Type:       httpclient.HogQLAlertConfigType,
 			Evaluation: &evaluation,
 		}
-		if !model.Column.IsNull() && !model.Column.IsUnknown() {
+		if core.IsKnown(model.Column) {
 			column := model.Column.ValueString()
 			req.Config.Column = &column
 		}
-		if !model.LabelColumn.IsNull() && !model.LabelColumn.IsUnknown() {
+		if core.IsKnown(model.LabelColumn) {
 			labelColumn := model.LabelColumn.ValueString()
 			req.Config.LabelColumn = &labelColumn
 		}
@@ -386,24 +386,24 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 			Type:        httpclient.TrendsAlertConfigType,
 			SeriesIndex: &seriesIndex,
 		}
-		if !model.CheckOngoingInterval.IsNull() && !model.CheckOngoingInterval.IsUnknown() {
+		if core.IsKnown(model.CheckOngoingInterval) {
 			checkOngoing := model.CheckOngoingInterval.ValueBool()
 			req.Config.CheckOngoingInterval = &checkOngoing
 		}
 	}
 
-	if !model.CalculationInterval.IsNull() && !model.CalculationInterval.IsUnknown() {
+	if core.IsKnown(model.CalculationInterval) {
 		interval := model.CalculationInterval.ValueString()
 		req.CalculationInterval = &interval
 	}
 
-	if !model.SkipWeekend.IsNull() && !model.SkipWeekend.IsUnknown() {
+	if core.IsKnown(model.SkipWeekend) {
 		skip := model.SkipWeekend.ValueBool()
 		req.SkipWeekend = &skip
 	}
 
 	// Left nil when the block is absent, which sends an explicit null and clears quiet hours.
-	if !model.ScheduleRestriction.IsNull() && !model.ScheduleRestriction.IsUnknown() {
+	if core.IsKnown(model.ScheduleRestriction) {
 		var restriction AlertScheduleRestrictionModel
 		diags.Append(model.ScheduleRestriction.As(ctx, &restriction, basetypes.ObjectAsOptions{})...)
 		if diags.HasError() {
@@ -426,7 +426,7 @@ func (o AlertOps) BuildCreateRequest(ctx context.Context, model AlertResourceTFM
 		req.ScheduleRestriction = &httpclient.AlertScheduleRestriction{BlockedWindows: blockedWindows}
 	}
 
-	if !model.SubscribedUsers.IsNull() && !model.SubscribedUsers.IsUnknown() {
+	if core.IsKnown(model.SubscribedUsers) {
 		var userIDs []int64
 		diags.Append(model.SubscribedUsers.ElementsAs(ctx, &userIDs, false)...)
 		if diags.HasError() {

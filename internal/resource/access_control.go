@@ -46,7 +46,7 @@ func (m AccessControlTFModel) GetID() string {
 // For access controls, this means having resource. Role and organization_member are optional
 // (when neither is set, it's a project-level default).
 func (m AccessControlTFModel) HasValidID() bool {
-	return !m.Resource.IsNull() && !m.Resource.IsUnknown() && m.Resource.ValueString() != ""
+	return core.IsKnown(m.Resource) && m.Resource.ValueString() != ""
 }
 
 func (m *AccessControlTFModel) SetAccessControlFields(resourceType, resourceID, targetType, targetID string) {
@@ -65,13 +65,13 @@ func (m *AccessControlTFModel) SetAccessControlFields(resourceType, resourceID, 
 // buildExpectedID constructs the composite ID from the model's fields.
 func (m AccessControlTFModel) buildExpectedID(projectID string) string {
 	resourcePart := m.Resource.ValueString()
-	if !m.ResourceID.IsNull() && !m.ResourceID.IsUnknown() && m.ResourceID.ValueString() != "" {
+	if core.IsKnown(m.ResourceID) && m.ResourceID.ValueString() != "" {
 		resourcePart = fmt.Sprintf("%s/%s", resourcePart, m.ResourceID.ValueString())
 	}
-	if !m.Role.IsNull() && !m.Role.IsUnknown() && m.Role.ValueString() != "" {
+	if core.IsKnown(m.Role) && m.Role.ValueString() != "" {
 		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, httpclient.AccessControlTargetRole, m.Role.ValueString())
 	}
-	if !m.OrganizationMember.IsNull() && !m.OrganizationMember.IsUnknown() && m.OrganizationMember.ValueString() != "" {
+	if core.IsKnown(m.OrganizationMember) && m.OrganizationMember.ValueString() != "" {
 		return fmt.Sprintf("%s/%s/%s/%s", projectID, resourcePart, httpclient.AccessControlTargetMember, m.OrganizationMember.ValueString())
 	}
 	// Project default (no role or member specified)
@@ -208,7 +208,7 @@ func (o AccessControlOps) Create(ctx context.Context, client httpclient.PosthogC
 
 func (o AccessControlOps) Read(ctx context.Context, client httpclient.PosthogClient, model AccessControlTFModel) (httpclient.AccessControl, httpclient.HTTPStatusCode, error) {
 	var resourceID *string
-	if !model.ResourceID.IsNull() && !model.ResourceID.IsUnknown() && model.ResourceID.ValueString() != "" {
+	if core.IsKnown(model.ResourceID) && model.ResourceID.ValueString() != "" {
 		rid := model.ResourceID.ValueString()
 		resourceID = &rid
 	}
@@ -247,17 +247,17 @@ func buildAccessControlRequest(model AccessControlTFModel) httpclient.AccessCont
 		Resource:    model.Resource.ValueString(),
 	}
 
-	if !model.ResourceID.IsNull() && !model.ResourceID.IsUnknown() && model.ResourceID.ValueString() != "" {
+	if core.IsKnown(model.ResourceID) && model.ResourceID.ValueString() != "" {
 		resourceID := model.ResourceID.ValueString()
 		req.ResourceID = &resourceID
 	}
 
-	if !model.Role.IsNull() && !model.Role.IsUnknown() {
+	if core.IsKnown(model.Role) {
 		role := model.Role.ValueString()
 		req.Role = &role
 	}
 
-	if !model.OrganizationMember.IsNull() && !model.OrganizationMember.IsUnknown() {
+	if core.IsKnown(model.OrganizationMember) {
 		member := model.OrganizationMember.ValueString()
 		req.OrganizationMember = &member
 	}

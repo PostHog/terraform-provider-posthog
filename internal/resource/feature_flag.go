@@ -267,7 +267,7 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	var filters map[string]interface{}
 
 	// Check both IsNull and IsUnknown since filters is Computed
-	if !model.Filters.IsNull() && !model.Filters.IsUnknown() {
+	if core.IsKnown(model.Filters) {
 		if err := json.Unmarshal([]byte(model.Filters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
 			return req, diags
@@ -284,7 +284,7 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	// If rollout_percentage is provided, add it to the first group in filters
 	// rollout_percentage is a convenience field that maps to filters.groups[0].rollout_percentage
 	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if !model.RolloutPercentage.IsNull() && !model.RolloutPercentage.IsUnknown() {
+	if core.IsKnown(model.RolloutPercentage) {
 		percentage := int32(model.RolloutPercentage.ValueInt64())
 		groups, ok := filters["groups"].([]interface{})
 		if !ok || len(groups) == 0 {
@@ -347,12 +347,12 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	var filters map[string]interface{}
 
 	// Check both IsNull and IsUnknown since filters is Computed
-	if !plan.Filters.IsNull() && !plan.Filters.IsUnknown() {
+	if core.IsKnown(plan.Filters) {
 		if err := json.Unmarshal([]byte(plan.Filters.ValueString()), &filters); err != nil {
 			diags.AddError("Invalid filters JSON", fmt.Sprintf("Could not parse filters: %s", err.Error()))
 			return req, diags
 		}
-	} else if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() {
+	} else if core.IsKnown(plan.RolloutPercentage) {
 		// If only rollout_percentage is provided, create default filters structure
 		filters = map[string]interface{}{
 			"groups": []interface{}{
@@ -363,7 +363,7 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 
 	// If rollout_percentage is provided, add it to the first group in filters
 	// Check both IsNull and IsUnknown since rollout_percentage is Computed
-	if !plan.RolloutPercentage.IsNull() && !plan.RolloutPercentage.IsUnknown() && filters != nil {
+	if core.IsKnown(plan.RolloutPercentage) && filters != nil {
 		percentage := int32(plan.RolloutPercentage.ValueInt64())
 		groups, ok := filters["groups"].([]interface{})
 		if !ok || len(groups) == 0 {

@@ -615,7 +615,7 @@ func normalizeRawForState(raw json.RawMessage, current jsontypes.Normalized) jso
 		return jsontypes.NewNormalizedNull()
 	}
 	userJSON := ""
-	if !current.IsNull() && !current.IsUnknown() {
+	if core.IsKnown(current) {
 		userJSON = current.ValueString()
 	}
 	normalized, err := normalizeJSONForState(apiData, userJSON)

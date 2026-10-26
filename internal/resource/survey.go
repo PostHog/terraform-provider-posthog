@@ -282,7 +282,7 @@ func (o SurveyOps) buildRequest(ctx context.Context, plan, state SurveyTFModel) 
 }
 
 func applySurveyDescription(plan, state SurveyTFModel, req *httpclient.SurveyRequest) {
-	if !plan.Description.IsNull() && !plan.Description.IsUnknown() {
+	if core.IsKnown(plan.Description) {
 		description := plan.Description.ValueString()
 		req.Description = &description
 		return
@@ -332,7 +332,7 @@ func assignJSONAttribute(attr types.String, name string, target *interface{}) di
 }
 
 func assignSurveyTargetingFilters(plan, state SurveyTFModel, req *httpclient.SurveyRequest) diag.Diagnostics {
-	if !plan.TargetingFlagFiltersJSON.IsNull() && !plan.TargetingFlagFiltersJSON.IsUnknown() {
+	if core.IsKnown(plan.TargetingFlagFiltersJSON) {
 		value, diags := parseJSONAttribute(plan.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
 		if diags.HasError() {
 			return diags
@@ -341,7 +341,7 @@ func assignSurveyTargetingFilters(plan, state SurveyTFModel, req *httpclient.Sur
 		return nil
 	}
 
-	if !state.TargetingFlagFiltersJSON.IsNull() && !state.TargetingFlagFiltersJSON.IsUnknown() {
+	if core.IsKnown(state.TargetingFlagFiltersJSON) {
 		// Preserve the write-only value across normal updates when PostHog does not
 		// expose the original filters back to the provider.
 		value, diags := parseJSONAttribute(state.TargetingFlagFiltersJSON, "targeting_flag_filters_json")

@@ -21,7 +21,7 @@ type BaseInt64Identifiable struct {
 }
 
 func (b BaseInt64Identifiable) HasValidID() bool {
-	return !b.ID.IsNull() && !b.ID.IsUnknown()
+	return IsKnown(b.ID)
 }
 
 func (b BaseInt64Identifiable) GetID() string {
@@ -42,7 +42,7 @@ type BaseStringIdentifiable struct {
 }
 
 func (b BaseStringIdentifiable) HasValidID() bool {
-	return !b.ID.IsNull() && !b.ID.IsUnknown() && b.ID.ValueString() != ""
+	return IsKnown(b.ID) && b.ID.ValueString() != ""
 }
 
 func (b BaseStringIdentifiable) GetID() string {
@@ -65,7 +65,7 @@ type BaseProjectID struct {
 }
 
 func (b *BaseProjectID) GetEffectiveProjectID() string {
-	if !b.ProjectID.IsNull() && !b.ProjectID.IsUnknown() && b.ProjectID.ValueString() != "" {
+	if IsKnown(b.ProjectID) && b.ProjectID.ValueString() != "" {
 		return b.ProjectID.ValueString()
 	}
 	return b.defaultProjectID
@@ -89,7 +89,7 @@ type BaseOrganizationID struct {
 }
 
 func (b *BaseOrganizationID) GetEffectiveOrganizationID() string {
-	if !b.OrganizationID.IsNull() && !b.OrganizationID.IsUnknown() && b.OrganizationID.ValueString() != "" {
+	if IsKnown(b.OrganizationID) && b.OrganizationID.ValueString() != "" {
 		return b.OrganizationID.ValueString()
 	}
 	return b.defaultOrganizationID
