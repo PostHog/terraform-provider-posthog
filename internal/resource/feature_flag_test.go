@@ -510,6 +510,13 @@ func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
 			stateRollout: types.Int64Value(25),
 		},
 		{
+			// ModifyResourcePlan plans unconfigured filters as they are in state for a rename.
+			name:         "filters planned from state are not sent",
+			planFilters:  jsontypes.NewNormalizedValue(targeted),
+			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			stateRollout: types.Int64Value(25),
+		},
+		{
 			name:         "a flag without filters gets a single condition",
 			planFilters:  jsontypes.NewNormalizedUnknown(),
 			stateFilters: jsontypes.NewNormalizedNull(),
@@ -713,4 +720,22 @@ func TestValidateRolloutMatchesFilters(t *testing.T) {
 			assert.Equal(t, tc.wantError, diags.HasError(), diags)
 		})
 	}
+}
+
+func TestWithFirstGroupRollout_LeavesInputUnchanged(t *testing.T) {
+	input := map[string]interface{}{
+		"groups":   []interface{}{map[string]interface{}{"rollout_percentage": float64(100)}, map[string]interface{}{"rollout_percentage": float64(10)}},
+		"payloads": map[string]interface{}{"true": "{}"},
+	}
+	before, err := json.Marshal(input)
+	require.NoError(t, err)
+
+	got := withFirstGroupRollout(input, types.Int64Value(25))
+
+	after, err := json.Marshal(input)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after), "the input must not change")
+	gotJSON, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"groups":[{"rollout_percentage":25},{"rollout_percentage":10}],"payloads":{"true":"{}"}}`, string(gotJSON))
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -231,9 +233,6 @@ func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, 
 		{"archived", config.Archived, types.BoolUnknown()},
 		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
 		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
-		// Read from the first release condition, which the update may leave to PostHog or set
-		// through filters.
-		{"rollout_percentage", config.RolloutPercentage, types.Int64Unknown()},
 	} {
 		if setting.configured.IsNull() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
@@ -247,6 +246,10 @@ func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, 
 // flag's release conditions.
 func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
 	if !config.Filters.IsNull() {
+		// The configured filters own the rollout, so read rollout_percentage back from them.
+		if config.RolloutPercentage.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("rollout_percentage"), types.Int64Unknown())...)
+		}
 		return
 	}
 	planned, ok, err := plannedFiltersForRollout(plan, state)
@@ -256,6 +259,13 @@ func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFla
 	}
 	if ok {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), planned)...)
+		return
+	}
+	// Otherwise the update leaves the filters to PostHog. Plan them as they are, so a rename shows
+	// only the rename instead of every release condition turning "(known after apply)". Not when
+	// the rollout is only known at apply: then the filters may still change.
+	if plan.Filters.IsUnknown() && core.IsKnown(plan.RolloutPercentage) && core.IsKnown(state.Filters) {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("filters"), state.Filters)...)
 	}
 }
 
@@ -402,7 +412,7 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	var filters map[string]interface{}
 	var err error
 	switch {
-	case core.IsKnown(plan.Filters):
+	case core.IsKnown(plan.Filters) && (!plan.Filters.Equal(state.Filters) || rolloutChanges(plan, state)):
 		filters, err = filtersWithRollout(plan.Filters, plan.RolloutPercentage)
 	case rolloutChanges(plan, state):
 		filters, err = filtersWithRollout(state.Filters, plan.RolloutPercentage)
@@ -656,28 +666,36 @@ func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64
 	if filters == nil {
 		filters = map[string]interface{}{"groups": []interface{}{map[string]interface{}{}}}
 	}
-	setFirstGroupRolloutPercentage(filters, percentage)
-	return filters, nil
+	return withFirstGroupRollout(filters, percentage), nil
 }
 
-// setFirstGroupRolloutPercentage applies rollout_percentage, a shorthand for the first release
-// condition's rollout, to filters in place. The other release conditions and filter keys are
-// left as they are. A null or unknown percentage changes nothing.
-func setFirstGroupRolloutPercentage(filters map[string]interface{}, percentage types.Int64) {
+// withFirstGroupRollout returns filters with rollout_percentage, a shorthand for the first
+// release condition's rollout, applied to that condition. The other release conditions and filter
+// keys are kept, and the filters passed in are left unchanged. A null or unknown percentage
+// returns the filters as they are.
+func withFirstGroupRollout(filters map[string]interface{}, percentage types.Int64) map[string]interface{} {
 	if !core.IsKnown(percentage) {
-		return
+		return filters
 	}
-	groups, ok := filters["groups"].([]interface{})
-	if !ok || len(groups) == 0 {
+	groups, _ := filters["groups"].([]interface{})
+	groups = slices.Clone(groups)
+	if len(groups) == 0 {
 		groups = []interface{}{map[string]interface{}{}}
 	}
-	firstGroup, ok := groups[0].(map[string]interface{})
-	if !ok {
-		firstGroup = map[string]interface{}{}
-		groups[0] = firstGroup
+	first, _ := groups[0].(map[string]interface{})
+	first = maps.Clone(first)
+	if first == nil {
+		first = map[string]interface{}{}
 	}
-	firstGroup["rollout_percentage"] = int32(percentage.ValueInt64())
-	filters["groups"] = groups
+	first["rollout_percentage"] = int32(percentage.ValueInt64())
+	groups[0] = first
+
+	result := maps.Clone(filters)
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+	result["groups"] = groups
+	return result
 }
 
 func extractRolloutPercentage(resp httpclient.FeatureFlag) types.Int64 {

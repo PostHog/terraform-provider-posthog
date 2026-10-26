@@ -331,14 +331,19 @@ func TestFeatureFlag_RolloutPercentageKeepsAdoptedTargeting(t *testing.T) {
 				PlanOnly: true,
 			},
 			{
-				// A rename that does not set rollout_percentage leaves filters out of the update,
-				// so it cannot write back targeting that changed in the UI after the plan was made,
-				// and plans the rollout as unknown so such a change does not fail the apply.
+				// A rename leaves filters out of the update, so it cannot write back targeting that
+				// changed in the UI after the plan was made, and the plan shows only the rename.
 				Config: testAccFeatureFlagNameOnly(rKey, "Renamed"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
-						plancheck.ExpectUnknownValue("posthog_feature_flag.test", tfjsonpath.New("filters")),
-						plancheck.ExpectUnknownValue("posthog_feature_flag.test", tfjsonpath.New("rollout_percentage")),
+						plancheck.ExpectKnownValue("posthog_feature_flag.test", tfjsonpath.New("filters"),
+							knownvalue.StringFunc(func(v string) error {
+								if !strings.Contains(v, `"email"`) || !strings.Contains(v, `"rollout_percentage":25`) {
+									return fmt.Errorf("a rename should plan the flag's filters as they are: %s", v)
+								}
+								return nil
+							})),
+						plancheck.ExpectKnownValue("posthog_feature_flag.test", tfjsonpath.New("rollout_percentage"), knownvalue.Int64Exact(25)),
 					},
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
