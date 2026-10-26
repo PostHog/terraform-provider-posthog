@@ -36,6 +36,12 @@ func applyFeatureFlagSettings(ctx context.Context, model FeatureFlagTFModel, req
 		diags.Append(model.EvaluationContexts.ElementsAs(ctx, &contexts, false)...)
 		req.EvaluationContexts = &contexts
 	}
+	if core.IsKnown(model.Tags) {
+		// Likewise, `tags = []` removes the flag's tags.
+		tags := []string{}
+		diags.Append(model.Tags.ElementsAs(ctx, &tags, false)...)
+		req.Tags = &tags
+	}
 	return diags
 }
 

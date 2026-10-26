@@ -89,7 +89,7 @@ resource "posthog_feature_flag" "checkout_button" {
 - `name` (String) Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags. Empty strings are preserved. PostHog trims surrounding whitespace; Terraform retains the configured spelling when only that whitespace differs.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `rollout_percentage` (Number) Rollout percentage (0-100) of the flag's first release condition (`filters.groups[0]`). Without `filters`, changing it changes only that condition's rollout and keeps the flag's other conditions, targeting, variants and payloads, so a flag created in the PostHog UI and imported keeps its targeting. With `filters`, leave it out or set it to the first condition's `rollout_percentage`.
-- `tags` (Set of String) Set of tags for the feature flag
+- `tags` (Set of String) Set of tags for the feature flag. When omitted, the flag keeps the tags it has in PostHog; set `[]` to remove them.
 
 ### Read-Only
 

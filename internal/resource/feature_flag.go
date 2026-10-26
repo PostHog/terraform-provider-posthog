@@ -162,7 +162,8 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"tags": schema.SetAttribute{
 				ElementType:         types.StringType,
 				Optional:            true,
-				MarkdownDescription: "Set of tags for the feature flag",
+				Computed:            true,
+				MarkdownDescription: "Set of tags for the feature flag. When omitted, the flag keeps the tags it has in PostHog; set `[]` to remove them.",
 			},
 			"deleted": schema.BoolAttribute{
 				Optional:            true,
@@ -233,6 +234,7 @@ func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, 
 		{"archived", config.Archived, types.BoolUnknown()},
 		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
 		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+		{"tags", config.Tags, types.SetUnknown(types.StringType)},
 	} {
 		if setting.configured.IsNull() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
@@ -362,12 +364,6 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 	}
 	req.Filters = filters
 
-	if !model.Tags.IsNull() {
-		tags, d := core.ExtractTags(ctx, model.Tags)
-		diags.Append(d...)
-		req.Tags = tags
-	}
-
 	// Always set deleted to false on create
 	deleted := false
 	req.Deleted = &deleted
@@ -423,12 +419,6 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 	}
 	if filters != nil {
 		req.Filters = filters
-	}
-
-	if !plan.Tags.IsNull() {
-		tags, d := core.ExtractTags(ctx, plan.Tags)
-		diags.Append(d...)
-		req.Tags = tags
 	}
 
 	// Always include deleted - the plan modifier ensures it defaults to false
@@ -491,7 +481,12 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	model.RolloutPercentage = extractRolloutPercentage(resp)
 
 	// Set tags
-	tagsSet, d := core.TagsToSet(ctx, resp.Tags)
+	// A flag without tags reads as null, unless the configuration says `tags = []`.
+	configuredTags := model.Tags
+	if !core.IsKnown(configuredTags) {
+		configuredTags = types.SetNull(types.StringType)
+	}
+	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, configuredTags)
 	diags.Append(d...)
 	model.Tags = tagsSet
 

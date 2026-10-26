@@ -32,7 +32,7 @@ type FeatureFlagRequest struct {
 	Archived                   *bool                  `json:"archived,omitempty"`
 	Active                     *bool                  `json:"active,omitempty"`
 	Filters                    map[string]interface{} `json:"filters,omitempty"`
-	Tags                       []string               `json:"tags,omitempty"`
+	Tags                       *[]string              `json:"tags,omitempty"`
 	Deleted                    *bool                  `json:"deleted,omitempty"`
 	EnsureExperienceContinuity *bool                  `json:"ensure_experience_continuity,omitempty"`
 	// Legacy write-only create option. Current PostHog ignores it, but sending

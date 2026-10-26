@@ -133,6 +133,7 @@ func TestFeatureFlagModifyPlanOmittedSettings(t *testing.T) {
 		require.False(t, resp.Plan.Get(context.Background(), &plan).HasError())
 		assert.True(t, plan.EvaluationRuntime.IsUnknown())
 		assert.True(t, plan.EvaluationContexts.IsUnknown())
+		assert.True(t, plan.Tags.IsUnknown())
 		assert.Equal(t, types.BoolValue(false), plan.Archived)
 	})
 
@@ -258,4 +259,25 @@ func TestFeatureFlagModifyPlanUnconfiguredFilters(t *testing.T) {
 		plan := plannedFrom(t, modifyFeatureFlagPlan(t, prior, planned, map[string]tftypes.Value{"key": str("flag"), "filters": str(changed)}))
 		assert.True(t, plan.RolloutPercentage.IsUnknown())
 	})
+}
+
+func TestFeatureFlagMapResponseToModel_Tags(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		prior types.Set
+		api   []string
+		want  types.Set
+	}{
+		{name: "tags from PostHog", prior: types.SetNull(types.StringType), api: []string{"ui"}, want: types.SetValueMust(types.StringType, []attr.Value{types.StringValue("ui")})},
+		{name: "cleared with tags = []", prior: types.SetValueMust(types.StringType, []attr.Value{}), api: nil, want: types.SetValueMust(types.StringType, []attr.Value{})},
+		{name: "never set", prior: types.SetNull(types.StringType), api: nil, want: types.SetNull(types.StringType)},
+		{name: "omitted on create or update", prior: types.SetUnknown(types.StringType), api: nil, want: types.SetNull(types.StringType)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := FeatureFlagTFModel{Tags: tc.prior}
+			diags := FeatureFlagOps{}.MapResponseToModel(context.Background(), httpclient.FeatureFlag{ID: 1, Key: "flag", Tags: tc.api}, &model)
+			require.False(t, diags.HasError(), diags)
+			assert.Equal(t, tc.want, model.Tags)
+		})
+	}
 }
