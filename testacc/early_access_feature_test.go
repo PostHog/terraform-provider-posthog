@@ -17,10 +17,6 @@ import (
 
 const earlyAccessFeatureAddress = "posthog_early_access_feature.test"
 
-func testAccEarlyAccessFeatureClient() httpclient.PosthogClient {
-	return httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
-}
-
 // testAccCheckEarlyAccessFeatureDestroy also soft-deletes the flag each feature was backed by:
 // PostHog keeps it on destroy, and a flag it created itself would otherwise pile up in the
 // test project. A flag Terraform already deleted is skipped.
@@ -33,7 +29,7 @@ func testAccCheckAutoCreatedFeatureFlagRetained(s *terraform.State) error {
 }
 
 func testAccCheckEarlyAccessFeatureDestroyWithFlagRequirement(s *terraform.State, requireFlagRetained bool) error {
-	client := testAccEarlyAccessFeatureClient()
+	client := testAccAPIClient()
 	projectID := os.Getenv("POSTHOG_PROJECT_ID")
 
 	for _, rs := range s.RootModule().Resources {
@@ -80,7 +76,7 @@ func testAccCheckFlagFeatureEnrollment(want bool) resource.TestCheckFunc {
 		}
 		flagID := rs.Primary.Attributes["feature_flag_id"]
 
-		client := testAccEarlyAccessFeatureClient()
+		client := testAccAPIClient()
 		flag, _, err := client.GetFeatureFlag(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), flagID)
 		if err != nil {
 			return fmt.Errorf("reading feature flag %s: %w", flagID, err)

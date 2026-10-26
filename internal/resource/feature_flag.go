@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/internal/httpclient"
 	"github.com/posthog/terraform-provider/internal/resource/core"
@@ -31,6 +37,11 @@ type FeatureFlagTFModel struct {
 	core.BaseProjectID
 	Key                        types.String         `tfsdk:"key"`
 	Name                       types.String         `tfsdk:"name"`
+	EvaluationRuntime          types.String         `tfsdk:"evaluation_runtime"`
+	BucketingIdentifier        types.String         `tfsdk:"bucketing_identifier"`
+	Archived                   types.Bool           `tfsdk:"archived"`
+	EvaluationContexts         types.Set            `tfsdk:"evaluation_contexts"`
+	IsRemoteConfiguration      types.Bool           `tfsdk:"is_remote_configuration"`
 	Active                     types.Bool           `tfsdk:"active"`
 	Filters                    jsontypes.Normalized `tfsdk:"filters"`
 	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
@@ -66,10 +77,43 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 			"name": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags.",
+				MarkdownDescription: "Feature flag name/description (PostHog's UI labels this as 'Description'). The API does not expose a separate dedicated description field for feature flags. Empty strings are preserved. PostHog trims surrounding whitespace; Terraform retains the configured spelling when only that whitespace differs.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"evaluation_runtime": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Where the flag is evaluated: `server`, `client`, or `all`. PostHog defaults new flags to `all`. When omitted, the existing runtime is preserved, including on import; updates leave it unknown until the API response so a saved plan cannot overwrite a newer remote value. This controls remote evaluation; it does not restrict server-side local evaluation.",
+				Validators:          []validator.String{stringvalidator.OneOf("server", "client", "all")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"bucketing_identifier": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Identifier used to assign rollout buckets and variants: `distinct_id` (the API default) or `device_id`. Device bucketing cannot be combined with `ensure_experience_continuity = true`. When omitted, updates preserve the remote setting.",
+				Validators:          []validator.String{stringvalidator.OneOf("distinct_id", "device_id")},
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"archived": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag is archived and hidden from the default flag list. Archived flags must have `active = false`. Unarchiving does not enable the flag. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+			},
+			"evaluation_contexts": schema.SetAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Contexts in which the flag evaluates, such as `web` or `checkout`. Use lowercase names without surrounding whitespace (up to 50 names, each 1–255 characters). Matching contexts must also be configured in the SDK. Omit to preserve existing contexts, or set `[]` to clear them where project policy permits. PostHog applies contexts only when evaluation contexts are enabled for your organization; otherwise the apply fails with an error that says so.",
+				Validators:          []validator.Set{setvalidator.SizeAtMost(50), setvalidator.ValueStringsAre(stringvalidator.UTF8LengthBetween(1, 255), canonicalFeatureFlagContextValidator{})},
+			},
+			"is_remote_configuration": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the flag delivers remote configuration. Payloads are configured through `filters.payloads`. On creation, PostHog defaults missing or zero rollout percentages to 100; when supplying filters, provide explicit nonzero group rollout percentages. A top-level `rollout_percentage` must match the first group when both are configured. When omitted, updates preserve the remote setting.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
 			},
 			"active": schema.BoolAttribute{
 				Optional:            true,
@@ -138,34 +182,70 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 	}
 }
 
+// ModifyResourcePlan plans what an update leaves on the flag for settings the config leaves out,
+// and rejects options PostHog cannot honor on new flags.
 func (o FeatureFlagOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
 		return
 	}
-	if req.State.Raw.IsNull() {
-		rejectUsageDashboardOptIn(ctx, req, resp)
-		return
-	}
-	planUnconfiguredFilters(ctx, req, resp)
-}
-
-// planUnconfiguredFilters shows in the plan what an update that changes rollout_percentage does
-// to filters the config leaves out. The framework plans them as "(known after apply)", which
-// hides that the update rewrites the flag's release conditions.
-func planUnconfiguredFilters(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	var configured jsontypes.Normalized
-	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("filters"), &configured)...)
-	if resp.Diagnostics.HasError() || !configured.IsNull() {
-		return
-	}
-
-	var plan, state FeatureFlagTFModel
+	var plan, config FeatureFlagTFModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
+	if !req.State.Raw.IsNull() {
+		// A plan that changes nothing keeps the state's values, so it stays empty.
+		if !req.Plan.Raw.Equal(req.State.Raw) {
+			var state FeatureFlagTFModel
+			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			planOmittedSettingsUnknown(ctx, config, resp)
+			planUnconfiguredFilters(ctx, plan, config, state, resp)
+		}
+		return
+	}
+
+	resp.Diagnostics.Append(validateRemoteConfigurationCreate(plan)...)
+	if plan.CreateUsageDashboard.ValueBool() {
+		resp.Diagnostics.AddError(
+			"Unsupported create_usage_dashboard",
+			"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
+		)
+	}
+}
+
+// planOmittedSettingsUnknown plans the settings the config leaves out as unknown, so an update
+// does not send them and PostHog keeps its current values. Planning them from state instead would
+// let a saved plan, or one made with -refresh=false, overwrite changes made in PostHog since.
+func planOmittedSettingsUnknown(ctx context.Context, config FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	for _, setting := range []struct {
+		name                string
+		configured, unknown attr.Value
+	}{
+		{"evaluation_runtime", config.EvaluationRuntime, types.StringUnknown()},
+		{"bucketing_identifier", config.BucketingIdentifier, types.StringUnknown()},
+		{"archived", config.Archived, types.BoolUnknown()},
+		{"evaluation_contexts", config.EvaluationContexts, types.SetUnknown(types.StringType)},
+		{"is_remote_configuration", config.IsRemoteConfiguration, types.BoolUnknown()},
+	} {
+		if setting.configured.IsNull() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root(setting.name), setting.unknown)...)
+		}
+	}
+}
+
+// planUnconfiguredFilters plans the filters an update leaves on the flag when the config does not
+// set them. When rollout_percentage changes, the plan shows the flag's current filters with the
+// new rollout, instead of "(known after apply)", which would hide that the update rewrites the
+// flag's release conditions.
+func planUnconfiguredFilters(ctx context.Context, plan, config, state FeatureFlagTFModel, resp *resource.ModifyPlanResponse) {
+	if !config.Filters.IsNull() {
+		return
+	}
 	planned, ok, err := plannedFiltersForRollout(plan, state)
 	if err != nil {
 		// BuildUpdateRequest reports the same error at apply.
@@ -180,9 +260,7 @@ func planUnconfiguredFilters(ctx context.Context, req resource.ModifyPlanRequest
 	// by then. Unless the config sets rollout_percentage, plan it as unknown too: pinning it to
 	// state fails the apply with "inconsistent result" when the rollout was changed in PostHog
 	// after the plan was made (a saved plan, or -refresh=false).
-	var configuredRollout types.Int64
-	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("rollout_percentage"), &configuredRollout)...)
-	if !resp.Diagnostics.HasError() && plan.Filters.IsUnknown() && configuredRollout.IsNull() {
+	if plan.Filters.IsUnknown() && config.RolloutPercentage.IsNull() {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("rollout_percentage"), types.Int64Unknown())...)
 	}
 }
@@ -207,24 +285,6 @@ func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes
 	return jsontypes.NewNormalizedValue(value), true, nil
 }
 
-// Existing flags may carry the deprecated setting in state, but a new flag with
-// the opt-in cannot produce the saved dashboard it promises.
-func rejectUsageDashboardOptIn(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	var plan FeatureFlagTFModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	if plan.CreateUsageDashboard.IsUnknown() || !plan.CreateUsageDashboard.ValueBool() {
-		return
-	}
-
-	resp.Diagnostics.AddError(
-		"Unsupported create_usage_dashboard",
-		"PostHog no longer creates a saved usage dashboard when a feature flag is created. Remove create_usage_dashboard = true; usage charts are available on the flag's Usage tab.",
-	)
-}
-
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
@@ -238,11 +298,17 @@ func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFla
 		)
 		return req, diags
 	}
+	diags.Append(validateRemoteConfigurationCreate(model)...)
+	if diags.HasError() {
+		return req, diags
+	}
 
 	if !model.Name.IsNull() {
 		name := model.Name.ValueString()
 		req.Name = &name
 	}
+
+	diags.Append(applyFeatureFlagSettings(ctx, model, &req)...)
 
 	if !model.Active.IsNull() {
 		active := model.Active.ValueBool()
@@ -290,6 +356,8 @@ func (o FeatureFlagOps) BuildUpdateRequest(ctx context.Context, plan, state Feat
 		name := plan.Name.ValueString()
 		req.Name = &name
 	}
+
+	diags.Append(applyFeatureFlagSettings(ctx, plan, &req)...)
 
 	if !plan.Active.IsNull() {
 		active := plan.Active.ValueBool()
@@ -339,7 +407,24 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	model.ID = types.Int64Value(resp.ID)
 	model.Key = types.StringValue(resp.Key)
-	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	// The API trims names on write. Keep the planned/prior spelling only when
+	// that normalization explains the difference; real remote edits remain drift.
+	if resp.Name == nil || model.Name.IsNull() || model.Name.IsUnknown() || strings.TrimSpace(model.Name.ValueString()) != *resp.Name {
+		model.Name = types.StringPointerValue(resp.Name)
+	}
+	model.EvaluationRuntime = types.StringPointerValue(resp.EvaluationRuntime)
+	model.BucketingIdentifier = types.StringPointerValue(resp.BucketingIdentifier)
+	model.Archived = types.BoolPointerValue(resp.Archived)
+	model.IsRemoteConfiguration = types.BoolPointerValue(resp.IsRemoteConfiguration)
+	// PostHog versions without evaluation contexts leave the field out. Read that as no contexts
+	// rather than null, which would not match `evaluation_contexts = []` in a configuration.
+	contextNames := resp.EvaluationContexts
+	if contextNames == nil {
+		contextNames = []string{}
+	}
+	contexts, d := types.SetValueFrom(ctx, types.StringType, contextNames)
+	diags.Append(d...)
+	model.EvaluationContexts = contexts
 	model.Active = core.PtrToBool(resp.Active)
 	model.EnsureExperienceContinuity = core.PtrToBool(resp.EnsureExperienceContinuity)
 
@@ -494,7 +579,22 @@ func isEmptyFeatureFlagFilterValue(value interface{}) bool {
 }
 
 func (o FeatureFlagOps) Create(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, error) {
-	return client.CreateFeatureFlag(ctx, model.GetEffectiveProjectID(), req)
+	projectID := model.GetEffectiveProjectID()
+	flag, err := client.CreateFeatureFlag(ctx, projectID, req)
+	if err != nil {
+		return flag, err
+	}
+	if err := checkEvaluationContextsApplied(req, flag); err != nil {
+		// The flag is not saved to state, and it would be serving in every context rather than the
+		// configured ones. Delete it: PostHog frees a deleted flag's key, so the next apply can
+		// create it again.
+		id := strconv.FormatInt(flag.ID, 10)
+		if _, deleteErr := client.DeleteFeatureFlag(ctx, projectID, id); deleteErr != nil {
+			return flag, fmt.Errorf("%w. PostHog created the flag anyway (ID %d), and it is serving without evaluation contexts. Deleting it failed: %v. Delete it in PostHog, or import it with ID %s/%s, before applying again", err, flag.ID, deleteErr, projectID, id)
+		}
+		return flag, fmt.Errorf("%w. The flag PostHog created was deleted again, so nothing was left behind", err)
+	}
+	return flag, nil
 }
 
 func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
@@ -502,7 +602,11 @@ func (o FeatureFlagOps) Read(ctx context.Context, client httpclient.PosthogClien
 }
 
 func (o FeatureFlagOps) Update(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel, req httpclient.FeatureFlagRequest) (httpclient.FeatureFlag, httpclient.HTTPStatusCode, error) {
-	return client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	flag, status, err := client.UpdateFeatureFlag(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+	if err != nil {
+		return flag, status, err
+	}
+	return flag, status, checkEvaluationContextsApplied(req, flag)
 }
 
 func (o FeatureFlagOps) Delete(ctx context.Context, client httpclient.PosthogClient, model FeatureFlagTFModel) (httpclient.HTTPStatusCode, error) {
