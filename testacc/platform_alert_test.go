@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
-	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 const platformAlertAddress = "posthog_platform_alert.test"

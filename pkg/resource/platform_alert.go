@@ -27,9 +27,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/posthog/terraform-provider/internal/httpclient"
-	"github.com/posthog/terraform-provider/internal/resource/core"
-	"github.com/posthog/terraform-provider/internal/util"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
+	"github.com/posthog/terraform-provider/pkg/util"
 )
 
 const sourceKindLogs = "logs"
