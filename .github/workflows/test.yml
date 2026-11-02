@@ -60,5 +60,5 @@ jobs:
           terraform_version: ${{ matrix.terraform }}
           terraform_wrapper: false
       - run: go mod download
-      - run: go test -v -cover ./internal/...
+      - run: go test -v -cover ./pkg/...
         timeout-minutes: 10

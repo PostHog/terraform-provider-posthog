@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 // TestRoleDataSource_Basic creates a role via the API (simulating SCIM provisioning),

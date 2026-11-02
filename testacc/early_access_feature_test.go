@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 const earlyAccessFeatureAddress = "posthog_early_access_feature.test"

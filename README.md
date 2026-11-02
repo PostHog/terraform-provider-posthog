@@ -17,6 +17,18 @@ For usage documentation and supported resources, see the [Terraform Registry](ht
 go install
 ```
 
+## Embedding the Provider in Go
+
+The provider's packages live under `pkg/`, so other Go modules can import them. Tools that run a Terraform provider in-process, such as Crossplane's upjet or Pulumi's Terraform bridge, start from the constructor:
+
+```go
+import "github.com/posthog/terraform-provider/pkg/provider"
+
+p := provider.New("1.0.0")()
+```
+
+Only the Terraform interface is versioned: resource and data source names, their schemas, and state. The Go packages are not a stable API and can change in any release, including patch releases, so pin a version and check that your build passes before upgrading.
+
 ## Local Development
 
 The `playground/` directory lets you test provider changes locally without publishing.

@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
-	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 // testAccCheckHogFunctionDestroy verifies the hog function has been destroyed (soft deleted).

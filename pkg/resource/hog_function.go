@@ -1,0 +1,529 @@
+package resource
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
+	"github.com/posthog/terraform-provider/pkg/util"
+)
+
+// hogFunctionServerFields are fields the server generates on hog-function
+// responses and should be stripped to avoid spurious diffs.
+var hogFunctionServerFields = map[string]struct{}{
+	"bytecode": {},
+	"order":    {},
+}
+
+func NewHogFunction() resource.Resource {
+	return core.NewGenericResource[HogFunctionResourceTFModel, httpclient.HogFunctionRequest, httpclient.HogFunction](
+		HogFunctionOps{},
+		core.ProjectScopedImportParser[HogFunctionResourceTFModel](),
+	)
+}
+
+type HogFunctionResourceTFModel struct {
+	core.BaseStringIdentifiable
+	core.BaseProjectID
+	Type                types.String         `tfsdk:"type"`
+	Name                types.String         `tfsdk:"name"`
+	Description         types.String         `tfsdk:"description"`
+	Enabled             types.Bool           `tfsdk:"enabled"`
+	Hog                 types.String         `tfsdk:"hog"`
+	InputsJSON          jsontypes.Normalized `tfsdk:"inputs_json"`
+	SensitiveInputsJSON jsontypes.Normalized `tfsdk:"sensitive_inputs_json"`
+	InputsSchemaJSON    jsontypes.Normalized `tfsdk:"inputs_schema_json"`
+	FiltersJSON         jsontypes.Normalized `tfsdk:"filters_json"`
+	MaskingJSON         jsontypes.Normalized `tfsdk:"masking_json"`
+	MappingsJSON        jsontypes.Normalized `tfsdk:"mappings_json"`
+	IconURL             types.String         `tfsdk:"icon_url"`
+	TemplateID          types.String         `tfsdk:"template_id"`
+	ExecutionOrder      types.Int64          `tfsdk:"execution_order"`
+}
+
+type HogFunctionOps struct{}
+
+func (o HogFunctionOps) ResourceName() string {
+	return "hog_function"
+}
+
+func (o HogFunctionOps) Schema() schema.Schema {
+	return schema.Schema{
+		MarkdownDescription: "Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and transformations triggered by events or alerts.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "UUID of the Hog function.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"project_id": core.ProjectIDSchemaAttribute(),
+			"type": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Type of Hog function: `destination`, `site_destination`, `internal_destination`, `source_webhook`, `site_app`, or `transformation`.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"name": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Name of the Hog function.",
+			},
+			"description": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Description of the Hog function.",
+			},
+			"enabled": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether the Hog function is enabled. Defaults to true.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"hog": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "The Hog code to execute. Not required when using a template - the template provides the code.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"inputs_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				MarkdownDescription: "JSON object containing the input values for the Hog function. Keys correspond to the input schema, values contain `value` and optional `templating` properties. For inputs containing secrets, use `sensitive_inputs_json` instead.",
+			},
+			"sensitive_inputs_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "JSON object containing sensitive input values (e.g. API keys, tokens, credentials) for the Hog function. Same format as `inputs_json`. Values are merged with `inputs_json` at apply time and redacted from plan/apply output. If the same key appears in both, `sensitive_inputs_json` takes precedence.",
+			},
+			"inputs_schema_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				MarkdownDescription: "JSON array defining custom input schema entries for the Hog function. Each entry is an object with `key`, `type`, `secret`, `required`, and other properties. Sent directly as `inputs_schema` in the API request. When using a template, this replaces the template's default schema.",
+			},
+			"filters_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				MarkdownDescription: "JSON object defining filters for when the Hog function should execute. Includes `events`, `actions`, `properties`, and `filter_test_accounts` options.",
+			},
+			"masking_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				MarkdownDescription: "JSON object configuring PII masking for the Hog function. Includes `ttl`, `threshold`, and `hash` properties.",
+			},
+			"mappings_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
+				Optional:            true,
+				MarkdownDescription: "JSON array of mapping configurations. Each mapping can have its own `name`, `inputs_schema`, `inputs`, and `filters`.",
+			},
+			"icon_url": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "URL of the icon for this Hog function.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"template_id": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "ID of a template to use as the basis for this Hog function. The template provides default code, inputs schema, and configuration.",
+			},
+			"execution_order": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Order in which this Hog function executes relative to others (0-32767).",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+		},
+	}
+}
+
+func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	req := httpclient.HogFunctionRequest{}
+
+	if core.IsKnown(model.Type) {
+		t := model.Type.ValueString()
+		req.Type = &t
+	}
+
+	if core.IsKnown(model.Name) {
+		name := model.Name.ValueString()
+		req.Name = &name
+	}
+
+	if core.IsKnown(model.Description) {
+		desc := model.Description.ValueString()
+		req.Description = &desc
+	}
+
+	if core.IsKnown(model.Enabled) {
+		enabled := model.Enabled.ValueBool()
+		req.Enabled = &enabled
+	}
+
+	if core.IsKnown(model.Hog) {
+		hog := model.Hog.ValueString()
+		req.Hog = &hog
+	}
+
+	if core.IsKnown(model.IconURL) {
+		iconURL := model.IconURL.ValueString()
+		req.IconURL = &iconURL
+	}
+
+	if core.IsKnown(model.TemplateID) {
+		templateID := model.TemplateID.ValueString()
+		req.TemplateID = &templateID
+	}
+
+	if core.IsKnown(model.ExecutionOrder) {
+		order := int(model.ExecutionOrder.ValueInt64())
+		req.ExecutionOrder = &order
+	}
+
+	if core.IsKnown(model.InputsJSON) {
+		raw := strings.TrimSpace(model.InputsJSON.ValueString())
+		if raw != "" {
+			var inputs map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &inputs); err != nil {
+				diags.AddError("Invalid inputs_json", "inputs_json must be valid JSON object: "+err.Error())
+				return req, diags
+			}
+			req.Inputs = inputs
+		}
+	}
+
+	// Merge sensitive_inputs_json into inputs (sensitive values take precedence)
+	if core.IsKnown(model.SensitiveInputsJSON) {
+		raw := strings.TrimSpace(model.SensitiveInputsJSON.ValueString())
+		if raw != "" {
+			var sensitiveInputs map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &sensitiveInputs); err != nil {
+				diags.AddError("Invalid sensitive_inputs_json", "sensitive_inputs_json must be valid JSON object: "+err.Error())
+				return req, diags
+			}
+			if req.Inputs == nil {
+				req.Inputs = sensitiveInputs
+			} else {
+				for k, v := range sensitiveInputs {
+					req.Inputs[k] = v
+				}
+			}
+		}
+	}
+
+	if core.IsKnown(model.InputsSchemaJSON) {
+		raw := strings.TrimSpace(model.InputsSchemaJSON.ValueString())
+		if raw != "" {
+			var inputsSchema []map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &inputsSchema); err != nil {
+				diags.AddError("Invalid inputs_schema_json", "inputs_schema_json must be a valid JSON array: "+err.Error())
+				return req, diags
+			}
+			req.InputsSchema = inputsSchema
+		}
+	}
+
+	if core.IsKnown(model.FiltersJSON) {
+		raw := strings.TrimSpace(model.FiltersJSON.ValueString())
+		if raw != "" {
+			var filters map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &filters); err != nil {
+				diags.AddError("Invalid filters_json", "filters_json must be valid JSON object: "+err.Error())
+				return req, diags
+			}
+			req.Filters = filters
+		}
+	}
+
+	if core.IsKnown(model.MaskingJSON) {
+		raw := strings.TrimSpace(model.MaskingJSON.ValueString())
+		if raw != "" {
+			var masking map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &masking); err != nil {
+				diags.AddError("Invalid masking_json", "masking_json must be valid JSON object: "+err.Error())
+				return req, diags
+			}
+			req.Masking = masking
+		}
+	}
+
+	if core.IsKnown(model.MappingsJSON) {
+		raw := strings.TrimSpace(model.MappingsJSON.ValueString())
+		if raw != "" {
+			var mappings []map[string]interface{}
+			if err := json.Unmarshal([]byte(raw), &mappings); err != nil {
+				diags.AddError("Invalid mappings_json", "mappings_json must be valid JSON array: "+err.Error())
+				return req, diags
+			}
+			req.Mappings = mappings
+		}
+	}
+
+	return req, diags
+}
+
+func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, state HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
+	req, diags := o.BuildCreateRequest(ctx, plan)
+
+	// Clear description if removed from config
+	if core.ShouldClearString(plan.Description, state.Description) {
+		req.Description = util.StringPtr("")
+	}
+
+	return req, diags
+}
+
+func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.HogFunction, model *HogFunctionResourceTFModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	model.ID = types.StringValue(resp.ID)
+
+	if resp.Type != nil && *resp.Type != "" {
+		model.Type = types.StringValue(*resp.Type)
+	} else {
+		model.Type = types.StringNull()
+	}
+
+	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
+	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	model.Enabled = core.PtrToBool(resp.Enabled)
+	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
+
+	// Preserve the configured/prior hog value when it differs from the server's
+	// only by trailing whitespace. PostHog strips trailing whitespace (e.g. the
+	// newline a `<<-EOT` heredoc adds), so overwriting state with the server value
+	// would make the applied value differ from the known planned value — which
+	// Terraform rejects as "Provider produced inconsistent result after apply"
+	// (issue #91). Keeping the user's value treats the two as semantically equal,
+	// which also prevents a perpetual diff on subsequent plans.
+	serverHog := core.PtrToStringTrimmed(resp.Hog)
+	if model.Hog.IsNull() || model.Hog.IsUnknown() ||
+		core.TrimTrailingWS(model.Hog.ValueString()) != serverHog.ValueString() {
+		model.Hog = serverHog
+	}
+
+	// TemplateID - only set if the model already has one (write-only field)
+	// The API returns template object, not template_id
+	if !model.TemplateID.IsNull() {
+		// Keep the existing template_id from state
+	} else if resp.Template != nil && resp.Template.ID != "" {
+		// If we have a template in response and no template_id in state, set it
+		model.TemplateID = types.StringValue(resp.Template.ID)
+	} else {
+		model.TemplateID = types.StringNull()
+	}
+
+	if resp.ExecutionOrder != nil {
+		model.ExecutionOrder = types.Int64Value(int64(*resp.ExecutionOrder))
+	} else {
+		model.ExecutionOrder = types.Int64Null()
+	}
+
+	// Always populate inputs_json and sensitive_inputs_json from API for import support
+	// Strip server-computed fields (bytecode, order) from each input
+	if len(resp.Inputs) > 0 {
+		// inputs_json: filter to only keys the user specified in inputs_json
+		if !model.InputsJSON.IsNull() {
+			normalized, err := normalizeJSONStripServerFields(resp.Inputs, model.InputsJSON.ValueString())
+			if err != nil {
+				diags.AddError("Failed to normalize inputs", err.Error())
+				return diags
+			}
+			model.InputsJSON = jsontypes.NewNormalizedValue(normalized)
+		} else if model.SensitiveInputsJSON.IsNull() {
+			// Import case: both fields are null, populate inputs_json with all API inputs
+			normalized, err := normalizeJSONStripServerFields(resp.Inputs, "")
+			if err != nil {
+				diags.AddError("Failed to normalize inputs", err.Error())
+				return diags
+			}
+			model.InputsJSON = jsontypes.NewNormalizedValue(normalized)
+		}
+
+		// sensitive_inputs_json: do NOT update from API response. The PostHog API never
+		// returns actual secret values (it replaces them with placeholders), so overwriting
+		// state with the API response would produce a diff against the planned value,
+		// causing "inconsistent values for sensitive attribute" errors. The prior/planned
+		// value is always the correct value to keep in state.
+	} else {
+		if !model.InputsJSON.IsNull() {
+			model.InputsJSON = jsontypes.NewNormalizedValue("{}")
+		}
+		// When the API returns no inputs at all, reflect that in state so drift is
+		// surfaced correctly (the resource genuinely has no inputs configured).
+		if !model.SensitiveInputsJSON.IsNull() {
+			model.SensitiveInputsJSON = jsontypes.NewNormalizedValue("{}")
+		}
+	}
+
+	// Filter inputs_schema to only entries the user specified (by "key" field),
+	// then normalize through the same pipeline as other JSON fields.
+	if len(resp.InputsSchema) > 0 {
+		if !model.InputsSchemaJSON.IsNull() {
+			var userSchema []map[string]interface{}
+			if err := json.Unmarshal([]byte(model.InputsSchemaJSON.ValueString()), &userSchema); err != nil {
+				diags.AddError("Failed to parse inputs_schema_json from state", err.Error())
+				return diags
+			}
+
+			// Build lookup of API entries by key
+			apiByKey := make(map[string]map[string]interface{})
+			for _, entry := range resp.InputsSchema {
+				if key, ok := entry["key"].(string); ok {
+					apiByKey[key] = entry
+				}
+			}
+
+			// Filter to user-specified keys, preserving user's ordering.
+			// Build both the API slice and a matching user slice so that
+			// normalizeJSONStripServerFields (which matches array elements
+			// by index) pairs each API entry with its correct user template.
+			var filtered []interface{}
+			var matchedUser []interface{}
+			for _, userEntry := range userSchema {
+				if key, ok := userEntry["key"].(string); ok {
+					if apiEntry, exists := apiByKey[key]; exists {
+						filtered = append(filtered, apiEntry)
+						matchedUser = append(matchedUser, userEntry)
+					}
+				}
+			}
+			if filtered == nil {
+				filtered = []interface{}{}
+				matchedUser = []interface{}{}
+			}
+
+			userJSON, err := json.Marshal(matchedUser)
+			if err != nil {
+				diags.AddError("Failed to marshal matched user schema", err.Error())
+				return diags
+			}
+			normalized, err := normalizeJSONStripServerFields(filtered, string(userJSON))
+			if err != nil {
+				diags.AddError("Failed to normalize inputs_schema", err.Error())
+				return diags
+			}
+			model.InputsSchemaJSON = jsontypes.NewNormalizedValue(normalized)
+		}
+	} else if !model.InputsSchemaJSON.IsNull() {
+		model.InputsSchemaJSON = jsontypes.NewNormalizedValue("[]")
+	} else {
+		model.InputsSchemaJSON = jsontypes.NewNormalizedNull()
+	}
+
+	if len(resp.Filters) > 0 {
+		normalized, err := normalizeJSONStripServerFields(resp.Filters, model.FiltersJSON.ValueString())
+		if err != nil {
+			diags.AddError("Failed to normalize filters", err.Error())
+			return diags
+		}
+		model.FiltersJSON = jsontypes.NewNormalizedValue(normalized)
+	} else if !model.FiltersJSON.IsNull() {
+		model.FiltersJSON = jsontypes.NewNormalizedValue("{}")
+	} else {
+		model.FiltersJSON = jsontypes.NewNormalizedNull()
+	}
+
+	if len(resp.Masking) > 0 {
+		normalized, err := normalizeJSONStripServerFields(resp.Masking, model.MaskingJSON.ValueString())
+		if err != nil {
+			diags.AddError("Failed to normalize masking", err.Error())
+			return diags
+		}
+		model.MaskingJSON = jsontypes.NewNormalizedValue(normalized)
+	} else if !model.MaskingJSON.IsNull() {
+		model.MaskingJSON = jsontypes.NewNormalizedValue("{}")
+	} else {
+		model.MaskingJSON = jsontypes.NewNormalizedNull()
+	}
+
+	// Mappings contain nested inputs and filters that need server fields stripped
+	if len(resp.Mappings) > 0 {
+		normalized, err := normalizeJSONStripServerFields(resp.Mappings, model.MappingsJSON.ValueString())
+		if err != nil {
+			diags.AddError("Failed to normalize mappings", err.Error())
+			return diags
+		}
+		model.MappingsJSON = jsontypes.NewNormalizedValue(normalized)
+	} else if !model.MappingsJSON.IsNull() {
+		model.MappingsJSON = jsontypes.NewNormalizedValue("[]")
+	} else {
+		model.MappingsJSON = jsontypes.NewNormalizedNull()
+	}
+
+	return diags
+}
+
+func (o HogFunctionOps) Create(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel, req httpclient.HogFunctionRequest) (httpclient.HogFunction, error) {
+	return client.CreateHogFunction(ctx, model.GetEffectiveProjectID(), req)
+}
+
+func (o HogFunctionOps) Read(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
+	return client.GetHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+func (o HogFunctionOps) Update(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel, req httpclient.HogFunctionRequest) (httpclient.HogFunction, httpclient.HTTPStatusCode, error) {
+	return client.UpdateHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID(), req)
+}
+
+func (o HogFunctionOps) Delete(ctx context.Context, client httpclient.PosthogClient, model HogFunctionResourceTFModel) (httpclient.HTTPStatusCode, error) {
+	return client.DeleteHogFunction(ctx, model.GetEffectiveProjectID(), model.GetID())
+}
+
+// normalizeJSONForState takes the API response data and user's configured JSON,
+// filters the API response to only include fields the user specified, and returns
+// canonical JSON.
+func normalizeJSONForState(apiData interface{}, userJSON string) (string, error) {
+	if apiData == nil {
+		return "", nil
+	}
+
+	// If user didn't specify JSON, return the API data as canonical JSON
+	userJSON = strings.TrimSpace(userJSON)
+	if userJSON == "" {
+		return marshalJSON(apiData)
+	}
+
+	// Parse user's JSON to know which fields to keep
+	var userData interface{}
+	if err := json.Unmarshal([]byte(userJSON), &userData); err != nil {
+		// If we can't parse user's JSON, fall back to returning API data
+		return marshalJSON(apiData)
+	}
+
+	filtered := filterToOnlyIncludeUserFields(userData, apiData)
+	return marshalJSON(filtered)
+}
+
+// normalizeJSONStripServerFields normalizes JSON by stripping server-computed fields
+// returning canonical JSON matching user's field structure.
+func normalizeJSONStripServerFields(apiData interface{}, userJSON string) (string, error) {
+	if apiData == nil {
+		return "", nil
+	}
+
+	cleaned := util.StripFields(apiData, hogFunctionServerFields)
+	return normalizeJSONForState(cleaned, userJSON)
+}
