@@ -27,7 +27,7 @@ fmt:
 	gofmt -s -w -e .
 
 test:
-	go test -v -cover -timeout=120s -parallel=10 ./internal/...
+	go test -v -cover -timeout=120s -parallel=10 ./pkg/...
 
 testacc:
 	@if [ -z "$$POSTHOG_API_KEY" ]; then \
