@@ -17,8 +17,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
-	"github.com/posthog/terraform-provider/internal/httpclient"
-	"github.com/posthog/terraform-provider/internal/util"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/util"
 )
 
 // TestFeatureFlagsDataSource_ListsExistingFlags creates a project holding one

@@ -36,9 +36,10 @@
 
 ### Internal
 
+- The provider's Go packages moved from `internal/` to `pkg/`, so other Go modules can import them; tools that embed a Terraform provider in-process, such as Crossplane's upjet or Pulumi's Terraform bridge, can call `provider.New` from `github.com/posthog/terraform-provider/pkg/provider` without a fork. Terraform users are unaffected: the binary, registry address, schemas, and state are unchanged. The Go packages are not a stable API and can change in any release. ([#191](https://github.com/PostHog/terraform-provider-posthog/issues/191))
 - `NewRetryTransport` fills in any unset retry tunable, so a hand-built `RetryConfig` cannot end up with no request deadline or a zero backoff that retries with no spacing. `JitterFactor` and `MaxRetries` are left alone, because zero is a meaningful value for both.
 - The `WithNoRetry` and `WithRetryConfig` client options replace an installed retry transport instead of stacking a second one on it. Stacked, the outer transport's per-attempt deadline had to cover the inner transport's whole retry loop, and `WithNoRetry` did not actually disable retries.
-- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`internal/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
+- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`pkg/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
 

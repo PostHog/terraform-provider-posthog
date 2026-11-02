@@ -20,7 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
-	"github.com/posthog/terraform-provider/internal/httpclient"
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 // TestFeatureFlag_Basic tests creating a feature flag with only the required field (key).
