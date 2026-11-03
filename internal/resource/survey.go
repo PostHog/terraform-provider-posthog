@@ -20,7 +20,8 @@ import (
 
 // surveyQuestionServerFields are fields the API generates per-question
 // (server-assigned IDs) that should be stripped before comparison with
-// user-provided JSON to avoid spurious diffs.
+// user-provided JSON to avoid spurious diffs. An id the user declares in
+// questions_json is kept (see restoreDeclaredSurveyQuestionIDs).
 var surveyQuestionServerFields = map[string]struct{}{
 	"id": {},
 }
@@ -518,7 +519,58 @@ func parseJSONArrayAttribute(attr types.String, name string) ([]interface{}, dia
 }
 
 func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (string, error) {
-	return normalizeJSONForState(util.StripFields(apiData, surveyQuestionServerFields), userJSON)
+	stripped := util.StripFields(apiData, surveyQuestionServerFields)
+	restoreDeclaredSurveyQuestionIDs(stripped, apiData, userJSON)
+	return normalizeJSONForState(stripped, userJSON)
+}
+
+// restoreDeclaredSurveyQuestionIDs puts the API's question id back on any
+// question where the user's questions_json declares an id. The API accepts and
+// persists a user-supplied id, so stripping it in that case makes the read
+// disagree with the plan ("Provider produced inconsistent result after apply").
+// Questions without a declared id keep the server-generated id stripped.
+func restoreDeclaredSurveyQuestionIDs(stripped, apiData interface{}, userJSON string) {
+	userJSON = strings.TrimSpace(userJSON)
+	if userJSON == "" {
+		return
+	}
+
+	var userQuestions []interface{}
+	if err := json.Unmarshal([]byte(userJSON), &userQuestions); err != nil {
+		return
+	}
+	strippedQuestions, ok := stripped.([]interface{})
+	if !ok {
+		return
+	}
+	apiQuestions, ok := apiData.([]interface{})
+	if !ok {
+		return
+	}
+
+	for i := range strippedQuestions {
+		if i >= len(userQuestions) || i >= len(apiQuestions) {
+			break
+		}
+		userQuestion, ok := userQuestions[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, declared := userQuestion["id"]; !declared {
+			continue
+		}
+		apiQuestion, ok := apiQuestions[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		strippedQuestion, ok := strippedQuestions[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if id, exists := apiQuestion["id"]; exists {
+			strippedQuestion["id"] = id
+		}
+	}
 }
 
 func normalizedJSONString(apiData interface{}, current string) (types.String, bool) {

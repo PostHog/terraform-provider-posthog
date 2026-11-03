@@ -75,6 +75,34 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, testSurveyQuestionNormalized, result)
 	})
+
+	t.Run("keeps an id the user declared", func(t *testing.T) {
+		declared := []interface{}{
+			map[string]interface{}{
+				"id":       "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+				"type":     "open",
+				"question": "How are you?",
+			},
+			map[string]interface{}{
+				"id":       "server-generated",
+				"type":     "open",
+				"question": "Anything else?",
+			},
+		}
+		userJSON := `[{"id":"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa","type":"open","question":"How are you?"},{"type":"open","question":"Anything else?"}]`
+
+		result, err := normalizeSurveyQuestionsForState(declared, userJSON)
+		require.NoError(t, err)
+		assert.JSONEq(t, `[{"id":"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa","question":"How are you?","type":"open"},{"question":"Anything else?","type":"open"}]`, result)
+	})
+
+	t.Run("surfaces drift when the API returns a different id than declared", func(t *testing.T) {
+		userJSON := `[{"id":"declared-id","type":"open","question":"How are you?"}]`
+
+		result, err := normalizeSurveyQuestionsForState(apiQuestions, userJSON)
+		require.NoError(t, err)
+		assert.JSONEq(t, `[{"id":"generated-id","question":"How are you?","type":"open"}]`, result)
+	})
 }
 
 func TestSurveyBuildRequestPreservesWriteOnlyFilters(t *testing.T) {
