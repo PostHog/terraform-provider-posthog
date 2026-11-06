@@ -77,6 +77,29 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 	})
 }
 
+func TestNormalizeSurveyQuestionsPreservesConfiguredIDs(t *testing.T) {
+	apiQuestions := []any{
+		map[string]any{"id": "configured-id", "type": "open", "question": "First question"},
+		map[string]any{"id": "generated-id", "type": "open", "question": "Second question"},
+	}
+	const configured = `[{"id":"configured-id","type":"open","question":"First question"},{"type":"open","question":"Second question"}]`
+
+	result, err := normalizeSurveyQuestionsForState(apiQuestions, configured)
+	require.NoError(t, err)
+	assert.JSONEq(t, configured, result)
+}
+
+func TestNormalizeSurveyQuestionsDetectsIDDrift(t *testing.T) {
+	apiQuestions := []any{
+		map[string]any{"id": "remote-id", "type": "open", "question": "How are you?"},
+	}
+	const configured = `[{"id":"configured-id","type":"open","question":"How are you?"}]`
+
+	result, err := normalizeSurveyQuestionsForState(apiQuestions, configured)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"id":"remote-id","type":"open","question":"How are you?"}]`, result)
+}
+
 func TestSurveyBuildRequestPreservesWriteOnlyFilters(t *testing.T) {
 	ops := SurveyOps{}
 
