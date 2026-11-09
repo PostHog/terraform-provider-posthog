@@ -73,6 +73,7 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 		api    []any
 		config string // questions_json as written; "" means import (no config yet)
 		want   string
+		drift  bool // state differs from config, so the next plan shows an update
 	}{
 		{
 			name:   "import leaves out ids PostHog assigned",
@@ -97,12 +98,14 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 			api:    []any{question("changed-in-ui", "How are you?")},
 			config: `[{"id":"set-in-config","type":"open","question":"How are you?"}]`,
 			want:   `[{"id":"changed-in-ui","type":"open","question":"How are you?"}]`,
+			drift:  true,
 		},
 		{
 			name:   "question added in PostHog shows as drift, including its id",
 			api:    []any{question("set-in-config", "First"), question("assigned-by-posthog", "Added in UI")},
 			config: `[{"id":"set-in-config","type":"open","question":"First"}]`,
 			want:   `[{"id":"set-in-config","type":"open","question":"First"},{"id":"assigned-by-posthog","type":"open","question":"Added in UI"}]`,
+			drift:  true,
 		},
 	}
 
@@ -111,6 +114,17 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 			got, err := normalizeSurveyQuestionsForState(tt.api, tt.config)
 			require.NoError(t, err)
 			assert.JSONEq(t, tt.want, got)
+			if tt.config == "" {
+				return // import: nothing to compare against
+			}
+			var gotV, configV any
+			require.NoError(t, json.Unmarshal([]byte(got), &gotV))
+			require.NoError(t, json.Unmarshal([]byte(tt.config), &configV))
+			if tt.drift {
+				assert.NotEqual(t, configV, gotV, "state should differ from config")
+			} else {
+				assert.Equal(t, configV, gotV, "state should match config")
+			}
 		})
 	}
 }
