@@ -19,8 +19,8 @@ import (
 )
 
 // surveyQuestionServerFields are fields the API generates per-question
-// (server-assigned IDs) that should be stripped before comparison with
-// user-provided JSON to avoid spurious diffs.
+// that should be stripped during import, when there is no configured JSON.
+// Configured IDs must be preserved during normal reads and writes.
 var surveyQuestionServerFields = map[string]struct{}{
 	"id": {},
 }
@@ -518,7 +518,12 @@ func parseJSONArrayAttribute(attr types.String, name string) ([]interface{}, dia
 }
 
 func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (string, error) {
-	return normalizeJSONForState(util.StripFields(apiData, surveyQuestionServerFields), userJSON)
+	if strings.TrimSpace(userJSON) == "" {
+		apiData = util.StripFields(apiData, surveyQuestionServerFields)
+	}
+	// The configured field shape keeps explicit IDs and omits generated IDs
+	// independently for each question, while still surfacing remote ID changes.
+	return normalizeJSONForState(apiData, userJSON)
 }
 
 func normalizedJSONString(apiData interface{}, current string) (types.String, bool) {

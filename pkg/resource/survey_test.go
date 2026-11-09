@@ -55,26 +55,78 @@ func TestSurveyResourceMetadataAndSchema(t *testing.T) {
 	assert.Contains(t, linkedInsightAttr.MarkdownDescription, "write-only")
 }
 
+// PostHog assigns an id to every question sent without one, so API responses
+// always carry ids. State must hold exactly the keys the config wrote for each
+// question: an id the config sets is kept (and shows drift if PostHog changes
+// it), an id PostHog assigned is left out.
 func TestNormalizeSurveyQuestionsForState(t *testing.T) {
-	apiQuestions := []interface{}{
-		map[string]interface{}{
-			"id":       "generated-id",
-			"type":     "open",
-			"question": "How are you?",
+	question := func(id, text string) map[string]any {
+		q := map[string]any{"type": "open", "question": text}
+		if id != "" {
+			q["id"] = id
+		}
+		return q
+	}
+
+	tests := []struct {
+		name   string
+		api    []any
+		config string // questions_json as written; "" means import (no config yet)
+		want   string
+		drift  bool // state differs from config, so the next plan shows an update
+	}{
+		{
+			name:   "import leaves out ids PostHog assigned",
+			api:    []any{question("assigned-by-posthog", "How are you?")},
+			config: "",
+			want:   `[{"type":"open","question":"How are you?"}]`,
+		},
+		{
+			name:   "config without ids leaves out ids PostHog assigned",
+			api:    []any{question("assigned-by-posthog", "How are you?")},
+			config: `[{"type":"open","question":"How are you?"}]`,
+			want:   `[{"type":"open","question":"How are you?"}]`,
+		},
+		{
+			name:   "id set in config is kept, id PostHog assigned to the next question is left out",
+			api:    []any{question("set-in-config", "First"), question("assigned-by-posthog", "Second")},
+			config: `[{"id":"set-in-config","type":"open","question":"First"},{"type":"open","question":"Second"}]`,
+			want:   `[{"id":"set-in-config","type":"open","question":"First"},{"type":"open","question":"Second"}]`,
+		},
+		{
+			name:   "id changed in PostHog shows as drift",
+			api:    []any{question("changed-in-ui", "How are you?")},
+			config: `[{"id":"set-in-config","type":"open","question":"How are you?"}]`,
+			want:   `[{"id":"changed-in-ui","type":"open","question":"How are you?"}]`,
+			drift:  true,
+		},
+		{
+			name:   "question added in PostHog shows as drift, including its id",
+			api:    []any{question("set-in-config", "First"), question("assigned-by-posthog", "Added in UI")},
+			config: `[{"id":"set-in-config","type":"open","question":"First"}]`,
+			want:   `[{"id":"set-in-config","type":"open","question":"First"},{"id":"assigned-by-posthog","type":"open","question":"Added in UI"}]`,
+			drift:  true,
 		},
 	}
 
-	t.Run("strips generated ids during import", func(t *testing.T) {
-		result, err := normalizeSurveyQuestionsForState(apiQuestions, "")
-		require.NoError(t, err)
-		assert.Equal(t, testSurveyQuestionNormalized, result)
-	})
-
-	t.Run("preserves user field shape during read", func(t *testing.T) {
-		result, err := normalizeSurveyQuestionsForState(apiQuestions, testSurveyQuestionJSON)
-		require.NoError(t, err)
-		assert.Equal(t, testSurveyQuestionNormalized, result)
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeSurveyQuestionsForState(tt.api, tt.config)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, got)
+			if tt.config == "" {
+				return // import: nothing to compare against
+			}
+			var gotV, configV any
+			require.NoError(t, json.Unmarshal([]byte(got), &gotV))
+			require.NoError(t, json.Unmarshal([]byte(tt.config), &configV))
+			if tt.drift {
+				assert.NotEqual(t, configV, gotV, "state should differ from config")
+			} else {
+				assert.Equal(t, configV, gotV, "state should match config")
+			}
+		})
+	}
 }
 
 func TestSurveyBuildRequestPreservesWriteOnlyFilters(t *testing.T) {
