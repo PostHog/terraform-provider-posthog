@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -39,16 +40,16 @@ func NewInsight() resource.Resource {
 type InsightResourceTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	ShortID        types.String `tfsdk:"short_id"`
-	Name           types.String `tfsdk:"name"`
-	DerivedName    types.String `tfsdk:"derived_name"`
-	Description    types.String `tfsdk:"description"`
-	QueryJSON      types.String `tfsdk:"query_json"`
-	QuerySQL       types.String `tfsdk:"query_sql"`
-	Tags           types.Set    `tfsdk:"tags"`
-	CreateInFolder types.String `tfsdk:"create_in_folder"`
-	DashboardIDs   types.Set    `tfsdk:"dashboard_ids"`
-	Deleted        types.Bool   `tfsdk:"deleted"`
+	ShortID        types.String         `tfsdk:"short_id"`
+	Name           types.String         `tfsdk:"name"`
+	DerivedName    types.String         `tfsdk:"derived_name"`
+	Description    types.String         `tfsdk:"description"`
+	QueryJSON      jsontypes.Normalized `tfsdk:"query_json"`
+	QuerySQL       types.String         `tfsdk:"query_sql"`
+	Tags           types.Set            `tfsdk:"tags"`
+	CreateInFolder types.String         `tfsdk:"create_in_folder"`
+	DashboardIDs   types.Set            `tfsdk:"dashboard_ids"`
+	Deleted        types.Bool           `tfsdk:"deleted"`
 }
 
 type InsightOps struct{}
@@ -93,6 +94,7 @@ func (o InsightOps) Schema() schema.Schema {
 				MarkdownDescription: "Insight description.",
 			},
 			"query_json": schema.StringAttribute{
+				CustomType:          jsontypes.NormalizedType{},
 				Optional:            true,
 				MarkdownDescription: "Raw JSON serialized query payload accepted by PostHog (for example an `InsightVizNode` with a `TrendsQuery`). Mutually exclusive with `query_sql`; exactly one must be set.",
 				Validators: []validator.String{
@@ -271,7 +273,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 				return diags
 			}
 			model.QuerySQL = types.StringValue(sql)
-			model.QueryJSON = types.StringNull()
+			model.QueryJSON = jsontypes.NewNormalizedNull()
 		} else {
 			// query_json-managed insight: filter API response to only include
 			// fields from user's config. This enables drift detection for
@@ -285,7 +287,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 				diags.AddError("Failed to normalize query", err.Error())
 				return diags
 			}
-			model.QueryJSON = types.StringValue(normalizedQuery)
+			model.QueryJSON = jsontypes.NewNormalizedValue(normalizedQuery)
 			model.QuerySQL = types.StringNull()
 		}
 	}
