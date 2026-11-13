@@ -684,7 +684,7 @@ func TestFeatureFlag_FiltersOmittedRolloutNoPerpetualDiff(t *testing.T) {
 // non-alphabetical order (key, type, operator, value) — unlike jsonencode, which sorts
 // keys. PostHog's API returns the same filters with alphabetically-sorted keys, so with
 // the old types.String attribute the second (PlanOnly) step would report a perpetual diff.
-// With jsontypes.Normalized the two are compared semantically, so the re-plan is empty.
+// With core.NormalizedJSON the two are compared semantically, so the re-plan is empty.
 func TestFeatureFlag_FiltersNoPerpetualDiff(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -705,6 +705,41 @@ func TestFeatureFlag_FiltersNoPerpetualDiff(t *testing.T) {
 				// Re-plan with the identical raw, non-alphabetical config. A non-empty plan
 				// here is exactly the issue #111 perpetual diff; PlanOnly fails on any change.
 				Config:   testAccFeatureFlagRawFilters(rKey),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestFeatureFlag_FiltersWholeNumberFloat guards filters that write a whole number as
+// a float, as Pulumi Python's json.dumps does (50.0). The provider reads the filters
+// back as 50, so while numbers were compared as text, create failed with "Provider
+// produced inconsistent result after apply". jsonencode() cannot catch this, because
+// it already writes 50.
+func TestFeatureFlag_FiltersWholeNumberFloat(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rKey := acctest.RandomWithPrefix("tf-acc-test")
+	config := fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_feature_flag" "test" {
+  key     = %q
+  active  = true
+  filters = "{\"groups\":[{\"properties\":[],\"rollout_percentage\":50.0}]}"
+}
+`, rKey)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check:  testCheckFiltersRolloutPercentage("posthog_feature_flag.test", 0, 50),
+			},
+			{
+				Config:   config,
 				PlanOnly: true,
 			},
 		},

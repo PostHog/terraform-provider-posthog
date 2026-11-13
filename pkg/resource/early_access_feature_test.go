@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +18,7 @@ func TestEarlyAccessFeatureBuildCreateRequest_LinksConfiguredFlag(t *testing.T) 
 		Stage:            types.StringValue("beta"),
 		Description:      types.StringValue("A faster editor"),
 		DocumentationURL: types.StringValue("https://example.com/docs"),
-		Payload:          jsontypes.NewNormalizedValue(`{"theme":"dark"}`),
+		Payload:          core.NewNormalizedJSONValue(`{"theme":"dark"}`),
 		FeatureFlagID:    types.Int64Value(42),
 	}
 
@@ -45,7 +45,7 @@ func TestEarlyAccessFeatureBuildCreateRequest_OmitsUnsetFields(t *testing.T) {
 		Stage:            types.StringValue("draft"),
 		Description:      types.StringNull(),
 		DocumentationURL: types.StringNull(),
-		Payload:          jsontypes.NewNormalizedNull(),
+		Payload:          core.NewNormalizedJSONNull(),
 		FeatureFlagID:    types.Int64Unknown(),
 	}
 
@@ -63,14 +63,14 @@ func TestEarlyAccessFeatureBuildUpdateRequest_ClearsRemovedFieldsAndNeverRelinks
 		Stage:            types.StringValue("beta"),
 		Description:      types.StringValue("A faster editor"),
 		DocumentationURL: types.StringValue("https://example.com/docs"),
-		Payload:          jsontypes.NewNormalizedValue(`{"theme":"dark"}`),
+		Payload:          core.NewNormalizedJSONValue(`{"theme":"dark"}`),
 		FeatureFlagID:    types.Int64Value(42),
 	}
 	plan := state
 	plan.Stage = types.StringValue("general-availability")
 	plan.Description = types.StringNull()
 	plan.DocumentationURL = types.StringNull()
-	plan.Payload = jsontypes.NewNormalizedNull()
+	plan.Payload = core.NewNormalizedJSONNull()
 
 	req, diags := EarlyAccessFeatureOps{}.BuildUpdateRequest(context.Background(), plan, state)
 	require.False(t, diags.HasError(), diags.Errors())
@@ -120,7 +120,7 @@ func TestEarlyAccessFeatureMapResponseToModel(t *testing.T) {
 				ID: "eaf-1", Name: "New editor", Stage: "draft",
 				Description: &empty, DocumentationURL: &empty, Payload: json.RawMessage(`{}`),
 			},
-			model: EarlyAccessFeatureTFModel{Payload: jsontypes.NewNormalizedNull()},
+			model: EarlyAccessFeatureTFModel{Payload: core.NewNormalizedJSONNull()},
 			check: func(t *testing.T, m EarlyAccessFeatureTFModel) {
 				assert.True(t, m.Description.IsNull())
 				assert.True(t, m.DocumentationURL.IsNull())
@@ -131,14 +131,14 @@ func TestEarlyAccessFeatureMapResponseToModel(t *testing.T) {
 		},
 		"an explicitly configured empty payload is kept": {
 			resp:  httpclient.EarlyAccessFeature{ID: "eaf-1", Name: "New editor", Stage: "draft", Payload: json.RawMessage(`{}`)},
-			model: EarlyAccessFeatureTFModel{Payload: jsontypes.NewNormalizedValue(`{}`)},
+			model: EarlyAccessFeatureTFModel{Payload: core.NewNormalizedJSONValue(`{}`)},
 			check: func(t *testing.T, m EarlyAccessFeatureTFModel) {
 				assert.Equal(t, `{}`, m.Payload.ValueString())
 			},
 		},
 		"a payload changed outside Terraform surfaces as drift": {
 			resp:  httpclient.EarlyAccessFeature{ID: "eaf-1", Name: "New editor", Stage: "draft", Payload: json.RawMessage(`{"theme":"dark","extra":1}`)},
-			model: EarlyAccessFeatureTFModel{Payload: jsontypes.NewNormalizedValue(`{"theme":"dark"}`)},
+			model: EarlyAccessFeatureTFModel{Payload: core.NewNormalizedJSONValue(`{"theme":"dark"}`)},
 			check: func(t *testing.T, m EarlyAccessFeatureTFModel) {
 				assert.JSONEq(t, `{"theme":"dark","extra":1}`, m.Payload.ValueString())
 			},

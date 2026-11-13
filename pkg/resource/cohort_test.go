@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ func TestCohortMapResponseToModel_DropsServerComputedFilterFields(t *testing.T) 
 	userFilters := `{"properties":{"type":"AND","values":[{"type":"person","key":"email","operator":"icontains","value":"@example.com"}]}}`
 
 	model := CohortTFModel{
-		Filters: jsontypes.NewNormalizedValue(userFilters),
+		Filters: core.NewNormalizedJSONValue(userFilters),
 	}
 
 	resp := httpclient.Cohort{
@@ -95,7 +95,7 @@ func TestCohortMapResponseToModel_NoFiltersIsNull(t *testing.T) {
 func TestCohortBuildCreateRequest_RejectsInvalidFiltersJSON(t *testing.T) {
 	model := CohortTFModel{
 		Name:    types.StringValue("Broken"),
-		Filters: jsontypes.NewNormalizedValue(`{"properties":`),
+		Filters: core.NewNormalizedJSONValue(`{"properties":`),
 	}
 
 	_, diags := CohortOps{}.BuildCreateRequest(context.Background(), model)

@@ -20,9 +20,10 @@ var (
 )
 
 // NormalizedJSONType is jsontypes.NormalizedType with numbers compared by
-// value. PostHog can return a configured 2.0 as 2 (an insight query's
-// decimalPlaces does), which jsontypes.Normalized treats as a change because it
-// compares number text.
+// value. The API client decodes responses into float64, so a configured 2.0
+// reads back as 2, which jsontypes.Normalized treats as a change because it
+// compares number text. Use it for every JSON string attribute that is read
+// back from the API.
 type NormalizedJSONType struct {
 	jsontypes.NormalizedType
 }
@@ -73,6 +74,10 @@ func NewNormalizedJSONNull() NormalizedJSON {
 
 func NewNormalizedJSONValue(value string) NormalizedJSON {
 	return NormalizedJSON{Normalized: jsontypes.NewNormalizedValue(value)}
+}
+
+func NewNormalizedJSONUnknown() NormalizedJSON {
+	return NormalizedJSON{Normalized: jsontypes.NewNormalizedUnknown()}
 }
 
 func (v NormalizedJSON) Type(_ context.Context) attr.Type {

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -79,7 +78,7 @@ func TestFeatureFlagRemoteConfigurationCreate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := FeatureFlagTFModel{IsRemoteConfiguration: types.BoolValue(true),
-				Filters: jsontypes.NewNormalizedValue(tc.filters), RolloutPercentage: tc.rollout}
+				Filters: core.NewNormalizedJSONValue(tc.filters), RolloutPercentage: tc.rollout}
 			_, diags := (FeatureFlagOps{}).BuildCreateRequest(context.Background(), model)
 			assert.Equal(t, tc.wantError, diags.HasError(), diags)
 		})
