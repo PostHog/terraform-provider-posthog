@@ -51,6 +51,13 @@ type ResourcePlanModifier interface {
 	ModifyResourcePlan(context.Context, resource.ModifyPlanRequest, *resource.ModifyPlanResponse)
 }
 
+// ResourceStateMover is an optional interface. If the ops struct implements it, GenericResource
+// accepts `moved` blocks from the resource types its movers handle. Terraform does not configure
+// the provider before a move, so a mover cannot call the API. It works from the source state alone.
+type ResourceStateMover interface {
+	StateMovers() []resource.StateMover
+}
+
 // GenericResource implements resource.Resource using the provided operations.
 type GenericResource[TFModel Identifiable, APIRequest, APIResponse any] struct {
 	client       httpclient.PosthogClient
@@ -63,6 +70,7 @@ var (
 	_ resource.Resource                = (*GenericResource[Identifiable, any, any])(nil)
 	_ resource.ResourceWithImportState = (*GenericResource[Identifiable, any, any])(nil)
 	_ resource.ResourceWithModifyPlan  = (*GenericResource[Identifiable, any, any])(nil)
+	_ resource.ResourceWithMoveState   = (*GenericResource[Identifiable, any, any])(nil)
 )
 
 func NewGenericResource[TFModel Identifiable, APIRequest, APIResponse any](
@@ -353,6 +361,16 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// MoveState returns no movers unless the ops struct implements ResourceStateMover, and Terraform
+// then refuses a `moved` block into this type as it would for a resource without MoveState.
+func (r *GenericResource[TFModel, APIRequest, APIResponse]) MoveState(ctx context.Context) []resource.StateMover {
+	mover, ok := any(r.ops).(ResourceStateMover)
+	if !ok {
+		return nil
+	}
+	return mover.StateMovers()
 }
 
 func (r *GenericResource[TFModel, APIRequest, APIResponse]) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
