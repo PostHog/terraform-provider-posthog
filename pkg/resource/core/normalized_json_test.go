@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +15,7 @@ func TestNormalizedJSON_StringSemanticEquals(t *testing.T) {
 		equal bool
 	}{
 		"key order and whitespace": {`{"b": 1, "a": [true, null]}`, `{"a":[true,null],"b":1}`, true},
-		"escaped characters":       {`{"q": "a > b & c"}`, `{"q":"a > b & c"}`, true},
+		"escaped characters":       {`{"q": "a > b & c"}`, `{"q":"a \u003e b \u0026 c"}`, true},
 		"whole-number float":       {`{"n": 2.0}`, `{"n":2}`, true},
 		"exponent":                 {`{"n": 1e3}`, `{"n":1000}`, true},
 		"trailing zeros":           {`{"n": 0.10}`, `{"n":0.1}`, true},
@@ -63,6 +61,4 @@ func TestNormalizedJSONType_ValueFromTerraform(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, null.(NormalizedJSON).IsNull())
 
-	var _ basetypes.StringValuableWithSemanticEquals = NormalizedJSON{}
-	var _ attr.Value = NewNormalizedJSONNull()
 }

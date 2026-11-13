@@ -20,8 +20,9 @@ var (
 )
 
 // NormalizedJSONType is jsontypes.NormalizedType with numbers compared by
-// value. PostHog stores a configured 2.0 as 2 and returns it that way, which
-// jsontypes.Normalized treats as a change because it compares number text.
+// value. PostHog can return a configured 2.0 as 2 (an insight query's
+// decimalPlaces does), which jsontypes.Normalized treats as a change because it
+// compares number text.
 type NormalizedJSONType struct {
 	jsontypes.NormalizedType
 }
@@ -52,7 +53,11 @@ func (t NormalizedJSONType) ValueFromTerraform(ctx context.Context, in tftypes.V
 	if !ok {
 		return nil, fmt.Errorf("unexpected value type of %T", attrValue)
 	}
-	return NormalizedJSON{Normalized: jsontypes.Normalized{StringValue: stringValue}}, nil
+	stringValuable, diags := t.ValueFromString(ctx, stringValue)
+	if diags.HasError() {
+		return nil, fmt.Errorf("unexpected error converting StringValue to StringValuable: %v", diags)
+	}
+	return stringValuable, nil
 }
 
 // NormalizedJSON is a JSON string attribute value that ignores key order,
@@ -118,7 +123,9 @@ func decodeJSONKeepingNumbers(s string) (any, error) {
 }
 
 // jsonValuesEqual compares decoded JSON. Numbers are compared as exact
-// rationals, so no precision is lost beyond what each side wrote.
+// rationals. The API client decodes responses into float64, so a configured
+// number float64 cannot hold exactly (an integer above 2^53) still reads back
+// as a different value.
 func jsonValuesEqual(a, b any) bool {
 	switch av := a.(type) {
 	case map[string]any:

@@ -156,14 +156,11 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 		}
 		input.Query = buildHogQLQuery(sql)
 	case core.IsKnown(model.QueryJSON):
-		raw := strings.TrimSpace(model.QueryJSON.ValueString())
-		if raw == "" {
-			diags.AddError("Invalid query_json", "query_json cannot be empty")
-			return input, diags
-		}
+		// The attribute type already rejects invalid JSON, so this only fails
+		// for valid JSON that is not an object, such as an array.
 		var query map[string]interface{}
-		if err := json.Unmarshal([]byte(raw), &query); err != nil {
-			diags.AddError("Invalid query_json", "query_json must be valid JSON: "+err.Error())
+		if err := json.Unmarshal([]byte(model.QueryJSON.ValueString()), &query); err != nil {
+			diags.AddError("Invalid query_json", "query_json must be a JSON object: "+err.Error())
 			return input, diags
 		}
 		input.Query = query
