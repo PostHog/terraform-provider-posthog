@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -310,7 +310,7 @@ func TestInsightBuildCreateRequest_QuerySQLWrapsSQLVerbatim(t *testing.T) {
 	// survive verbatim, so the wrapped query keeps it too.
 	sql := "SELECT count() FROM events\n"
 	model := InsightResourceTFModel{
-		QueryJSON: jsontypes.NewNormalizedNull(),
+		QueryJSON: core.NewNormalizedJSONNull(),
 		QuerySQL:  types.StringValue(sql),
 	}
 
@@ -322,7 +322,7 @@ func TestInsightBuildCreateRequest_QuerySQLWrapsSQLVerbatim(t *testing.T) {
 func TestInsightBuildCreateRequest_EmptyQuerySQLErrors(t *testing.T) {
 	ops := InsightOps{}
 	model := InsightResourceTFModel{
-		QueryJSON: jsontypes.NewNormalizedNull(),
+		QueryJSON: core.NewNormalizedJSONNull(),
 		QuerySQL:  types.StringValue("   "),
 	}
 
@@ -334,7 +334,7 @@ func TestInsightBuildCreateRequest_QueryJSONUnchanged(t *testing.T) {
 	ops := InsightOps{}
 	model := InsightResourceTFModel{
 		QuerySQL:  types.StringNull(),
-		QueryJSON: jsontypes.NewNormalizedValue(`{"kind":"InsightVizNode","source":{"kind":"TrendsQuery"}}`),
+		QueryJSON: core.NewNormalizedJSONValue(`{"kind":"InsightVizNode","source":{"kind":"TrendsQuery"}}`),
 	}
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
@@ -351,7 +351,7 @@ func TestInsightMapResponseToModel_QuerySQLExtractsSourceQuery(t *testing.T) {
 	ops := InsightOps{}
 	model := InsightResourceTFModel{
 		QuerySQL:  types.StringValue("SELECT count() FROM events"),
-		QueryJSON: jsontypes.NewNormalizedNull(),
+		QueryJSON: core.NewNormalizedJSONNull(),
 	}
 
 	// A canonical HogQL envelope with server-added fields (result/is_cached)
@@ -372,7 +372,7 @@ func TestInsightMapResponseToModel_QuerySQLExtractsSourceQuery(t *testing.T) {
 func TestInsightMapResponseToModel_StripsServerQueryFieldsWithoutUserConfig(t *testing.T) {
 	ops := InsightOps{}
 	model := InsightResourceTFModel{
-		QueryJSON: jsontypes.NewNormalizedNull(),
+		QueryJSON: core.NewNormalizedJSONNull(),
 	}
 
 	resp := httpclient.Insight{
@@ -396,33 +396,37 @@ func TestInsightMapResponseToModel_StripsServerQueryFieldsWithoutUserConfig(t *t
 
 // query_json is compared as JSON, not text: the API's copy (server fields
 // stripped, re-encoded by Go) must equal a differently formatted config, and a
-// real change must not.
+// real change must not. PostHog returns a configured 2.0 as 2, so numbers are
+// compared by value.
 func TestInsightMapResponseToModel_QueryJSONComparedSemantically(t *testing.T) {
-	configJSON := `{"source": {"series": [{"event": "$pageview"}], "kind": "TrendsQuery"}, "kind": "InsightVizNode"}`
+	configJSON := `{"source": {"series": [{"event": "$pageview"}], "trendsFilter": {"decimalPlaces": 2.0}, "kind": "TrendsQuery"}, "kind": "InsightVizNode"}`
 
 	for name, tt := range map[string]struct {
-		event string
-		equal bool
+		event         string
+		decimalPlaces float64
+		equal         bool
 	}{
-		"same query":    {event: "$pageview", equal: true},
-		"changed query": {event: "$autocapture", equal: false},
+		"same query":     {event: "$pageview", decimalPlaces: 2, equal: true},
+		"changed event":  {event: "$autocapture", decimalPlaces: 2, equal: false},
+		"changed number": {event: "$pageview", decimalPlaces: 3, equal: false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			model := InsightResourceTFModel{QueryJSON: jsontypes.NewNormalizedValue(configJSON)}
+			model := InsightResourceTFModel{QueryJSON: core.NewNormalizedJSONValue(configJSON)}
 			resp := httpclient.Insight{ID: 1, Query: map[string]interface{}{
 				"kind":      "InsightVizNode",
 				"is_cached": true, // server-added
 				"source": map[string]interface{}{
-					"kind":    "TrendsQuery",
-					"version": float64(2), // server-added
-					"series":  []interface{}{map[string]interface{}{"event": tt.event}},
+					"kind":         "TrendsQuery",
+					"version":      float64(2), // server-added
+					"series":       []interface{}{map[string]interface{}{"event": tt.event}},
+					"trendsFilter": map[string]interface{}{"decimalPlaces": tt.decimalPlaces},
 				},
 			}}
 
 			diags := InsightOps{}.MapResponseToModel(context.Background(), resp, &model)
 			require.False(t, diags.HasError(), diags.Errors())
 
-			equal, d := model.QueryJSON.StringSemanticEquals(context.Background(), jsontypes.NewNormalizedValue(configJSON))
+			equal, d := model.QueryJSON.StringSemanticEquals(context.Background(), core.NewNormalizedJSONValue(configJSON))
 			require.False(t, d.HasError(), d.Errors())
 			assert.Equal(t, tt.equal, equal)
 		})
