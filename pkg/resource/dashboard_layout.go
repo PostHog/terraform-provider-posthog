@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -26,12 +25,12 @@ import (
 )
 
 type TileTFModel struct {
-	TileID          types.Int64          `tfsdk:"tile_id"`
-	InsightID       types.Int64          `tfsdk:"insight_id"`
-	TextBody        types.String         `tfsdk:"text_body"`
-	Color           types.String         `tfsdk:"color"`
-	ShowDescription types.Bool           `tfsdk:"show_description"`
-	LayoutsJSON     jsontypes.Normalized `tfsdk:"layouts_json"`
+	TileID          types.Int64         `tfsdk:"tile_id"`
+	InsightID       types.Int64         `tfsdk:"insight_id"`
+	TextBody        types.String        `tfsdk:"text_body"`
+	Color           types.String        `tfsdk:"color"`
+	ShowDescription types.Bool          `tfsdk:"show_description"`
+	LayoutsJSON     core.NormalizedJSON `tfsdk:"layouts_json"`
 }
 
 func (t TileTFModel) IsInsightTile() bool {
@@ -56,7 +55,7 @@ var tilesObjectType = types.ObjectType{
 		"text_body":        types.StringType,
 		"color":            types.StringType,
 		"show_description": types.BoolType,
-		"layouts_json":     jsontypes.NormalizedType{},
+		"layouts_json":     core.NormalizedJSONType{},
 	},
 }
 
@@ -143,7 +142,7 @@ func (o *DashboardLayoutOps) Schema() schema.Schema {
 						"layouts_json": schema.StringAttribute{
 							Optional:            true,
 							Computed:            true,
-							CustomType:          jsontypes.NormalizedType{},
+							CustomType:          core.NormalizedJSONType{},
 							MarkdownDescription: "JSON object with breakpoint keys `sm` and/or `xs`, each containing position properties: `x`, `y`, `w`, `h` (required), and optionally `minW`, `minH` (e.g. `{\"sm\":{\"x\":0,\"y\":0,\"w\":6,\"h\":5},\"xs\":{\"x\":0,\"y\":0,\"w\":1,\"h\":5}}`). Semantic JSON equality is used to suppress phantom diffs.",
 							PlanModifiers: []planmodifier.String{
 								stringplanmodifier.UseStateForUnknown(),
@@ -674,12 +673,12 @@ func apiTileToTFModel(t httpclient.DashboardTile) TileTFModel {
 	if len(t.Layouts) > 0 {
 		bytes, err := json.Marshal(t.Layouts)
 		if err == nil {
-			tile.LayoutsJSON = jsontypes.NewNormalizedValue(string(bytes))
+			tile.LayoutsJSON = core.NewNormalizedJSONValue(string(bytes))
 		} else {
-			tile.LayoutsJSON = jsontypes.NewNormalizedNull()
+			tile.LayoutsJSON = core.NewNormalizedJSONNull()
 		}
 	} else {
-		tile.LayoutsJSON = jsontypes.NewNormalizedNull()
+		tile.LayoutsJSON = core.NewNormalizedJSONNull()
 	}
 
 	return tile

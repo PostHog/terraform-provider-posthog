@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -110,20 +109,20 @@ func NewLogsAlert() resource.Resource {
 type LogsAlertTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Name              types.String         `tfsdk:"name"`
-	Enabled           types.Bool           `tfsdk:"enabled"`
-	SeverityLevels    types.Set            `tfsdk:"severity_levels"`
-	ServiceNames      types.Set            `tfsdk:"service_names"`
-	FilterGroupJSON   jsontypes.Normalized `tfsdk:"filter_group_json"`
-	ThresholdCount    types.Int64          `tfsdk:"threshold_count"`
-	ThresholdOperator types.String         `tfsdk:"threshold_operator"`
-	WindowMinutes     types.Int64          `tfsdk:"window_minutes"`
-	EvaluationPeriods types.Int64          `tfsdk:"evaluation_periods"`
-	DatapointsToAlarm types.Int64          `tfsdk:"datapoints_to_alarm"`
-	CooldownMinutes   types.Int64          `tfsdk:"cooldown_minutes"`
-	BlockedWindows    types.Set            `tfsdk:"blocked_windows"`
-	SnoozeUntil       types.String         `tfsdk:"snooze_until"`
-	State             types.String         `tfsdk:"state"`
+	Name              types.String        `tfsdk:"name"`
+	Enabled           types.Bool          `tfsdk:"enabled"`
+	SeverityLevels    types.Set           `tfsdk:"severity_levels"`
+	ServiceNames      types.Set           `tfsdk:"service_names"`
+	FilterGroupJSON   core.NormalizedJSON `tfsdk:"filter_group_json"`
+	ThresholdCount    types.Int64         `tfsdk:"threshold_count"`
+	ThresholdOperator types.String        `tfsdk:"threshold_operator"`
+	WindowMinutes     types.Int64         `tfsdk:"window_minutes"`
+	EvaluationPeriods types.Int64         `tfsdk:"evaluation_periods"`
+	DatapointsToAlarm types.Int64         `tfsdk:"datapoints_to_alarm"`
+	CooldownMinutes   types.Int64         `tfsdk:"cooldown_minutes"`
+	BlockedWindows    types.Set           `tfsdk:"blocked_windows"`
+	SnoozeUntil       types.String        `tfsdk:"snooze_until"`
+	State             types.String        `tfsdk:"state"`
 }
 
 type BlockedWindowTFModel struct {
@@ -215,7 +214,7 @@ func (o LogsAlertOps) Schema() schema.Schema {
 				MarkdownDescription: "Service names to scope the alert to.",
 			},
 			"filter_group_json": schema.StringAttribute{
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				Optional:   true,
 				MarkdownDescription: "Attribute-level filters as JSON, matching the `filters.filterGroup` object of the " +
 					"[logs alerts API](https://posthog.com/docs/api/logs). Use this for anything beyond severity and " +
@@ -468,9 +467,9 @@ func (o LogsAlertOps) MapResponseToModel(ctx context.Context, resp httpclient.Lo
 			diags.AddError("Invalid filter group in response", fmt.Sprintf("Could not encode filterGroup returned by PostHog: %s", err.Error()))
 			return diags
 		}
-		model.FilterGroupJSON = jsontypes.NewNormalizedValue(encoded)
+		model.FilterGroupJSON = core.NewNormalizedJSONValue(encoded)
 	} else {
-		model.FilterGroupJSON = jsontypes.NewNormalizedNull()
+		model.FilterGroupJSON = core.NewNormalizedJSONNull()
 	}
 
 	model.ThresholdCount = util.PtrToInt64(resp.ThresholdCount)
@@ -512,7 +511,7 @@ func blockedWindowsToSet(ctx context.Context, schedule *httpclient.LogsAlertSche
 }
 
 // nonEmptyJSONObjectValidator rejects JSON that parses but is not a filter group.
-// jsontypes.Normalized only checks that the string is well-formed, so without this an
+// core.NormalizedJSON only checks that the string is well-formed, so without this an
 // empty object, a bare null or an array reaches the API and fails mid-apply.
 type nonEmptyJSONObjectValidator struct{}
 

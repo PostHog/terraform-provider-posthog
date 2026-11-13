@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -16,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,7 +98,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	model.NetworkPayloadCapture = types.ObjectUnknown(networkPayloadCaptureAttrTypes)
 	model.AppURLs = types.ListUnknown(types.StringType)
 	model.RecordingDomains = types.ListUnknown(types.StringType)
-	model.TestAccountFilters = jsontypes.NewNormalizedUnknown()
+	model.TestAccountFilters = core.NewNormalizedJSONUnknown()
 	model.TestAccountFiltersDefaultChecked = types.BoolUnknown()
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
@@ -247,7 +247,7 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 			plan.AnonymizeIps = types.BoolUnknown()
 			plan.AppURLs = types.ListUnknown(types.StringType)
 			plan.RecordingDomains = types.ListUnknown(types.StringType)
-			plan.TestAccountFilters = jsontypes.NewNormalizedUnknown()
+			plan.TestAccountFilters = core.NewNormalizedJSONUnknown()
 			plan.TestAccountFiltersDefaultChecked = types.BoolUnknown()
 			state := newProjectSettingsModel()
 			state.CapturePerformanceOptIn = test.prior
@@ -528,7 +528,7 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 func TestProjectSettingsBuildCreateRequest_TestAccountFilters(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
-	model.TestAccountFilters = jsontypes.NewNormalizedValue(cohortFilterJSON)
+	model.TestAccountFilters = core.NewNormalizedJSONValue(cohortFilterJSON)
 	model.TestAccountFiltersDefaultChecked = types.BoolValue(true)
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
@@ -550,7 +550,7 @@ func TestProjectSettingsBuildCreateRequest_TestAccountFilters(t *testing.T) {
 func TestProjectSettingsBuildCreateRequest_TestAccountFiltersEmptyClears(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
-	model.TestAccountFilters = jsontypes.NewNormalizedValue(`[]`)
+	model.TestAccountFilters = core.NewNormalizedJSONValue(`[]`)
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -562,7 +562,7 @@ func TestProjectSettingsBuildCreateRequest_TestAccountFiltersEmptyClears(t *test
 func TestProjectSettingsBuildCreateRequest_TestAccountFiltersInvalidJSON(t *testing.T) {
 	ops := ProjectSettingsOps{}
 	model := newProjectSettingsModel()
-	model.TestAccountFilters = jsontypes.NewNormalizedValue(`{not valid`)
+	model.TestAccountFilters = core.NewNormalizedJSONValue(`{not valid`)
 
 	_, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -592,7 +592,7 @@ func TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName(t 
 
 	model := newProjectSettingsModel()
 	// The user configured the filter WITHOUT cohort_name.
-	model.TestAccountFilters = jsontypes.NewNormalizedValue(cohortFilterJSON)
+	model.TestAccountFilters = core.NewNormalizedJSONValue(cohortFilterJSON)
 	diags := ops.MapResponseToModel(context.Background(), resp, &model)
 
 	assert.False(t, diags.HasError())
@@ -601,7 +601,7 @@ func TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName(t 
 	// State must match the user config semantically (cohort_name stripped): no drift.
 	stateEqualsConfig, d := model.TestAccountFilters.StringSemanticEquals(
 		context.Background(),
-		jsontypes.NewNormalizedValue(cohortFilterJSON),
+		core.NewNormalizedJSONValue(cohortFilterJSON),
 	)
 	assert.False(t, d.HasError())
 	assert.True(t, stateEqualsConfig, "cohort_name must be stripped so the filter round-trips without drift")

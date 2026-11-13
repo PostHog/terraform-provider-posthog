@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -41,14 +40,14 @@ var earlyAccessFeatureStages = []string{"draft", "concept", "alpha", "beta", "ge
 type EarlyAccessFeatureTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Name             types.String         `tfsdk:"name"`
-	Stage            types.String         `tfsdk:"stage"`
-	Description      types.String         `tfsdk:"description"`
-	DocumentationURL types.String         `tfsdk:"documentation_url"`
-	Payload          jsontypes.Normalized `tfsdk:"payload"`
-	FeatureFlagID    types.Int64          `tfsdk:"feature_flag_id"`
-	FeatureFlagKey   types.String         `tfsdk:"feature_flag_key"`
-	CreatedAt        types.String         `tfsdk:"created_at"`
+	Name             types.String        `tfsdk:"name"`
+	Stage            types.String        `tfsdk:"stage"`
+	Description      types.String        `tfsdk:"description"`
+	DocumentationURL types.String        `tfsdk:"documentation_url"`
+	Payload          core.NormalizedJSON `tfsdk:"payload"`
+	FeatureFlagID    types.Int64         `tfsdk:"feature_flag_id"`
+	FeatureFlagKey   types.String        `tfsdk:"feature_flag_key"`
+	CreatedAt        types.String        `tfsdk:"created_at"`
 }
 
 type EarlyAccessFeatureOps struct{}
@@ -99,7 +98,7 @@ func (o EarlyAccessFeatureOps) Schema() schema.Schema {
 				MarkdownDescription: "Link to documentation for the feature, shown to users in the opt-in list.",
 			},
 			"payload": schema.StringAttribute{
-				CustomType:          jsontypes.NormalizedType{},
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object metadata for the feature, e.g. `jsonencode({ theme = \"dark\" })`. Empty objects are allowed; arrays, scalars, and JSON null are not. Compared semantically, so key ordering and whitespace do not produce a diff.",
 				Validators: []validator.String{
@@ -222,18 +221,18 @@ func (o EarlyAccessFeatureOps) MapResponseToModel(_ context.Context, resp httpcl
 // earlyAccessFeaturePayloadForState keeps the API's payload as-is so a change made outside
 // Terraform shows as drift. PostHog returns {} for "no payload"; that reads as unset unless
 // the config itself declares an empty payload.
-func earlyAccessFeaturePayloadForState(raw json.RawMessage, current jsontypes.Normalized) jsontypes.Normalized {
+func earlyAccessFeaturePayloadForState(raw json.RawMessage, current core.NormalizedJSON) core.NormalizedJSON {
 	if isEmptyJSONObjectOrNull(raw) {
 		if core.IsKnown(current) && isEmptyJSONObjectOrNull(json.RawMessage(current.ValueString())) {
 			return current
 		}
-		return jsontypes.NewNormalizedNull()
+		return core.NewNormalizedJSONNull()
 	}
 	var compacted bytes.Buffer
 	if err := json.Compact(&compacted, raw); err != nil {
-		return jsontypes.NewNormalizedValue(string(raw))
+		return core.NewNormalizedJSONValue(string(raw))
 	}
-	return jsontypes.NewNormalizedValue(compacted.String())
+	return core.NewNormalizedJSONValue(compacted.String())
 }
 
 func isEmptyJSONObjectOrNull(raw json.RawMessage) bool {

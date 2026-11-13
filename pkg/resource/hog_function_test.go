@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,14 +92,14 @@ func TestBuildCreateRequest_MergesSensitiveInputs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model := HogFunctionResourceTFModel{}
 			if tc.inputsJSON != "" {
-				model.InputsJSON = jsontypes.NewNormalizedValue(tc.inputsJSON)
+				model.InputsJSON = core.NewNormalizedJSONValue(tc.inputsJSON)
 			} else {
-				model.InputsJSON = jsontypes.NewNormalizedNull()
+				model.InputsJSON = core.NewNormalizedJSONNull()
 			}
 			if tc.sensitiveInputsJSON != "" {
-				model.SensitiveInputsJSON = jsontypes.NewNormalizedValue(tc.sensitiveInputsJSON)
+				model.SensitiveInputsJSON = core.NewNormalizedJSONValue(tc.sensitiveInputsJSON)
 			} else {
-				model.SensitiveInputsJSON = jsontypes.NewNormalizedNull()
+				model.SensitiveInputsJSON = core.NewNormalizedJSONNull()
 			}
 
 			req, diags := ops.BuildCreateRequest(ctx, model)
@@ -141,7 +141,7 @@ func TestBuildCreateRequest_InputsSchemaJSON(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			model := HogFunctionResourceTFModel{
-				InputsSchemaJSON: jsontypes.NewNormalizedValue(tc.inputsSchemaJSON),
+				InputsSchemaJSON: core.NewNormalizedJSONValue(tc.inputsSchemaJSON),
 			}
 
 			req, diags := ops.BuildCreateRequest(ctx, model)
@@ -158,7 +158,7 @@ func TestBuildCreateRequest_InputsSchemaJSON_Invalid(t *testing.T) {
 	ops := HogFunctionOps{}
 
 	model := HogFunctionResourceTFModel{
-		InputsSchemaJSON: jsontypes.NewNormalizedValue(`not valid json`),
+		InputsSchemaJSON: core.NewNormalizedJSONValue(`not valid json`),
 	}
 
 	_, diags := ops.BuildCreateRequest(ctx, model)
@@ -170,7 +170,7 @@ func TestBuildCreateRequest_InputsSchemaJSON_Null(t *testing.T) {
 	ops := HogFunctionOps{}
 
 	model := HogFunctionResourceTFModel{
-		InputsSchemaJSON: jsontypes.NewNormalizedNull(),
+		InputsSchemaJSON: core.NewNormalizedJSONNull(),
 	}
 
 	req, diags := ops.BuildCreateRequest(ctx, model)
@@ -184,9 +184,9 @@ func TestBuildCreateRequest_InputsSchemaWithInputsAndSensitiveInputs(t *testing.
 
 	t.Run("all three fields populate request correctly", func(t *testing.T) {
 		model := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"apiKey":{"value":"secret-token"}}`),
-			InputsSchemaJSON:    jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string","secret":true,"required":true}]`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"apiKey":{"value":"secret-token"}}`),
+			InputsSchemaJSON:    core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string","secret":true,"required":true}]`),
 		}
 
 		req, diags := ops.BuildCreateRequest(ctx, model)
@@ -206,9 +206,9 @@ func TestBuildCreateRequest_InputsSchemaWithInputsAndSensitiveInputs(t *testing.
 
 	t.Run("schema with inputs_json only (no sensitive)", func(t *testing.T) {
 		model := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"},"region":{"value":"us-east-1"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedNull(),
-			InputsSchemaJSON:    jsontypes.NewNormalizedValue(`[{"key":"region","type":"string"}]`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"},"region":{"value":"us-east-1"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONNull(),
+			InputsSchemaJSON:    core.NewNormalizedJSONValue(`[{"key":"region","type":"string"}]`),
 		}
 
 		req, diags := ops.BuildCreateRequest(ctx, model)
@@ -222,9 +222,9 @@ func TestBuildCreateRequest_InputsSchemaWithInputsAndSensitiveInputs(t *testing.
 
 	t.Run("schema with sensitive_inputs_json only (no inputs_json)", func(t *testing.T) {
 		model := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedNull(),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"apiKey":{"value":"secret-token"}}`),
-			InputsSchemaJSON:    jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string","secret":true}]`),
+			InputsJSON:          core.NewNormalizedJSONNull(),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"apiKey":{"value":"secret-token"}}`),
+			InputsSchemaJSON:    core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string","secret":true}]`),
 		}
 
 		req, diags := ops.BuildCreateRequest(ctx, model)
@@ -239,8 +239,8 @@ func TestBuildCreateRequest_InputsSchemaWithInputsAndSensitiveInputs(t *testing.
 func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 	ctx := context.Background()
 	tests := map[string]struct {
-		inputsJSON            jsontypes.Normalized
-		sensitiveInputsJSON   jsontypes.Normalized
+		inputsJSON            core.NormalizedJSON
+		sensitiveInputsJSON   core.NormalizedJSON
 		respInputs            map[string]interface{}
 		expectedInputs        string
 		expectedSensitive     string
@@ -248,8 +248,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 		expectSensitiveIsNull bool
 	}{
 		"splits keys to original fields": {
-			inputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			sensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"secret123"}}`),
+			inputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"secret123"}}`),
 			respInputs: map[string]interface{}{
 				"url":     map[string]interface{}{"value": "https://example.com"},
 				"api_key": map[string]interface{}{"value": "secret123"},
@@ -258,8 +258,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectedSensitive: `{"api_key":{"value":"secret123"}}`,
 		},
 		"null sensitive_inputs_json stays null": {
-			inputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			sensitiveInputsJSON: jsontypes.NewNormalizedNull(),
+			inputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: core.NewNormalizedJSONNull(),
 			respInputs: map[string]interface{}{
 				"url": map[string]interface{}{"value": "https://example.com"},
 			},
@@ -267,8 +267,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectSensitiveIsNull: true,
 		},
 		"strips server fields from both": {
-			inputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			sensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"secret"}}`),
+			inputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			sensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"secret"}}`),
 			respInputs: map[string]interface{}{
 				"url":     map[string]interface{}{"value": "https://example.com", "bytecode": []interface{}{"_H", 1}, "order": 0},
 				"api_key": map[string]interface{}{"value": "secret", "bytecode": []interface{}{"_H", 2}, "order": 1},
@@ -277,8 +277,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectedSensitive: `{"api_key":{"value":"secret"}}`,
 		},
 		"only sensitive_inputs_json set - must not leak into inputs_json": {
-			inputsJSON:          jsontypes.NewNormalizedNull(),
-			sensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"secret123"}}`),
+			inputsJSON:          core.NewNormalizedJSONNull(),
+			sensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"secret123"}}`),
 			respInputs: map[string]interface{}{
 				"api_key": map[string]interface{}{"value": "secret123"},
 			},
@@ -286,15 +286,15 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectedSensitive:  `{"api_key":{"value":"secret123"}}`,
 		},
 		"empty resp.Inputs with only sensitive_inputs_json zeroes sensitive field": {
-			inputsJSON:          jsontypes.NewNormalizedNull(),
-			sensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"secret123"}}`),
+			inputsJSON:          core.NewNormalizedJSONNull(),
+			sensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"secret123"}}`),
 			respInputs:          map[string]interface{}{},
 			expectInputsIsNull:  true,
 			expectedSensitive:   `{}`,
 		},
 		"import: both fields null populates inputs_json with all API inputs": {
-			inputsJSON:          jsontypes.NewNormalizedNull(),
-			sensitiveInputsJSON: jsontypes.NewNormalizedNull(),
+			inputsJSON:          core.NewNormalizedJSONNull(),
+			sensitiveInputsJSON: core.NewNormalizedJSONNull(),
 			respInputs: map[string]interface{}{
 				"url":     map[string]interface{}{"value": "https://example.com"},
 				"api_key": map[string]interface{}{"value": "secret123"},
@@ -303,8 +303,8 @@ func TestMapResponseToModel_SplitsInputsBack(t *testing.T) {
 			expectSensitiveIsNull: true,
 		},
 		"duplicate key in both fields: inputs_json gets API value, sensitive_inputs_json keeps prior state": {
-			inputsJSON:          jsontypes.NewNormalizedValue(`{"shared_key":{"value":"from_inputs"}}`),
-			sensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"shared_key":{"value":"from_sensitive"}}`),
+			inputsJSON:          core.NewNormalizedJSONValue(`{"shared_key":{"value":"from_inputs"}}`),
+			sensitiveInputsJSON: core.NewNormalizedJSONValue(`{"shared_key":{"value":"from_sensitive"}}`),
 			respInputs: map[string]interface{}{
 				"shared_key": map[string]interface{}{"value": "api_value"},
 			},
@@ -353,13 +353,13 @@ func TestMapResponseToModel_InputsSchemaJSON(t *testing.T) {
 	ops := HogFunctionOps{}
 
 	tests := map[string]struct {
-		inputsSchemaJSON jsontypes.Normalized
+		inputsSchemaJSON core.NormalizedJSON
 		respInputsSchema []map[string]interface{}
 		expectedJSON     string
 		expectNull       bool
 	}{
 		"filters to user-specified keys": {
-			inputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string","secret":true}]`),
+			inputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string","secret":true}]`),
 			respInputsSchema: []map[string]interface{}{
 				{"key": "url", "type": "string", "label": "URL"},
 				{"key": "apiKey", "type": "string", "secret": true, "label": "API Key"},
@@ -368,19 +368,19 @@ func TestMapResponseToModel_InputsSchemaJSON(t *testing.T) {
 			expectedJSON: `[{"key":"apiKey","secret":true,"type":"string"}]`,
 		},
 		"null stays null on import": {
-			inputsSchemaJSON: jsontypes.NewNormalizedNull(),
+			inputsSchemaJSON: core.NewNormalizedJSONNull(),
 			respInputsSchema: []map[string]interface{}{
 				{"key": "url", "type": "string"},
 			},
 			expectNull: true,
 		},
 		"empty response with non-null model": {
-			inputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string"}]`),
+			inputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string"}]`),
 			respInputsSchema: nil,
 			expectedJSON:     "[]",
 		},
 		"multiple user keys filtered from larger response": {
-			inputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string"},{"key":"region","type":"string"}]`),
+			inputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string"},{"key":"region","type":"string"}]`),
 			respInputsSchema: []map[string]interface{}{
 				{"key": "url", "type": "string"},
 				{"key": "apiKey", "type": "string", "secret": true},
@@ -390,7 +390,7 @@ func TestMapResponseToModel_InputsSchemaJSON(t *testing.T) {
 			expectedJSON: `[{"key":"apiKey","type":"string"},{"key":"region","type":"string"}]`,
 		},
 		"API missing a user-specified key uses correct field templates": {
-			inputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"a","type":"string"},{"key":"b","type":"number","label":"B"}]`),
+			inputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"a","type":"string"},{"key":"b","type":"number","label":"B"}]`),
 			respInputsSchema: []map[string]interface{}{
 				{"key": "b", "type": "number", "label": "B", "order": 1},
 			},
@@ -428,7 +428,7 @@ func TestMapResponseToModel_InputsSchemaJSON_InvalidState(t *testing.T) {
 	ops := HogFunctionOps{}
 
 	model := &HogFunctionResourceTFModel{
-		InputsSchemaJSON: jsontypes.NewNormalizedValue(`not valid json`),
+		InputsSchemaJSON: core.NewNormalizedJSONValue(`not valid json`),
 	}
 
 	resp := httpclient.HogFunction{
@@ -448,9 +448,9 @@ func TestMapResponseToModel_InputsSchemaWithInputsAndSensitiveInputs(t *testing.
 
 	t.Run("all three fields round-trip correctly", func(t *testing.T) {
 		model := &HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"apiKey":{"value":"secret-token"}}`),
-			InputsSchemaJSON:    jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string","secret":true}]`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"apiKey":{"value":"secret-token"}}`),
+			InputsSchemaJSON:    core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string","secret":true}]`),
 		}
 
 		resp := httpclient.HogFunction{
@@ -486,12 +486,12 @@ func TestBuildUpdateRequest_SensitiveInputs(t *testing.T) {
 
 	t.Run("removing sensitive_inputs_json excludes sensitive keys from request", func(t *testing.T) {
 		plan := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedNull(), // user removed sensitive_inputs_json
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONNull(), // user removed sensitive_inputs_json
 		}
 		state := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"secret123"}}`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"secret123"}}`),
 		}
 
 		req, diags := ops.BuildUpdateRequest(ctx, plan, state)
@@ -503,12 +503,12 @@ func TestBuildUpdateRequest_SensitiveInputs(t *testing.T) {
 
 	t.Run("updating sensitive_inputs_json merges correctly", func(t *testing.T) {
 		plan := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"new_secret"}}`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"new_secret"}}`),
 		}
 		state := HogFunctionResourceTFModel{
-			InputsJSON:          jsontypes.NewNormalizedValue(`{"url":{"value":"https://example.com"}}`),
-			SensitiveInputsJSON: jsontypes.NewNormalizedValue(`{"api_key":{"value":"old_secret"}}`),
+			InputsJSON:          core.NewNormalizedJSONValue(`{"url":{"value":"https://example.com"}}`),
+			SensitiveInputsJSON: core.NewNormalizedJSONValue(`{"api_key":{"value":"old_secret"}}`),
 		}
 
 		req, diags := ops.BuildUpdateRequest(ctx, plan, state)
@@ -527,10 +527,10 @@ func TestBuildUpdateRequest_InputsSchemaJSON(t *testing.T) {
 
 	t.Run("inputs_schema_json flows through update", func(t *testing.T) {
 		plan := HogFunctionResourceTFModel{
-			InputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string","secret":true}]`),
+			InputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string","secret":true}]`),
 		}
 		state := HogFunctionResourceTFModel{
-			InputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"oldKey","type":"string"}]`),
+			InputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"oldKey","type":"string"}]`),
 		}
 
 		req, diags := ops.BuildUpdateRequest(ctx, plan, state)
@@ -542,10 +542,10 @@ func TestBuildUpdateRequest_InputsSchemaJSON(t *testing.T) {
 
 	t.Run("removing inputs_schema_json sends nil", func(t *testing.T) {
 		plan := HogFunctionResourceTFModel{
-			InputsSchemaJSON: jsontypes.NewNormalizedNull(),
+			InputsSchemaJSON: core.NewNormalizedJSONNull(),
 		}
 		state := HogFunctionResourceTFModel{
-			InputsSchemaJSON: jsontypes.NewNormalizedValue(`[{"key":"apiKey","type":"string"}]`),
+			InputsSchemaJSON: core.NewNormalizedJSONValue(`[{"key":"apiKey","type":"string"}]`),
 		}
 
 		req, diags := ops.BuildUpdateRequest(ctx, plan, state)

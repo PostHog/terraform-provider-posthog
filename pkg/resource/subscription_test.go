@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -262,13 +262,13 @@ func TestReconcileStartDate(t *testing.T) {
 func TestAIPromptConfigToModel(t *testing.T) {
 	t.Run("empty, {} and null map to null", func(t *testing.T) {
 		for _, in := range []string{"", "   ", "{}", "null"} {
-			got := aiPromptConfigToModel(json.RawMessage(in), jsontypes.NewNormalizedNull())
+			got := aiPromptConfigToModel(json.RawMessage(in), core.NewNormalizedJSONNull())
 			assert.True(t, got.IsNull(), "input %q should map to a null value", in)
 		}
 	})
 
 	t.Run("filters the API blob to the user's configured keys", func(t *testing.T) {
-		current := jsontypes.NewNormalizedValue(`{"tone":"formal"}`)
+		current := core.NewNormalizedJSONValue(`{"tone":"formal"}`)
 		got := aiPromptConfigToModel(json.RawMessage(`{"tone":"formal","server_added":true}`), current)
 		require.False(t, got.IsNull())
 		assert.JSONEq(t, `{"tone":"formal"}`, got.ValueString())

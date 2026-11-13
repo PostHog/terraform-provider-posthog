@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +25,7 @@ func TestExperimentBuildCreateRequest_Fields(t *testing.T) {
 		Name:               types.StringValue("Pricing test"),
 		Description:        types.StringValue("Does the redesign convert?"),
 		FeatureFlagKey:     types.StringValue("pricing-test"),
-		Metrics:            jsontypes.NewNormalizedValue(`[{"kind":"ExperimentMetric","metric_type":"mean","name":"Rev"}]`),
+		Metrics:            core.NewNormalizedJSONValue(`[{"kind":"ExperimentMetric","metric_type":"mean","name":"Rev"}]`),
 		HoldoutID:          types.Int64Value(42),
 		AllowUnknownEvents: types.BoolValue(true),
 		Status:             stoppedStatus(stateDraft, nil),
@@ -52,7 +52,7 @@ func TestExperimentBuildCreateRequest_OmitsEmptyJSON(t *testing.T) {
 	model := ExperimentTFModel{
 		Name:           types.StringValue("x"),
 		FeatureFlagKey: types.StringValue("x-flag"),
-		Metrics:        jsontypes.NewNormalizedNull(),
+		Metrics:        core.NewNormalizedJSONNull(),
 		Status:         stoppedStatus(stateDraft, nil),
 	}
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
@@ -202,7 +202,7 @@ func TestExperimentBuildUpdateRequest_ShipLater(t *testing.T) {
 func TestExperimentMapResponseToModel_MetricsNoPerpetualDiff(t *testing.T) {
 	ops := ExperimentOps{}
 	configJSON := `[{"kind":"ExperimentFunnelsQuery","name":"Signup"}]`
-	model := ExperimentTFModel{Metrics: jsontypes.NewNormalizedValue(configJSON)}
+	model := ExperimentTFModel{Metrics: core.NewNormalizedJSONValue(configJSON)}
 
 	// API returns reordered keys plus a server-computed fingerprint field.
 	resp := httpclient.Experiment{
@@ -215,7 +215,7 @@ func TestExperimentMapResponseToModel_MetricsNoPerpetualDiff(t *testing.T) {
 	diags := ops.MapResponseToModel(context.Background(), resp, &model)
 	require.False(t, diags.HasError(), diags.Errors())
 
-	eq, d := model.Metrics.StringSemanticEquals(context.Background(), jsontypes.NewNormalizedValue(configJSON))
+	eq, d := model.Metrics.StringSemanticEquals(context.Background(), core.NewNormalizedJSONValue(configJSON))
 	require.False(t, d.HasError(), d.Errors())
 	assert.True(t, eq, "metrics state should semantically equal config; got %s", model.Metrics.ValueString())
 }
