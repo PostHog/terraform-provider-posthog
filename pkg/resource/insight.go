@@ -39,16 +39,16 @@ func NewInsight() resource.Resource {
 type InsightResourceTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	ShortID        types.String `tfsdk:"short_id"`
-	Name           types.String `tfsdk:"name"`
-	DerivedName    types.String `tfsdk:"derived_name"`
-	Description    types.String `tfsdk:"description"`
-	QueryJSON      types.String `tfsdk:"query_json"`
-	QuerySQL       types.String `tfsdk:"query_sql"`
-	Tags           types.Set    `tfsdk:"tags"`
-	CreateInFolder types.String `tfsdk:"create_in_folder"`
-	DashboardIDs   types.Set    `tfsdk:"dashboard_ids"`
-	Deleted        types.Bool   `tfsdk:"deleted"`
+	ShortID        types.String        `tfsdk:"short_id"`
+	Name           types.String        `tfsdk:"name"`
+	DerivedName    types.String        `tfsdk:"derived_name"`
+	Description    types.String        `tfsdk:"description"`
+	QueryJSON      core.NormalizedJSON `tfsdk:"query_json"`
+	QuerySQL       types.String        `tfsdk:"query_sql"`
+	Tags           types.Set           `tfsdk:"tags"`
+	CreateInFolder types.String        `tfsdk:"create_in_folder"`
+	DashboardIDs   types.Set           `tfsdk:"dashboard_ids"`
+	Deleted        types.Bool          `tfsdk:"deleted"`
 }
 
 type InsightOps struct{}
@@ -93,6 +93,7 @@ func (o InsightOps) Schema() schema.Schema {
 				MarkdownDescription: "Insight description.",
 			},
 			"query_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "Raw JSON serialized query payload accepted by PostHog (for example an `InsightVizNode` with a `TrendsQuery`). Mutually exclusive with `query_sql`; exactly one must be set.",
 				Validators: []validator.String{
@@ -155,14 +156,11 @@ func (o InsightOps) BuildCreateRequest(ctx context.Context, model InsightResourc
 		}
 		input.Query = buildHogQLQuery(sql)
 	case core.IsKnown(model.QueryJSON):
-		raw := strings.TrimSpace(model.QueryJSON.ValueString())
-		if raw == "" {
-			diags.AddError("Invalid query_json", "query_json cannot be empty")
-			return input, diags
-		}
+		// The attribute type already rejects invalid JSON, so this only fails
+		// for valid JSON that is not an object, such as an array.
 		var query map[string]interface{}
-		if err := json.Unmarshal([]byte(raw), &query); err != nil {
-			diags.AddError("Invalid query_json", "query_json must be valid JSON: "+err.Error())
+		if err := json.Unmarshal([]byte(model.QueryJSON.ValueString()), &query); err != nil {
+			diags.AddError("Invalid query_json", "query_json must be a JSON object: "+err.Error())
 			return input, diags
 		}
 		input.Query = query
@@ -271,7 +269,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 				return diags
 			}
 			model.QuerySQL = types.StringValue(sql)
-			model.QueryJSON = types.StringNull()
+			model.QueryJSON = core.NewNormalizedJSONNull()
 		} else {
 			// query_json-managed insight: filter API response to only include
 			// fields from user's config. This enables drift detection for
@@ -285,7 +283,7 @@ func (o InsightOps) MapResponseToModel(ctx context.Context, resp httpclient.Insi
 				diags.AddError("Failed to normalize query", err.Error())
 				return diags
 			}
-			model.QueryJSON = types.StringValue(normalizedQuery)
+			model.QueryJSON = core.NewNormalizedJSONValue(normalizedQuery)
 			model.QuerySQL = types.StringNull()
 		}
 	}
