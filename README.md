@@ -153,6 +153,8 @@ Pick the bump level for the change:
 
 ## Releasing
 
+Releases are semi-automatic. Merging a pull request with a changeset starts a release, but nothing is published until someone on `@PostHog/client-libraries-approvers` approves it. Approval requests are posted in the [#approvals-client-libraries](https://posthog.slack.com/archives/C0A3UEVDDNF) Slack channel.
+
 Releases come from the changesets merged to `main`. The version lives in `package.json`, which exists only for Changesets. The provider binary takes its version from the release tag.
 
 When a pull request with a changeset merges to `main`, the [Release workflow](.github/workflows/release.yml):
