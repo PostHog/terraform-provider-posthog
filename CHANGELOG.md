@@ -28,6 +28,7 @@
 ### Internal
 
 - The provider's Go packages moved from `internal/` to `pkg/`, so other Go modules can import them; tools that embed a Terraform provider in-process, such as Crossplane's upjet or Pulumi's Terraform bridge, can call `provider.New` from `github.com/posthog/terraform-provider/pkg/provider` without a fork. Terraform users are unaffected: the binary, registry address, schemas, and state are unchanged. The Go packages are not a stable API and can change in any release. ([#191](https://github.com/PostHog/terraform-provider-posthog/issues/191))
+- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`pkg/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ## 1.0.27
 
@@ -55,6 +56,10 @@
 - **Paginated lists:** a page whose link to the next page cannot be parsed now fails the read instead of silently ending the list there. This affects `posthog_role` and organization lookups as well; a truncated list there looked like a role or organization that does not exist.
 - **HTTP retries:** a rate-limited request (429) now waits as long as PostHog's `Retry-After` asks, up to 60 seconds per wait and 5 minutes in total, instead of giving up after three waits of at most 5 seconds. PostHog limits each personal API key per minute and per hour (480 and 4,800 for most endpoints, lower for insights), and a plan refreshes every managed resource with its own request, so a configuration with a few hundred resources hit the per-minute limit and failed after about 15 seconds of waiting. Waits on a 429 no longer count against the three retries for server errors, since PostHog rejects a rate-limited request before doing any work. A `Retry-After` longer than 60 seconds comes from an hourly limit, which the provider does not wait out: the request fails at once with an error that includes PostHog's message saying when the key can be used again. A `Retry-After: 0`, which PostHog sends when a slot frees up within the second, waits one second. A 429 without a `Retry-After`, for example from a proxy in front of PostHog, keeps the ordinary three retries. Each wait is written to the provider log at WARN level, so `TF_LOG=WARN` shows a plan waiting on the rate limit, and the final error says how long the provider slept and why it stopped.
 - **`posthog_feature_flag`:** a flag whose release condition targets a deleted cohort no longer shows a diff on every plan. PostHog marks such a condition with `cohort_deleted`, and also with `cohort_missing` when no cohort with that id exists in the project ([PostHog/posthog#119792](https://github.com/PostHog/posthog/pull/119792)). The provider now strips both keys, as it already strips `cohort_name`, unless the configured `filters` set them. Applying such a flag still fails, because PostHog refuses a release condition on a deleted cohort.
+
+### Upgrade notes
+
+- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop. A rate-limited request can additionally wait up to 5 minutes, per request and per page.
 
 ## 1.0.25
 
@@ -113,10 +118,6 @@ No changelog entries. See the [v1.0.25 release](https://github.com/PostHog/terra
 - `NewRetryTransport` fills in any unset retry tunable, so a hand-built `RetryConfig` cannot end up with no request deadline or a zero backoff that retries with no spacing. `JitterFactor` and `MaxRetries` are left alone, because zero is a meaningful value for both.
 - The `WithNoRetry` and `WithRetryConfig` client options replace an installed retry transport instead of stacking a second one on it. Stacked, the outer transport's per-attempt deadline had to cover the inner transport's whole retry loop, and `WithNoRetry` did not actually disable retries.
 
-### Upgrade notes
-
-- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop. A rate-limited request can additionally wait up to 5 minutes, per request and per page.
-
 ## 1.0.18
 
 ### Features
@@ -124,10 +125,6 @@ No changelog entries. See the [v1.0.25 release](https://github.com/PostHog/terra
 - **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing and notification destinations are managed as code). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
 - **New Resource:** `posthog_logs_alert_destination` - Slack, webhook, and Microsoft Teams notification destinations for a `posthog_logs_alert`. PostHog has no update endpoint for destinations, so every attribute forces replacement. `slack_channel_name` is write-only: PostHog uses it to label the destination and never stores it, so it is never read back and an imported destination has it unset.
 - **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
-
-### Internal
-
-- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`pkg/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
 
