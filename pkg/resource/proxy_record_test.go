@@ -118,14 +118,6 @@ func TestProxyRecordBuildCreateRequest(t *testing.T) {
 	assert.Equal(t, testNormalizedProxyRecordDomain, req.Domain)
 }
 
-func TestProxyRecordBuildUpdateRequest(t *testing.T) {
-	ops := ProxyRecordOps{}
-	_, diags := ops.BuildUpdateRequest(context.Background(), ProxyRecordTFModel{}, ProxyRecordTFModel{})
-
-	assert.True(t, diags.HasError())
-	assert.Contains(t, diags.Errors()[0].Summary(), "Update not supported")
-}
-
 func TestProxyRecordResourceNameAndSchema(t *testing.T) {
 	ops := ProxyRecordOps{}
 	s := ops.Schema()

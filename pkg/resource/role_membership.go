@@ -89,13 +89,9 @@ func (o RoleMembershipOps) BuildCreateRequest(_ context.Context, model RoleMembe
 	return req, diags
 }
 
+// BuildUpdateRequest returns an empty request because Update sends nothing to the API.
 func (o RoleMembershipOps) BuildUpdateRequest(_ context.Context, _, _ RoleMembershipTFModel) (httpclient.RoleMembershipRequest, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	diags.AddError(
-		"Update not supported",
-		"Role memberships do not support updates. This is a bug if you see this error.",
-	)
-	return httpclient.RoleMembershipRequest{}, diags
+	return httpclient.RoleMembershipRequest{}, nil
 }
 
 func (o RoleMembershipOps) MapResponseToModel(_ context.Context, resp httpclient.RoleMembership, model *RoleMembershipTFModel) diag.Diagnostics {

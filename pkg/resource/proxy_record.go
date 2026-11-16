@@ -93,13 +93,9 @@ func (o ProxyRecordOps) BuildCreateRequest(_ context.Context, model ProxyRecordT
 	}, diags
 }
 
+// BuildUpdateRequest returns an empty request because Update sends nothing to the API.
 func (o ProxyRecordOps) BuildUpdateRequest(_ context.Context, _, _ ProxyRecordTFModel) (httpclient.ProxyRecordRequest, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	diags.AddError(
-		"Update not supported",
-		"Proxy records do not support updates. Change the domain to replace the resource instead.",
-	)
-	return httpclient.ProxyRecordRequest{}, diags
+	return httpclient.ProxyRecordRequest{}, nil
 }
 
 func (o ProxyRecordOps) MapResponseToModel(_ context.Context, resp httpclient.ProxyRecord, model *ProxyRecordTFModel) diag.Diagnostics {
