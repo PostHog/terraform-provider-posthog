@@ -104,13 +104,22 @@ jobs:
 
       - name: Read release version
         id: version
+        env:
+          HAS_CHANGESETS: ${{ needs.check.outputs.has-changesets }}
         run: |
           version=$(jq -r .version package.json)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           status=0
           git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null || status=$?
           case "$status" in
-            0) echo "::warning::v${version} is already tagged, so there is nothing to publish"; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            0)
+              # Succeeding here would leave the changesets on main, so every later
+              # merge would skip its release the same way.
+              if [ "$HAS_CHANGESETS" = "true" ]; then
+                echo "::error::The changesets bump the version to v${version}, which is already tagged. Bump package.json past the latest tag on main, then rerun this workflow."
+                exit 1
+              fi
+              echo "::warning::v${version} is already tagged, so there is nothing to publish"; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
             2) echo "Releasing v${version}"; echo "publish=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
           esac
@@ -144,8 +153,6 @@ jobs:
     if: needs.version-bump.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # The default token creates the tag, and a tag it creates does not start
-    # Publish's tag trigger, so the call below is the only publish run.
     permissions:
       contents: write
     steps:
