@@ -241,19 +241,14 @@ func TestProxyRecordCRUD(t *testing.T) {
 	assert.Equal(t, http.StatusOK, int(status))
 	assert.Equal(t, "valid", read.Status)
 
+	updated, status, err := ops.Update(context.Background(), client, model, httpclient.ProxyRecordRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, int(status))
+	assert.Equal(t, read, updated)
+
 	status, err = ops.Delete(context.Background(), client, model)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, int(status))
-}
-
-func TestProxyRecordUpdateReturnsError(t *testing.T) {
-	ops := ProxyRecordOps{}
-
-	_, status, err := ops.Update(context.Background(), httpclient.PosthogClient{}, ProxyRecordTFModel{}, httpclient.ProxyRecordRequest{})
-
-	require.Error(t, err)
-	assert.Zero(t, status)
-	assert.Contains(t, err.Error(), "do not support updates")
 }
 
 func testProxyRecordCollectionPath() string {

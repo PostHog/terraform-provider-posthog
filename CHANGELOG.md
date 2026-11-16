@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`organization_id = "@current"` is no longer accepted**, in the provider block, `POSTHOG_ORGANIZATION_ID`, resources, data sources, or import IDs. Set the organization's UUID or slug instead. This change is required: PostHog resolves `@current` to the organization the user last opened in the app, and Terraform state kept the literal `"@current"`. Switching organization in the app between runs pointed an existing configuration at a different organization, so reads got a 404, resources dropped out of state, and the next apply created them in the other organization.
+  - To migrate, set the provider's `organization_id` (or `POSTHOG_ORGANIZATION_ID`) to the UUID of the organization your resources are in, replace any `"@current"` on resources, and apply. Resources whose state holds `"@current"` are updated in place to record the real ID, not replaced. Until that apply, they read the provider's `organization_id`.
+
 ### Features
 
 - **`posthog_feature_flag`:** New `evaluation_runtime` attribute accepts `server`, `client`, or `all`, so each flag can declare its runtime in Terraform. Omitted values preserve the existing runtime; new flags use PostHog's `all` default.
@@ -17,7 +22,6 @@
 
 ### Fixes
 
-- **`organization_id = "@current"`:** now resolves to the only organization the API key can access, instead of the organization the user last opened in the PostHog app. Switching organization in the app between runs could point an existing configuration at a different organization: a read got a 404, the resource dropped out of state, and the next apply created it in the other organization. When the key can access several organizations, `@current` now fails with an error that lists their slugs.
 - JSON attributes no longer fail with "Provider produced inconsistent result after apply" when the configuration writes a whole number as a float, such as `50.0`, which Pulumi Python's `json.dumps` does. The provider reads numbers back from PostHog as `50`, and these attributes compared number text, so `50.0` never matched. They now compare numbers by value (`50.0` equals `50`, `1e3` equals `1000`), and `posthog_insight` `query_json` now ignores key order and whitespace as well. Affected attributes: `posthog_cohort` `filters`, `posthog_dashboard_layout` `tiles[*].layouts_json`, `posthog_early_access_feature` `payload`, `posthog_experiment` `metrics`, `metrics_secondary` and `exposure_criteria`, `posthog_feature_flag` `filters`, `posthog_hog_function` `inputs_json`, `inputs_schema_json`, `filters_json`, `masking_json` and `mappings_json`, `posthog_insight` `query_json`, `posthog_logs_alert` `filter_group_json`, `posthog_project_settings` `test_account_filters`, and `posthog_subscription` `ai_prompt_config`.
 - **`posthog_survey`:** Preserve question IDs explicitly set in `questions_json`, fixing "Provider produced inconsistent result after apply". Server-generated question IDs remain excluded when not configured and during import. ([#145](https://github.com/PostHog/terraform-provider-posthog/issues/145))
 
@@ -46,7 +50,6 @@
 
 ### Upgrade notes
 
-- **`organization_id = "@current"`:** fails when the API key can access more than one organization. To keep `@current`, scope the personal API key to the one organization it should manage. Changing `organization_id` to a slug or UUID instead replaces every resource that sets it, because `organization_id` forces replacement when it changes, so prefer scoping the key for existing resources.
 - **`posthog_feature_flag`:** Remove `create_usage_dashboard = true` before creating or replacing a flag. An existing flag can still be read and updated with the old setting. If you rely on saved usage dashboards from an older self-hosted PostHog server, stay on the previous provider version until you migrate that workflow.
 
 - An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop. A rate-limited request can additionally wait up to 5 minutes, per request and per page.

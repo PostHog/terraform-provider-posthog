@@ -243,6 +243,7 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 	// Set provider defaults on embedded structs (use state for project_id as it shouldn't change)
 	r.initializeScope(&state)
 	r.initializeScope(&plan)
+	replaceLegacyOrganizationIDFromPlan(&state, &plan)
 
 	// Build request using resource-specific logic
 	request, diags := r.ops.BuildUpdateRequest(ctx, plan, state)

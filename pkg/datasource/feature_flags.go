@@ -101,6 +101,7 @@ func (d *FeatureFlagsDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 				MarkdownDescription: "Organization to look `project_name` up in. Defaults to the provider-level organization_id. Requires `project_name`.",
 				Validators: []validator.String{
 					stringvalidator.AlsoRequires(path.MatchRoot("project_name")),
+					core.NotCurrentOrganizationAlias{},
 				},
 			},
 			"flags": schema.ListNestedAttribute{

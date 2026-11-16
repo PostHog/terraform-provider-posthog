@@ -2,7 +2,6 @@ package resource
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -130,8 +129,11 @@ func (o ProxyRecordOps) Read(ctx context.Context, client httpclient.PosthogClien
 	return client.GetProxyRecord(ctx, model.GetEffectiveOrganizationID(), model.GetID())
 }
 
-func (o ProxyRecordOps) Update(ctx context.Context, client httpclient.PosthogClient, _ ProxyRecordTFModel, _ httpclient.ProxyRecordRequest) (httpclient.ProxyRecord, httpclient.HTTPStatusCode, error) {
-	return httpclient.ProxyRecord{}, 0, fmt.Errorf("proxy records do not support updates; this is a bug if you see this error")
+// Update re-reads the record. PostHog cannot update a proxy record, and every other attribute
+// forces replacement, so the only in-place change is organization_id moving off the retired
+// "@current" alias, which needs nothing from the API.
+func (o ProxyRecordOps) Update(ctx context.Context, client httpclient.PosthogClient, model ProxyRecordTFModel, _ httpclient.ProxyRecordRequest) (httpclient.ProxyRecord, httpclient.HTTPStatusCode, error) {
+	return o.Read(ctx, client, model)
 }
 
 func (o ProxyRecordOps) Delete(ctx context.Context, client httpclient.PosthogClient, model ProxyRecordTFModel) (httpclient.HTTPStatusCode, error) {

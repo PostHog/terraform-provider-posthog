@@ -2,7 +2,6 @@ package resource
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -126,8 +125,11 @@ func (o RoleMembershipOps) Read(ctx context.Context, client httpclient.PosthogCl
 	return client.GetRoleMembership(ctx, model.GetEffectiveOrganizationID(), model.GetRoleID(), model.GetID())
 }
 
-func (o RoleMembershipOps) Update(ctx context.Context, client httpclient.PosthogClient, _ RoleMembershipTFModel, _ httpclient.RoleMembershipRequest) (httpclient.RoleMembership, httpclient.HTTPStatusCode, error) {
-	return httpclient.RoleMembership{}, 0, fmt.Errorf("role memberships do not support updates; this is a bug if you see this error")
+// Update re-reads the membership. PostHog cannot update a role membership, and every other
+// attribute forces replacement, so the only in-place change is organization_id moving off the
+// retired "@current" alias, which needs nothing from the API.
+func (o RoleMembershipOps) Update(ctx context.Context, client httpclient.PosthogClient, model RoleMembershipTFModel, _ httpclient.RoleMembershipRequest) (httpclient.RoleMembership, httpclient.HTTPStatusCode, error) {
+	return o.Read(ctx, client, model)
 }
 
 func (o RoleMembershipOps) Delete(ctx context.Context, client httpclient.PosthogClient, model RoleMembershipTFModel) (httpclient.HTTPStatusCode, error) {

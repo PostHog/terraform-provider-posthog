@@ -22,7 +22,7 @@ type PosthogClient struct {
 	apiKey     string
 	version    string
 	httpClient *http.Client
-	// orgCache memoizes organization slug/"@current" -> UUID resolutions. It is a
+	// orgCache memoizes organization slug -> UUID resolutions. It is a
 	// pointer so that all value copies of PosthogClient (the client is passed by
 	// value through ProviderData and resource operations) share one cache.
 	orgCache *organizationCache

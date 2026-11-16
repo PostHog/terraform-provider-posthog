@@ -36,6 +36,10 @@ func TestOrganizationScopedImportParser(t *testing.T) {
 			importID: "resource-456",
 			wantErr:  true,
 		},
+		"@current organization is rejected": {
+			importID: "@current/resource-456",
+			wantErr:  true,
+		},
 	}
 
 	for name, tc := range tests {
