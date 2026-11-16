@@ -6,3 +6,5 @@ minimumReleaseAge: 10080
 overrides:
   # GHSA-pqg4-j6r4-53mv: command injection in shell-quote's quote() before 1.11.0, pulled in through launch-editor.
   shell-quote: ^1.11.0
+  # GHSA-587h-7wmj-h5pm: Windows path check bypass in launch-editor before 2.14.2, pulled in through @changesets/cli.
+  launch-editor: ^2.14.2
