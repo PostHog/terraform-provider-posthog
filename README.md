@@ -124,9 +124,49 @@ The smoke test creates a unique CNAME under `POSTHOG_TEST_DNS_BASE_DOMAIN`, wait
 make generate
 ```
 
+## Changesets
+
+A pull request that changes what provider users see adds a changeset: a fix, a new resource, data source or attribute, a breaking change, or an upgrade note. The changeset's summary becomes that change's `CHANGELOG.md` entry, so write it for people who use the provider. Do not edit `CHANGELOG.md` by hand. Pull requests that only touch tests, CI or internal tooling do not need one.
+
+To add one, run the following and commit the file it creates in `.changeset/` with your pull request. It needs Node.js 22.11 or newer and pnpm.
+
+```shell
+pnpm install
+pnpm changeset
+```
+
+You can also write the file by hand, as `.changeset/<any-name>.md`:
+
+```markdown
+---
+"terraform-provider-posthog": patch
+---
+
+**`posthog_insight`:** What changed, and what a user has to do about it.
+```
+
+Pick the bump level for the change:
+
+- `patch`: bug fixes, documentation and internal changes
+- `minor`: new resources, data sources or attributes
+- `major`: breaking changes
+
 ## Releasing
 
-Releases are automated via GoReleaser when a signed tag is pushed. The Makefile provides convenience targets:
+Releases come from the changesets merged to `main`. The version lives in `package.json`, which exists only for Changesets. The provider binary takes its version from the release tag.
+
+When a pull request with a changeset merges to `main`, the [Release workflow](.github/workflows/release.yml):
+
+1. Waits for a maintainer to approve the run in the `Release` environment.
+2. Runs `pnpm changeset version`, which bumps `package.json`, adds the `CHANGELOG.md` section and deletes the changesets, then commits that to `main`.
+3. Tags that commit `vX.Y.Z`.
+4. Runs the [Publish workflow](.github/workflows/publish.yml): unit tests, then GoReleaser, which signs the checksums with the registry GPG key and creates the GitHub release with the `CHANGELOG.md` section as its notes. The Terraform Registry picks up the release from GitHub.
+
+Changesets that merge before a release is approved ship together in it. You can also start the Release workflow from the Actions tab. It releases the pending changesets, or, when there are none, the `package.json` version if it has no tag yet.
+
+### Manual fallback
+
+Pushing a signed tag runs the Publish workflow directly. Use it for pre-releases, or when the Release workflow cannot run. The Makefile provides convenience targets:
 
 ```shell
 # Alpha releases (pre-release, for early testing)
@@ -138,6 +178,8 @@ make release-beta VERSION=1.0.0 NUM=1   # creates v1.0.0-beta.1
 # Stable releases
 make release VERSION=1.0.0              # creates v1.0.0
 ```
+
+A tag pushed this way does not update `package.json` or `CHANGELOG.md`. Before a manual stable release, merge a pull request that sets the `package.json` version and adds the `CHANGELOG.md` section, so the next automated release starts from the right version.
 
 **Requirements:**
 - GPG key configured for signing (`git tag -s`)

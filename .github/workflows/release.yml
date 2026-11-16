@@ -1,58 +1,178 @@
-# Terraform Provider release workflow.
+# Releases the provider from the changesets merged to main: bumps package.json
+# and CHANGELOG.md, tags the bump commit, then publishes it with GoReleaser.
 name: Release
 
-# This GitHub action creates a release when a tag that matches the pattern
-# "v*" (e.g. v0.1.0) is created.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - '.changeset/*.md'
+  # Also releases a package.json version that has no tag yet, for example
+  # one whose bump commit landed but whose tag was never created.
+  workflow_dispatch:
 
-# Releases need permissions to read and write the repository contents.
-# GitHub considers creating releases and uploading assets as writing contents.
 permissions:
-  contents: write
+  contents: read
+
+# Only one release at a time, so two merges cannot bump to the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  # Run tests before releasing
-  test:
-    name: Test
+  check:
+    name: Check for a pending release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    outputs:
+      has-changesets: ${{ steps.check.outputs.has-changesets }}
+      pending: ${{ steps.check.outputs.pending }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: "go.mod"
-          cache: true
-      - run: go mod download
-      - run: go build -v .
-      - name: Run unit tests
-        run: go test -v -cover ./...
+          ref: main
+          persist-credentials: false
 
-  goreleaser:
-    needs: test
+      - name: Check for changesets or an untagged version
+        id: check
+        run: |
+          changeset_count=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
+          version=$(jq -r .version package.json)
+          if [ "$changeset_count" -gt 0 ]; then
+            echo "Found $changeset_count changeset(s), ready to release"
+            echo "has-changesets=true" >> "$GITHUB_OUTPUT"
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has-changesets=false" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null || status=$?
+          case "$status" in
+            0) echo "No changesets, and v${version} is already tagged"; echo "pending=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "No changesets, but v${version} has no tag yet"; echo "pending=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
+          esac
+
+  version-bump:
+    name: Bump version
+    needs: check
+    if: needs.check.outputs.pending == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Required reviewers on this environment approve each release.
+    environment: Release
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The bump commit goes straight to main, so it needs an app that the
+      # branch rules let through. Commits made through the API are signed.
+      - name: Get GitHub App token
+        id: releaser
+        if: needs.check.outputs.has-changesets == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          # Allow goreleaser to access older tag information.
+          client-id: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
           fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+          persist-credentials: false
+
+      - name: Setup pnpm and Node.js
+        if: needs.check.outputs.has-changesets == 'true'
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          go-version-file: 'go.mod'
-          cache: true
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
-        id: import_gpg
+          # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
+          version: 11.7.0
+          runtime: node@24
+          install: false
+
+      - name: Apply changesets
+        if: needs.check.outputs.has-changesets == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm changeset version
+
+      - name: Read release version
+        id: version
+        run: |
+          version=$(jq -r .version package.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null || status=$?
+          case "$status" in
+            0) echo "::warning::v${version} is already tagged, so there is nothing to publish"; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "Releasing v${version}"; echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
+          esac
+
+      - name: Commit version bump
+        id: commit
+        if: needs.check.outputs.has-changesets == 'true' && steps.version.outputs.publish == 'true'
+        uses: planetscale/ghcommit-action@a6b150b81dca5dd027baa898604418eec9e11465 # v0.2.22
         with:
-          gpg_private_key: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          args: release --clean
+          commit_message: "chore(release): v${{ steps.version.outputs.version }} [skip ci]"
+          repo: ${{ github.repository }}
+          branch: main
         env:
-          # GitHub sets the GITHUB_TOKEN secret automatically.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+
+      - name: Set release outputs
+        id: release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUMP_COMMIT: ${{ steps.commit.outputs.commit-hash }}
+        run: |
+          commit="${BUMP_COMMIT:-$(git rev-parse HEAD)}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Tagging v${VERSION} at ${commit}"
+
+  tag:
+    name: Tag release
+    needs: version-bump
+    if: needs.version-bump.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The default token creates the tag, and a tag it creates does not start
+    # Publish's tag trigger, so the call below is the only publish run.
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version-bump.outputs.version }}
+          COMMIT: ${{ needs.version-bump.outputs.commit }}
+        run: |
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" --jq ".[] | select(.ref == \"refs/tags/${TAG}\") | .object.sha")
+          if [ -z "$existing" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$COMMIT"
+          elif [ "$existing" != "$COMMIT" ]; then
+            echo "::error::Tag ${TAG} already exists at ${existing}, expected ${COMMIT}"
+            exit 1
+          else
+            echo "Tag ${TAG} already exists at the release commit"
+          fi
+
+  publish:
+    name: Publish
+    needs: [version-bump, tag]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: v${{ needs.version-bump.outputs.version }}
+    secrets:
+      TF_REGISTRY_GPG_PRIVATE_KEY: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
+      TF_REGISTRY_GPG_PASSPHRASE: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}

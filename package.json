@@ -1,0 +1,13 @@
+{
+  "name": "terraform-provider-posthog",
+  "version": "1.0.31",
+  "private": true,
+  "description": "Release metadata and changesets for the PostHog Terraform provider",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "changeset": "changeset"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3"
+  }
+}

@@ -1,0 +1,89 @@
+# Builds, signs and publishes a provider release with GoReleaser.
+# The Terraform Registry picks up the GitHub release this creates.
+name: Publish
+
+on:
+  # The Release workflow calls this after it tags the version bump commit.
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to publish, such as v1.2.3
+        required: true
+        type: string
+    secrets:
+      TF_REGISTRY_GPG_PRIVATE_KEY:
+        required: true
+      TF_REGISTRY_GPG_PASSPHRASE:
+        required: true
+  # Manual fallback: a maintainer pushes a signed tag with `make release`.
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  # Run tests before releasing
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+      - run: go mod download
+      - run: go build -v .
+      - name: Run unit tests
+        run: go test -v -cover ./...
+
+  goreleaser:
+    needs: test
+    runs-on: ubuntu-latest
+    # GitHub considers creating releases and uploading assets as writing contents.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # Allow goreleaser to access older tag information.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v heading="## ${version}" '$0 == heading { found = 1; next } found && /^## / { exit } found { print }' CHANGELOG.md > "$notes"
+          if grep -q '[^[:space:]]' "$notes"; then
+            echo "args=--release-notes=$notes" >> "$GITHUB_OUTPUT"
+          else
+            echo "CHANGELOG.md has no ${version} section, so GoReleaser builds the notes from commits."
+          fi
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          args: release --clean ${{ steps.notes.outputs.args }}
+        env:
+          # GitHub sets the GITHUB_TOKEN secret automatically.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}

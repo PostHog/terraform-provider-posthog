@@ -73,7 +73,8 @@ playground-clean:
 	rm -f $(PLAYGROUND_TFRC)
 	rm -rf $(PLAYGROUND_DIR)/.terraform $(PLAYGROUND_DIR)/.terraform.lock.hcl
 
-# Release targets - create signed tags and push to trigger GoReleaser
+# Manual release fallback - create signed tags and push them to run the Publish workflow.
+# Stable releases normally come from changesets; see "Releasing" in README.md.
 # Usage: make release-alpha VERSION=0.1.0 NUM=1  -> v0.1.0-alpha.1
 #        make release VERSION=0.1.0              -> v0.1.0
 VERSION ?= 0.0.1
