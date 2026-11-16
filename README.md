@@ -166,29 +166,6 @@ When a pull request with a changeset merges to `main`, the [Release workflow](.g
 
 Changesets that merge before a release is approved ship together in it. You can also start the Release workflow from the Actions tab. It releases the pending changesets, or, when there are none, the `package.json` version if it has no tag yet.
 
-### Manual fallback
-
-Pushing a signed tag runs the Publish workflow directly. Use it for pre-releases, or when the Release workflow cannot run. The Makefile provides convenience targets:
-
-```shell
-# Alpha releases (pre-release, for early testing)
-make release-alpha VERSION=1.0.0 NUM=1  # creates v1.0.0-alpha.1
-
-# Beta releases (pre-release, feature complete)
-make release-beta VERSION=1.0.0 NUM=1   # creates v1.0.0-beta.1
-
-# Stable releases
-make release VERSION=1.0.0              # creates v1.0.0
-```
-
-A tag pushed this way does not update `package.json` or `CHANGELOG.md`. Before a manual stable release, merge a pull request that sets the `package.json` version and adds the `CHANGELOG.md` section, so the next automated release starts from the right version.
-
-**Requirements:**
-- GPG key configured for signing (`git tag -s`)
-- GPG key added to your GitHub account (for the "Verified" badge)
-
-Pre-release versions (alpha, beta) won't be installed by default - users must explicitly pin to them in their Terraform configuration.
-
 ## License
 
 See [LICENSE](LICENSE).

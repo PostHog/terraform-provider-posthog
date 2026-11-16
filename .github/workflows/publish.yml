@@ -15,7 +15,6 @@ on:
         required: true
       TF_REGISTRY_GPG_PASSPHRASE:
         required: true
-  # Manual fallback: a maintainer pushes a signed tag with `make release`.
   push:
     tags:
       - 'v*'
