@@ -94,8 +94,8 @@ func TestProject_OrganizationSlug(t *testing.T) {
 
 // TestProject_OrganizationCurrent exercises the "@current" resolution branch
 // (issue #99): organization_id is the literal "@current", which the provider
-// resolves to the authenticated user's org via GET /api/organizations/@current/.
-// State keeps "@current", not the resolved UUID.
+// resolves to the only organization the API key can list, so the key used here
+// must reach exactly one organization. State keeps "@current", not the resolved UUID.
 func TestProject_OrganizationCurrent(t *testing.T) {
 	skipIfNotAcceptance(t)
 

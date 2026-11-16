@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// CurrentOrganizationAlias is the special identifier PostHog accepts to refer to
-// the authenticated user's organization.
+// CurrentOrganizationAlias names the only organization the API key can access.
+// The provider resolves it from the organization list rather than PostHog's own
+// @current route, which follows the organization the user last opened in the app
+// and so can change between Terraform runs.
 const CurrentOrganizationAlias = "@current"
 
 // uuidPattern matches a canonical UUID (8-4-4-4-12 hex groups). PostHog
@@ -33,7 +37,8 @@ func (c *PosthogClient) ListOrganizations(ctx context.Context) ([]Organization, 
 // ResolveOrganizationID resolves a user-supplied organization identifier to a
 // UUID suitable for building API paths. It accepts:
 //   - a UUID, which is returned unchanged with no API call;
-//   - the literal "@current", resolved via GET /api/organizations/@current/;
+//   - the literal "@current", resolved to the only organization the API key can
+//     list, and an error when it can list none or several;
 //   - an organization slug, resolved by listing organizations and matching slug.
 //
 // Resolution is purely for constructing request URLs — the caller must never
@@ -66,12 +71,15 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 
 	var resolved string
 	if idOrSlug == CurrentOrganizationAlias {
-		tflog.Debug(ctx, "resolving @current organization via API", map[string]any{"key": idOrSlug})
-		org, _, err := doGet[Organization](c, ctx, "/api/organizations/@current/")
+		tflog.Debug(ctx, "resolving @current to the API key's only organization", map[string]any{"key": idOrSlug})
+		orgs, err := c.ListOrganizations(ctx)
 		if err != nil {
-			return "", fmt.Errorf("failed to resolve %q organization: %w", CurrentOrganizationAlias, err)
+			return "", fmt.Errorf("failed to list organizations to resolve %q: %w", CurrentOrganizationAlias, err)
 		}
-		resolved = org.ID
+		resolved, err = soleOrganizationID(orgs)
+		if err != nil {
+			return "", err
+		}
 	} else {
 		tflog.Debug(ctx, "resolving organization slug via API", map[string]any{"key": idOrSlug})
 		orgs, err := c.ListOrganizations(ctx)
@@ -92,6 +100,27 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 	c.storeOrganizationID(idOrSlug, resolved)
 	tflog.Debug(ctx, "resolved and cached organization id", map[string]any{"key": idOrSlug, "resolved_id": resolved})
 	return resolved, nil
+}
+
+// soleOrganizationID returns the id of the only organization in orgs. With none
+// or several there is no single organization @current can stand for, and picking
+// one would point the configuration at an organization the user did not choose.
+func soleOrganizationID(orgs []Organization) (string, error) {
+	switch len(orgs) {
+	case 0:
+		return "", fmt.Errorf("%q found no organization this API key can access; set organization_id to an organization UUID or slug", CurrentOrganizationAlias)
+	case 1:
+		return orgs[0].ID, nil
+	}
+	slugs := make([]string, 0, len(orgs))
+	for _, org := range orgs {
+		slugs = append(slugs, org.Slug)
+	}
+	sort.Strings(slugs)
+	return "", fmt.Errorf(
+		"%q is ambiguous because this API key can access %d organizations (%s); set organization_id to one of their UUIDs or slugs, or scope the personal API key to a single organization",
+		CurrentOrganizationAlias, len(orgs), strings.Join(slugs, ", "),
+	)
 }
 
 // orgPath resolves orgIDOrSlug (a UUID, slug, or "@current") to a UUID and formats
