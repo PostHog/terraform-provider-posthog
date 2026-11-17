@@ -108,6 +108,22 @@ func (b *BaseOrganizationID) GetEffectiveOrganizationID() string {
 type legacyOrganizationIDReplacer interface {
 	currentOrganizationID() types.String
 	replaceLegacyOrganizationID(next types.String)
+	GetEffectiveOrganizationID() string
+}
+
+// holdsLegacyOrganizationID reports whether model's organization_id is still the retired alias.
+func holdsLegacyOrganizationID[TFModel any](model *TFModel) bool {
+	replacer, ok := any(model).(legacyOrganizationIDReplacer)
+	return ok && replacer.currentOrganizationID().ValueString() == httpclient.CurrentOrganizationAlias
+}
+
+// effectiveOrganizationID returns the organization model's requests go to, or "" for models that
+// are not organization-scoped.
+func effectiveOrganizationID[TFModel any](model *TFModel) string {
+	if replacer, ok := any(model).(legacyOrganizationIDReplacer); ok {
+		return replacer.GetEffectiveOrganizationID()
+	}
+	return ""
 }
 
 func (b *BaseOrganizationID) currentOrganizationID() types.String {

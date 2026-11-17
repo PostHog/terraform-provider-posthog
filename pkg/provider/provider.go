@@ -126,7 +126,8 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 		organizationID = data.OrganizationID.ValueString()
 	}
 	if organizationID == httpclient.CurrentOrganizationAlias {
-		resp.Diagnostics.AddError("Unsupported organization_id", httpclient.ErrCurrentOrganizationAlias.Error())
+		resp.Diagnostics.AddError("Unsupported organization_id", httpclient.ErrCurrentOrganizationAlias.Error()+
+			`. Resources whose state still holds "@current" are looked up in the provider's organization_id until the next apply records it.`)
 		return
 	}
 

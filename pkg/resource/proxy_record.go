@@ -63,7 +63,7 @@ func (o ProxyRecordOps) ResourceName() string {
 func (o ProxyRecordOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: "Manages an organization-scoped PostHog custom domain proxy record. " +
-			"The resource is immutable — changing the `domain` triggers replacement, and there is no in-place update path. " +
+			"PostHog cannot update a proxy record, so changing the `domain` triggers replacement. The only in-place change is `organization_id` moving off the retired `\"@current\"` alias. " +
 			"`Create` returns immediately with a `target_cname`; converging to `status = \"valid\"` requires DNS to point at that target and is driven outside Terraform.",
 		Attributes: map[string]schema.Attribute{
 			"id":              proxyRecordComputedStringAttribute("The UUID of the proxy record."),

@@ -5,7 +5,7 @@
 ### Breaking changes
 
 - **`organization_id = "@current"` is no longer accepted**, in the provider block, `POSTHOG_ORGANIZATION_ID`, resources, data sources, or import IDs. Set the organization's UUID or slug instead. This change is required: PostHog resolves `@current` to the organization the user last opened in the app, and Terraform state kept the literal `"@current"`. Switching organization in the app between runs pointed an existing configuration at a different organization, so reads got a 404, resources dropped out of state, and the next apply created them in the other organization.
-  - To migrate, set the provider's `organization_id` (or `POSTHOG_ORGANIZATION_ID`) to the UUID of the organization your resources are in, replace any `"@current"` on resources, and apply. Resources whose state holds `"@current"` are updated in place to record the real ID, not replaced. Until that apply, they read the provider's `organization_id`.
+  - To migrate, set the provider's `organization_id` (or `POSTHOG_ORGANIZATION_ID`) to the UUID of the organization your resources are in, replace any `"@current"` on resources, and apply. Resources whose state holds `"@current"` are updated in place to record the real ID, not replaced. Until that apply, they read the provider's `organization_id`. A resource that is not in that organization fails the plan instead of being recreated: set `organization_id` on it to its organization's UUID and run `terraform apply -refresh=false` once.
 
 ### Features
 

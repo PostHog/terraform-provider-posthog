@@ -55,6 +55,22 @@ func TestOrganizationIDPlanModifier(t *testing.T) {
 			config:   types.StringNull(),
 			wantPlan: types.StringValue(testOrganizationA),
 		},
+		"an organization unknown until apply replaces the resource": {
+			state:           types.StringValue(testOrganizationA),
+			config:          types.StringUnknown(),
+			wantPlan:        types.StringUnknown(),
+			wantReplacement: true,
+		},
+		"an organization unknown until apply moves legacy @current state in place": {
+			state:    types.StringValue(httpclient.CurrentOrganizationAlias),
+			config:   types.StringUnknown(),
+			wantPlan: types.StringUnknown(),
+		},
+		"a new resource is left to the configuration": {
+			state:    types.StringNull(),
+			config:   types.StringNull(),
+			wantPlan: types.StringUnknown(),
+		},
 	}
 
 	for name, tc := range tests {
@@ -77,6 +93,18 @@ func TestOrganizationIDPlanModifier(t *testing.T) {
 			assert.Equal(t, tc.wantReplacement, resp.RequiresReplace)
 		})
 	}
+
+	t.Run("a destroy plan is left alone", func(t *testing.T) {
+		destroy := tfsdk.Plan{Raw: tftypes.NewValue(tftypes.Object{}, nil)}
+		state := types.StringValue(httpclient.CurrentOrganizationAlias)
+		req := planmodifier.StringRequest{ConfigValue: types.StringNull(), StateValue: state, PlanValue: types.StringNull(), Plan: destroy}
+		resp := &planmodifier.StringResponse{PlanValue: types.StringNull()}
+
+		OrganizationIDPlanModifier{}.PlanModifyString(ctx, req, resp)
+
+		assert.Equal(t, types.StringNull(), resp.PlanValue)
+		assert.False(t, resp.RequiresReplace)
+	})
 }
 
 func TestNotCurrentOrganizationAlias(t *testing.T) {
