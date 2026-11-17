@@ -173,15 +173,15 @@ func TestLogsAlertDestination_Teams(t *testing.T) {
 		CheckDestroy:             testAccCheckLogsAlertDestinationDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
+				Config: testAccLogsAlertDestinationTeams(rName, "https://example.logic.azure.com/workflows/first/triggers/manual/paths/invoke"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "type", "teams"),
-					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "webhook_url", "https://outlook.office.com/webhook/first"),
+					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "webhook_url", "https://example.logic.azure.com/workflows/first/triggers/manual/paths/invoke"),
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
 				),
 			},
 			{
-				Config:   testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
+				Config:   testAccLogsAlertDestinationTeams(rName, "https://example.logic.azure.com/workflows/first/triggers/manual/paths/invoke"),
 				PlanOnly: true,
 			},
 		},
@@ -274,12 +274,12 @@ func TestLogsAlertDestination_ReplaceOnChange(t *testing.T) {
 			after:  testAccLogsAlertDestinationWebhook(rName, "https://example.com/hooks/second"),
 		},
 		"teams url": {
-			before: testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
-			after:  testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/second"),
+			before: testAccLogsAlertDestinationTeams(rName, "https://example.logic.azure.com/workflows/first/triggers/manual/paths/invoke"),
+			after:  testAccLogsAlertDestinationTeams(rName, "https://example.logic.azure.com/workflows/second/triggers/manual/paths/invoke"),
 		},
 		"switching type, which also swaps which attributes apply": {
 			before: testAccLogsAlertDestinationWebhook(rName, "https://example.com/hooks/first"),
-			after:  testAccLogsAlertDestinationTeams(rName, "https://outlook.office.com/webhook/first"),
+			after:  testAccLogsAlertDestinationTeams(rName, "https://example.logic.azure.com/workflows/first/triggers/manual/paths/invoke"),
 		},
 	}
 

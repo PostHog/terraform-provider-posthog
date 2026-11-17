@@ -61,11 +61,11 @@ func TestLogsAlertDestinationBuildCreateRequest(t *testing.T) {
 		"teams": {
 			model: LogsAlertDestinationTFModel{
 				Type:       types.StringValue(destinationTypeTeams),
-				WebhookURL: types.StringValue("https://outlook.office.com/webhook/abc"),
+				WebhookURL: types.StringValue("https://example.logic.azure.com/workflows/abc/triggers/manual/paths/invoke"),
 			},
 			want: httpclient.LogsAlertDestinationRequest{
 				Type:       destinationTypeTeams,
-				WebhookURL: util.StringPtr("https://outlook.office.com/webhook/abc"),
+				WebhookURL: util.StringPtr("https://example.logic.azure.com/workflows/abc/triggers/manual/paths/invoke"),
 			},
 		},
 	}
@@ -270,7 +270,7 @@ func TestValidateLogsAlertDestinationPlan(t *testing.T) {
 		"teams with a url": {
 			planAndConfig: LogsAlertDestinationTFModel{
 				Type:       types.StringValue(destinationTypeTeams),
-				WebhookURL: types.StringValue("https://outlook.office.com/webhook/abc"),
+				WebhookURL: types.StringValue("https://example.logic.azure.com/workflows/abc/triggers/manual/paths/invoke"),
 			},
 		},
 		"teams missing its url": {
