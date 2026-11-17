@@ -126,7 +126,7 @@ make generate
 
 ## Changesets
 
-A pull request that changes what provider users see adds a changeset: a fix, a new resource, data source or attribute, a breaking change, or an upgrade note. The changeset's summary becomes that change's `CHANGELOG.md` entry, so write it for people who use the provider. Do not edit `CHANGELOG.md` by hand. Pull requests that only touch tests, CI or internal tooling do not need one.
+A pull request that changes what provider users see adds a changeset: a fix, a new resource, data source or attribute, or a breaking change. Put any upgrade steps in the same summary, under the change they belong to. The changeset's summary becomes that change's `CHANGELOG.md` entry, so write it for people who use the provider. Do not edit `CHANGELOG.md` by hand. Pull requests that only touch tests, CI or internal tooling do not need one.
 
 To add one, run the following and commit the file it creates in `.changeset/` with your pull request. It needs Node.js 22.11 or newer and pnpm.
 
@@ -147,24 +147,32 @@ You can also write the file by hand, as `.changeset/<any-name>.md`:
 
 Pick the bump level for the change. It also picks the `CHANGELOG.md` section the entry goes under:
 
-- `patch`: bug fixes, documentation and internal changes, under "Fixes"
+- `patch`: bug fixes and other changes users notice, under "Fixes"
 - `minor`: new resources, data sources or attributes, under "Features"
 - `major`: breaking changes, under "Breaking changes"
 
+A breaking change is `major`, so configurations that pin `~> 1.0` do not pick it up unannounced. 1.0.31 was a one-off exception: it removed `organization_id = "@current"` in a patch, because that only affected a handful of organizations.
+
 ## Releasing
 
-Releases are semi-automatic. Merging a pull request with a changeset starts a release, but nothing is published until someone on `@PostHog/client-libraries-approvers` approves it. Approval requests are posted in the [#approvals-client-libraries](https://posthog.slack.com/archives/C0A3UEVDDNF) Slack channel.
+Releases are semi-automatic. Merging a pull request with a changeset starts a release, but nothing is published until someone on `@PostHog/client-libraries-approvers` or `@PostHog/team-client-libraries` approves it. Approval requests are posted in the [#approvals-client-libraries](https://posthog.slack.com/archives/C0A3UEVDDNF) Slack channel, and the workflow replies in that thread when the release is approved, rejected, published or fails.
 
 Releases come from the changesets merged to `main`. The version lives in `package.json`, which exists only for Changesets. The provider binary takes its version from the release tag.
 
 When a pull request with a changeset merges to `main`, the [Release workflow](.github/workflows/release.yml):
 
 1. Waits for a maintainer to approve the run in the `Release` environment.
-2. Runs `pnpm run version-packages`, which bumps `package.json`, adds the `CHANGELOG.md` section and deletes the changesets, then commits that to `main`.
-3. Tags that commit `vX.Y.Z`.
-4. Runs the [Publish workflow](.github/workflows/publish.yml): unit tests, then GoReleaser, which signs the checksums with the registry GPG key and creates the GitHub release with the `CHANGELOG.md` section as its notes. The Terraform Registry picks up the release from GitHub.
+2. Runs the unit tests on `main`.
+3. Runs `pnpm run version-packages`, which bumps `package.json`, adds the `CHANGELOG.md` section and deletes the changesets, then commits that to `main`.
+4. Tags that commit `vX.Y.Z`.
+5. Runs the [Publish workflow](.github/workflows/publish.yml): GoReleaser signs the checksums with the registry GPG key and creates the GitHub release with the `CHANGELOG.md` section as its notes. The Terraform Registry picks up the release from GitHub.
 
 Changesets that merge before a release is approved ship together in it. You can also start the Release workflow from the Actions tab. It releases the pending changesets, or, when there are none, the `package.json` version if it has no tag yet.
+
+If a release fails after its tag exists, for example in GoReleaser:
+
+- When the cause was temporary, open the failed Release run and choose "Re-run failed jobs". Tagging is safe to repeat, so it publishes the same tag.
+- When the code needs a fix, merge the fix to `main`, delete the `vX.Y.Z` tag, then start the Release workflow from the Actions tab. It releases the untagged `package.json` version from the current `main`.
 
 ## License
 

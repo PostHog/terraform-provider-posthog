@@ -54,10 +54,24 @@ jobs:
             *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
           esac
 
-  version-bump:
-    name: Bump version
+  # Posts the approval request in #approvals-client-libraries, as the other SDKs' releases do.
+  notify-approval-needed:
+    name: Notify Slack - Approval needed
     needs: check
     if: needs.check.outputs.pending == 'true'
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@5fc4680761e8ac29a61b212756230eba0e276d8c
+    with:
+      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
+
+  version-bump:
+    name: Bump version
+    needs: [check, notify-approval-needed]
+    # A failed Slack notification does not hold back the release.
+    if: always() && needs.check.result == 'success' && needs.check.outputs.pending == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Required reviewers on this environment approve each release.
@@ -69,6 +83,35 @@ jobs:
       commit: ${{ steps.release.outputs.commit }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
+      - name: Notify Slack - Approved
+        if: needs.notify-approval-needed.outputs.slack_ts != ''
+        continue-on-error: true
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "✅ Release approved! Version bump in progress..."
+          emoji_reaction: "white_check_mark"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Tests run before anything is committed or tagged, so a failure leaves
+      # nothing to clean up.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests
+        run: go test -cover ./...
+
       # The bump commit goes straight to main, so it needs an app that the
       # branch rules let through. Commits made through the API are signed.
       - name: Get GitHub App token
@@ -79,13 +122,6 @@ jobs:
           client-id: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_APP_ID }}
           private-key: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_PRIVATE_KEY }}
           permission-contents: write
-
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
 
       - name: Setup pnpm and Node.js
         if: needs.check.outputs.has-changesets == 'true'
@@ -141,7 +177,13 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUMP_COMMIT: ${{ steps.commit.outputs.commit-hash }}
+          HAS_CHANGESETS: ${{ needs.check.outputs.has-changesets }}
         run: |
+          # Without the bump commit's hash, HEAD is the commit before the bump.
+          if [ "$HAS_CHANGESETS" = "true" ] && [ -z "$BUMP_COMMIT" ]; then
+            echo "::error::The version bump commit reported no hash, so there is no commit to tag. Check the Commit version bump step and main before rerunning."
+            exit 1
+          fi
           commit="${BUMP_COMMIT:-$(git rev-parse HEAD)}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
@@ -183,3 +225,61 @@ jobs:
     secrets:
       TF_REGISTRY_GPG_PRIVATE_KEY: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
       TF_REGISTRY_GPG_PASSPHRASE: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}
+
+  notify-released:
+    name: Notify Slack - Released
+    needs: [notify-approval-needed, version-bump, publish]
+    if: always() && needs.publish.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify Slack - Released
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "🚀 terraform-provider-posthog v${{ needs.version-bump.outputs.version }} released successfully!"
+          emoji_reaction: "rocket"
+
+  notify-failed:
+    name: Notify Slack - Rejected or failed
+    needs: [notify-approval-needed, version-bump, tag, publish]
+    if: >-
+      always() && needs.notify-approval-needed.outputs.slack_ts != '' &&
+      (needs.version-bump.result == 'failure' || needs.tag.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Describe the outcome
+        id: outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rejection=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "rejected")] | first | if . == null then "" else (.comment // "no comment") end')
+          if [ -n "$rejection" ]; then
+            message="🚫 Release was rejected: ${rejection}"
+            emoji="no_entry_sign"
+          else
+            message="❌ Release failed: ${RUN_URL}"
+            emoji="x"
+          fi
+          {
+            echo 'message<<EOF'
+            echo "$message"
+            echo 'EOF'
+            echo "emoji=$emoji"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: ${{ steps.outcome.outputs.message }}
+          emoji_reaction: ${{ steps.outcome.outputs.emoji }}

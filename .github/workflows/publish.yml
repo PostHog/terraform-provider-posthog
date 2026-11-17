@@ -21,27 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  # Run tests before releasing
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.tag }}
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: "go.mod"
-          cache: true
-      - run: go mod download
-      - run: go build -v .
-      - name: Run unit tests
-        run: go test -v -cover ./...
-
+  # The Release workflow runs the unit tests before it tags the version.
   goreleaser:
-    needs: test
     runs-on: ubuntu-latest
     # GitHub considers creating releases and uploading assets as writing contents.
     permissions:
