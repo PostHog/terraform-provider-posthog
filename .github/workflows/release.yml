@@ -100,7 +100,7 @@ jobs:
         if: needs.check.outputs.has-changesets == 'true'
         run: |
           pnpm install --frozen-lockfile
-          pnpm changeset version
+          pnpm run version-packages
 
       - name: Read release version
         id: version

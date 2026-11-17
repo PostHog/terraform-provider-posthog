@@ -145,11 +145,11 @@ You can also write the file by hand, as `.changeset/<any-name>.md`:
 **`posthog_insight`:** What changed, and what a user has to do about it.
 ```
 
-Pick the bump level for the change:
+Pick the bump level for the change. It also picks the `CHANGELOG.md` section the entry goes under:
 
-- `patch`: bug fixes, documentation and internal changes
-- `minor`: new resources, data sources or attributes
-- `major`: breaking changes
+- `patch`: bug fixes, documentation and internal changes, under "Fixes"
+- `minor`: new resources, data sources or attributes, under "Features"
+- `major`: breaking changes, under "Breaking changes"
 
 ## Releasing
 
