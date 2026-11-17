@@ -165,7 +165,8 @@ type AlertIDSetter interface {
 }
 
 // LogsAlertDestinationImportParser returns an import parser for log alert destinations.
-// Import format: "project_id/alert_id/hog_function_id".
+// Import format: "project_id/alert_id/destination_id", where destination_id is the
+// destination's own id or any one of its hog function ids.
 func LogsAlertDestinationImportParser[TFModel Identifiable]() ImportIDParser[TFModel] {
 	return func(importID string, _ ProviderDefaults) (TFModel, error) {
 		var model TFModel
@@ -173,13 +174,14 @@ func LogsAlertDestinationImportParser[TFModel Identifiable]() ImportIDParser[TFM
 		parts := strings.Split(importID, "/")
 		if len(parts) != 3 {
 			return model, fmt.Errorf(
-				"invalid import ID format %q: expected 'project_id/alert_id/hog_function_id'", importID,
+				"invalid import ID format %q: expected 'project_id/alert_id/destination_id', "+
+					"where destination_id is the destination's id or one of its hog function ids", importID,
 			)
 		}
 
 		projectID := parts[0]
 		alertID := parts[1]
-		hogFunctionID := parts[2]
+		destinationID := parts[2]
 
 		init, ok := any(&model).(ProjectIDInitializer)
 		if !ok {
@@ -197,8 +199,8 @@ func LogsAlertDestinationImportParser[TFModel Identifiable]() ImportIDParser[TFM
 		if !ok {
 			return model, fmt.Errorf("model %T does not implement IDSetter", model)
 		}
-		if err := setter.SetID(hogFunctionID); err != nil {
-			return model, fmt.Errorf("invalid hog function ID %q: %w", hogFunctionID, err)
+		if err := setter.SetID(destinationID); err != nil {
+			return model, fmt.Errorf("invalid destination ID %q: %w", destinationID, err)
 		}
 
 		return model, nil

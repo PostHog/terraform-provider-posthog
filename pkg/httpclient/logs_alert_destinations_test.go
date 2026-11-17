@@ -114,11 +114,28 @@ func TestDeleteLogsAlertDestination_SendsTheWholeGroupInOneCall(t *testing.T) {
 	defer server.Close()
 
 	client := newTestPosthogClient(server)
-	status, err := client.DeleteLogsAlertDestination(context.Background(), testLogsAlertProjectID, testLogsAlertID, []string{"hf-1", "hf-2"})
+	status, err := client.DeleteLogsAlertDestinationHogFunctions(context.Background(), testLogsAlertProjectID, testLogsAlertID, []string{"hf-1", "hf-2"})
 
 	require.NoError(t, err)
 	assert.Equal(t, HTTPStatusCode(http.StatusNoContent), status)
 	assert.Equal(t, 1, calls)
+}
+
+func TestDeleteLogsAlertDestination_NamesOnlyTheDestinationID(t *testing.T) {
+	var body map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, testLogsAlertDestinationsP+"delete", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := newTestPosthogClient(server)
+	_, err := client.DeleteLogsAlertDestination(context.Background(), testLogsAlertProjectID, testLogsAlertID, "dest-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"destination_ids": []any{"dest-1"}}, body)
 }
 
 func TestListLogsAlertDestinations_ReturnsTheNotFoundStatusToTheCaller(t *testing.T) {
@@ -144,7 +161,7 @@ func TestDeleteLogsAlertDestination_ReturnsTheNotFoundStatusToTheCaller(t *testi
 	defer server.Close()
 
 	client := newTestPosthogClient(server)
-	status, err := client.DeleteLogsAlertDestination(context.Background(), testLogsAlertProjectID, testLogsAlertID, []string{"hf-1"})
+	status, err := client.DeleteLogsAlertDestination(context.Background(), testLogsAlertProjectID, testLogsAlertID, "dest-1")
 
 	require.Error(t, err)
 	assert.Equal(t, HTTPStatusCode(http.StatusNotFound), status)

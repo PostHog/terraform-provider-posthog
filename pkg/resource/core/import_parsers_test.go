@@ -166,13 +166,13 @@ func TestLogsAlertDestinationImportParser(t *testing.T) {
 		wantErr           bool
 		wantProjectID     string
 		wantAlertID       string
-		wantHogFunctionID string
+		wantDestinationID string
 	}{
 		"valid three-part format": {
 			importID:          "123/alert-456/hf-789",
 			wantProjectID:     "123",
 			wantAlertID:       "alert-456",
-			wantHogFunctionID: "hf-789",
+			wantDestinationID: "hf-789",
 		},
 		"two parts is invalid": {
 			importID: "123/alert-456",
@@ -196,7 +196,7 @@ func TestLogsAlertDestinationImportParser(t *testing.T) {
 			require.NoError(t, err, "parser should successfully parse valid import ID")
 			assert.Equal(t, tc.wantProjectID, model.ProjectID.ValueString(), "project_id should be extracted from first segment")
 			assert.Equal(t, tc.wantAlertID, model.AlertID, "alert_id should be extracted from second segment")
-			assert.Equal(t, tc.wantHogFunctionID, model.ID.ValueString(), "id should be extracted from third segment")
+			assert.Equal(t, tc.wantDestinationID, model.ID.ValueString(), "id should be extracted from third segment")
 		})
 	}
 }
