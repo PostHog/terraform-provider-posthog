@@ -22,7 +22,7 @@ import (
 // The upstream API only exposes GET / POST / DELETE on
 // /api/organizations/{org}/proxy_records/ — there's no PUT or PATCH. We model
 // this as an immutable resource: domain is Required + RequiresReplace, and
-// Update returns an error at both the request-build and operation levels.
+// Update only re-reads the record (see ProxyRecordOps.Update).
 //
 // PostHog also exposes a POST /retry/ endpoint, but it's intentionally not part
 // of the CRUD contract — it's an operational remediation step the user runs
