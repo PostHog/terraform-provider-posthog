@@ -160,7 +160,7 @@ Releases come from the changesets merged to `main`. The version lives in `packag
 When a pull request with a changeset merges to `main`, the [Release workflow](.github/workflows/release.yml):
 
 1. Waits for a maintainer to approve the run in the `Release` environment.
-2. Runs `pnpm changeset version`, which bumps `package.json`, adds the `CHANGELOG.md` section and deletes the changesets, then commits that to `main`.
+2. Runs `pnpm run version-packages`, which bumps `package.json`, adds the `CHANGELOG.md` section and deletes the changesets, then commits that to `main`.
 3. Tags that commit `vX.Y.Z`.
 4. Runs the [Publish workflow](.github/workflows/publish.yml): unit tests, then GoReleaser, which signs the checksums with the registry GPG key and creates the GitHub release with the `CHANGELOG.md` section as its notes. The Terraform Registry picks up the release from GitHub.
 
