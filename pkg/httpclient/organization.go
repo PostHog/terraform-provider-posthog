@@ -18,8 +18,7 @@ const CurrentOrganizationAlias = "@current"
 // CurrentOrganizationAlias.
 var ErrCurrentOrganizationAlias = errors.New(
 	`organization_id "@current" is no longer supported, because PostHog resolves it to the organization the user last opened in the app, which can change between runs. ` +
-		`Set organization_id to the organization's UUID or slug. ` +
-		`A resource whose state still holds "@current" uses the provider's organization_id until the next apply records the real one`,
+		`Set organization_id to the organization's UUID or slug`,
 )
 
 // uuidPattern matches a canonical UUID (8-4-4-4-12 hex groups). PostHog

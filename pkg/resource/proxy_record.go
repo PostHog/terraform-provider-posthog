@@ -22,7 +22,7 @@ import (
 // The upstream API only exposes GET / POST / DELETE on
 // /api/organizations/{org}/proxy_records/ — there's no PUT or PATCH. We model
 // this as an immutable resource: domain is Required + RequiresReplace, and
-// Update returns an error at both the request-build and operation levels.
+// Update only re-reads the record (see ProxyRecordOps.Update).
 //
 // PostHog also exposes a POST /retry/ endpoint, but it's intentionally not part
 // of the CRUD contract — it's an operational remediation step the user runs
@@ -63,7 +63,7 @@ func (o ProxyRecordOps) ResourceName() string {
 func (o ProxyRecordOps) Schema() schema.Schema {
 	return schema.Schema{
 		MarkdownDescription: "Manages an organization-scoped PostHog custom domain proxy record. " +
-			"The resource is immutable — changing the `domain` triggers replacement, and there is no in-place update path. " +
+			"PostHog cannot update a proxy record, so changing the `domain` triggers replacement. The only in-place change is `organization_id` moving off the retired `\"@current\"` alias. " +
 			"`Create` returns immediately with a `target_cname`; converging to `status = \"valid\"` requires DNS to point at that target and is driven outside Terraform.",
 		Attributes: map[string]schema.Attribute{
 			"id":              proxyRecordComputedStringAttribute("The UUID of the proxy record."),
@@ -93,13 +93,9 @@ func (o ProxyRecordOps) BuildCreateRequest(_ context.Context, model ProxyRecordT
 	}, diags
 }
 
+// BuildUpdateRequest returns an empty request because Update sends nothing to the API.
 func (o ProxyRecordOps) BuildUpdateRequest(_ context.Context, _, _ ProxyRecordTFModel) (httpclient.ProxyRecordRequest, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	diags.AddError(
-		"Update not supported",
-		"Proxy records do not support updates. Change the domain to replace the resource instead.",
-	)
-	return httpclient.ProxyRecordRequest{}, diags
+	return httpclient.ProxyRecordRequest{}, nil
 }
 
 func (o ProxyRecordOps) MapResponseToModel(_ context.Context, resp httpclient.ProxyRecord, model *ProxyRecordTFModel) diag.Diagnostics {
