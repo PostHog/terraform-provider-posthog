@@ -11,12 +11,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	posthogdata "github.com/posthog/terraform-provider/pkg/data"
 	posthogdatasource "github.com/posthog/terraform-provider/pkg/datasource"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
 	posthogresource "github.com/posthog/terraform-provider/pkg/resource"
+	posthogcore "github.com/posthog/terraform-provider/pkg/resource/core"
 )
 
 const (
@@ -81,8 +83,9 @@ func (p *PostHogProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 			"organization_id": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: fmt.Sprintf(
-					"Default organization to target. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization). Slugs and `@current` are resolved to a UUID for API calls. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
+					"Default organization to target. Accepts an organization UUID or slug; slugs are resolved to a UUID for API calls. `@current` is not accepted. Can be set via `%s` environment variable.", EnvPostHogOrganizationId,
 				),
+				Validators: []validator.String{posthogcore.NotCurrentOrganizationAlias{}},
 			},
 		},
 	}
@@ -121,6 +124,11 @@ func (p *PostHogProvider) Configure(ctx context.Context, req provider.ConfigureR
 	organizationID := os.Getenv(EnvPostHogOrganizationId)
 	if !data.OrganizationID.IsNull() {
 		organizationID = data.OrganizationID.ValueString()
+	}
+	if organizationID == httpclient.CurrentOrganizationAlias {
+		resp.Diagnostics.AddError("Unsupported organization_id", httpclient.ErrCurrentOrganizationAlias.Error()+
+			`. Resources whose state still holds "@current" are looked up in the provider's organization_id until the next apply records it.`)
+		return
 	}
 
 	tflog.Debug(ctx, "configured PostHog provider", map[string]any{"host": host})

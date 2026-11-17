@@ -34,3 +34,5 @@ go.work.sum
 # Editor/IDE
 .idea/
 .vscode/
+# Changesets tooling
+node_modules/

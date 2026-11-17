@@ -1,58 +1,285 @@
-# Terraform Provider release workflow.
+# Releases the provider from the changesets merged to main: bumps package.json
+# and CHANGELOG.md, tags the bump commit, then publishes it with GoReleaser.
 name: Release
 
-# This GitHub action creates a release when a tag that matches the pattern
-# "v*" (e.g. v0.1.0) is created.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - '.changeset/*.md'
+  # Also releases a package.json version that has no tag yet, for example
+  # one whose bump commit landed but whose tag was never created.
+  workflow_dispatch:
 
-# Releases need permissions to read and write the repository contents.
-# GitHub considers creating releases and uploading assets as writing contents.
 permissions:
-  contents: write
+  contents: read
+
+# Only one release at a time, so two merges cannot bump to the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  # Run tests before releasing
-  test:
-    name: Test
+  check:
+    name: Check for a pending release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    outputs:
+      has-changesets: ${{ steps.check.outputs.has-changesets }}
+      pending: ${{ steps.check.outputs.pending }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: "go.mod"
-          cache: true
-      - run: go mod download
-      - run: go build -v .
-      - name: Run unit tests
-        run: go test -v -cover ./...
+          ref: main
+          persist-credentials: false
 
-  goreleaser:
-    needs: test
+      - name: Check for changesets or an untagged version
+        id: check
+        run: |
+          changeset_count=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
+          version=$(jq -r .version package.json)
+          if [ "$changeset_count" -gt 0 ]; then
+            echo "Found $changeset_count changeset(s), ready to release"
+            echo "has-changesets=true" >> "$GITHUB_OUTPUT"
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has-changesets=false" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null || status=$?
+          case "$status" in
+            0) echo "No changesets, and v${version} is already tagged"; echo "pending=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "No changesets, but v${version} has no tag yet"; echo "pending=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
+          esac
+
+  # Posts the approval request in #approvals-client-libraries, as the other SDKs' releases do.
+  notify-approval-needed:
+    name: Notify Slack - Approval needed
+    needs: check
+    if: needs.check.outputs.pending == 'true'
+    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@5fc4680761e8ac29a61b212756230eba0e276d8c
+    with:
+      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
+    secrets:
+      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
+
+  version-bump:
+    name: Bump version
+    needs: [check, notify-approval-needed]
+    # A failed Slack notification does not hold back the release.
+    if: always() && needs.check.result == 'success' && needs.check.outputs.pending == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Required reviewers on this environment approve each release.
+    environment: Release
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Notify Slack - Approved
+        if: needs.notify-approval-needed.outputs.slack_ts != ''
+        continue-on-error: true
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
         with:
-          # Allow goreleaser to access older tag information.
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "✅ Release approved! Version bump in progress..."
+          emoji_reaction: "white_check_mark"
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
           fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+          persist-credentials: false
+
+      # Tests run before anything is committed or tagged, so a failure leaves
+      # nothing to clean up.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          go-version-file: go.mod
           cache: true
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
-        id: import_gpg
+
+      - name: Run unit tests
+        run: go test -cover ./...
+
+      # The bump commit goes straight to main, so it needs an app that the
+      # branch rules let through. Commits made through the API are signed.
+      - name: Get GitHub App token
+        id: releaser
+        if: needs.check.outputs.has-changesets == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          gpg_private_key: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+          client-id: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GH_APP_TERRAFORM_PROVIDER_POSTHOG_RELEASER_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Setup pnpm and Node.js
+        if: needs.check.outputs.has-changesets == 'true'
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         with:
-          args: release --clean
+          # pnpm/setup installs runtimes via pnpm runtime, which requires pnpm >=11.1.0.
+          version: 11.7.0
+          runtime: node@24
+          install: false
+
+      - name: Apply changesets
+        if: needs.check.outputs.has-changesets == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run version-packages
+
+      - name: Read release version
+        id: version
         env:
-          # GitHub sets the GITHUB_TOKEN secret automatically.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          HAS_CHANGESETS: ${{ needs.check.outputs.has-changesets }}
+        run: |
+          version=$(jq -r .version package.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null || status=$?
+          case "$status" in
+            0)
+              # Succeeding here would leave the changesets on main, so every later
+              # merge would skip its release the same way.
+              if [ "$HAS_CHANGESETS" = "true" ]; then
+                echo "::error::The changesets bump the version to v${version}, which is already tagged. Bump package.json past the latest tag on main, then rerun this workflow."
+                exit 1
+              fi
+              echo "::warning::v${version} is already tagged, so there is nothing to publish"; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "Releasing v${version}"; echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not list tags (git ls-remote exited with $status)"; exit 1 ;;
+          esac
+
+      - name: Commit version bump
+        id: commit
+        if: needs.check.outputs.has-changesets == 'true' && steps.version.outputs.publish == 'true'
+        uses: planetscale/ghcommit-action@a6b150b81dca5dd027baa898604418eec9e11465 # v0.2.22
+        with:
+          commit_message: "chore(release): v${{ steps.version.outputs.version }} [skip ci]"
+          repo: ${{ github.repository }}
+          branch: main
+        env:
+          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+
+      - name: Set release outputs
+        id: release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUMP_COMMIT: ${{ steps.commit.outputs.commit-hash }}
+          HAS_CHANGESETS: ${{ needs.check.outputs.has-changesets }}
+        run: |
+          # Without the bump commit's hash, HEAD is the commit before the bump.
+          if [ "$HAS_CHANGESETS" = "true" ] && [ -z "$BUMP_COMMIT" ]; then
+            echo "::error::The version bump commit reported no hash, so there is no commit to tag. Check the Commit version bump step and main before rerunning."
+            exit 1
+          fi
+          commit="${BUMP_COMMIT:-$(git rev-parse HEAD)}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Tagging v${VERSION} at ${commit}"
+
+  tag:
+    name: Tag release
+    needs: version-bump
+    if: needs.version-bump.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version-bump.outputs.version }}
+          COMMIT: ${{ needs.version-bump.outputs.commit }}
+        run: |
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" --jq ".[] | select(.ref == \"refs/tags/${TAG}\") | .object.sha")
+          if [ -z "$existing" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$COMMIT"
+          elif [ "$existing" != "$COMMIT" ]; then
+            echo "::error::Tag ${TAG} already exists at ${existing}, expected ${COMMIT}"
+            exit 1
+          else
+            echo "Tag ${TAG} already exists at the release commit"
+          fi
+
+  publish:
+    name: Publish
+    needs: [version-bump, tag]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: v${{ needs.version-bump.outputs.version }}
+    secrets:
+      TF_REGISTRY_GPG_PRIVATE_KEY: ${{ secrets.TF_REGISTRY_GPG_PRIVATE_KEY }}
+      TF_REGISTRY_GPG_PASSPHRASE: ${{ secrets.TF_REGISTRY_GPG_PASSPHRASE }}
+
+  notify-released:
+    name: Notify Slack - Released
+    needs: [notify-approval-needed, version-bump, publish]
+    if: always() && needs.publish.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify Slack - Released
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: "🚀 terraform-provider-posthog v${{ needs.version-bump.outputs.version }} released successfully!"
+          emoji_reaction: "rocket"
+
+  notify-failed:
+    name: Notify Slack - Rejected or failed
+    needs: [notify-approval-needed, version-bump, tag, publish]
+    if: >-
+      always() && needs.notify-approval-needed.outputs.slack_ts != '' &&
+      (needs.version-bump.result == 'failure' || needs.tag.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Describe the outcome
+        id: outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rejection=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "rejected")] | first | if . == null then "" else (.comment // "no comment") end')
+          if [ -n "$rejection" ]; then
+            message="🚫 Release was rejected: ${rejection}"
+            emoji="no_entry_sign"
+          else
+            message="❌ Release failed: ${RUN_URL}"
+            emoji="x"
+          fi
+          {
+            echo 'message<<EOF'
+            echo "$message"
+            echo 'EOF'
+            echo "emoji=$emoji"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
+        with:
+          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
+          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
+          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
+          message: ${{ steps.outcome.outputs.message }}
+          emoji_reaction: ${{ steps.outcome.outputs.emoji }}

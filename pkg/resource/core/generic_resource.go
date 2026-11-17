@@ -197,6 +197,10 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Read(
 	r.initializeScope(&state)
 	response, statusCode, err := r.ops.Read(ctx, r.client, state)
 	if err != nil {
+		if statusCode == http.StatusNotFound && holdsLegacyOrganizationID(&state) {
+			r.addLegacyOrganizationNotFoundError(&resp.Diagnostics, state)
+			return
+		}
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource not found, removing from state", map[string]any{"id": state.GetID()})
 			resp.State.RemoveResource(ctx)
@@ -243,6 +247,17 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 	// Set provider defaults on embedded structs (use state for project_id as it shouldn't change)
 	r.initializeScope(&state)
 	r.initializeScope(&plan)
+	legacyOrganization := holdsLegacyOrganizationID(&state)
+	replaceLegacyOrganizationIDFromPlan(&state, &plan)
+	if legacyOrganization && effectiveOrganizationID(&state) == "" {
+		resp.Diagnostics.AddError(
+			"Missing organization_id",
+			fmt.Sprintf(`%s %s still holds organization_id "@current", and neither the resource nor the provider sets organization_id. `+
+				"Set the provider's organization_id (or POSTHOG_ORGANIZATION_ID) to the organization's UUID, or set organization_id on the resource.",
+				r.ops.ResourceName(), state.GetID()),
+		)
+		return
+	}
 
 	// Build request using resource-specific logic
 	request, diags := r.ops.BuildUpdateRequest(ctx, plan, state)
@@ -254,6 +269,10 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Update(
 	// Use state's project_id for the API call (shouldn't change during update)
 	response, statusCode, err := r.ops.Update(ctx, r.client, state, request)
 	if err != nil {
+		if statusCode == http.StatusNotFound && legacyOrganization {
+			r.addLegacyOrganizationNotFoundError(&resp.Diagnostics, state)
+			return
+		}
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource not found during update, removing from state", map[string]any{"id": state.GetID()})
 			resp.Diagnostics.AddWarning(
@@ -307,6 +326,10 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Delete(
 	r.initializeScope(&state)
 	statusCode, err := r.ops.Delete(ctx, r.client, state)
 	if err != nil {
+		if statusCode == http.StatusNotFound && holdsLegacyOrganizationID(&state) {
+			r.addLegacyOrganizationNotFoundError(&resp.Diagnostics, state)
+			return
+		}
 		if statusCode == http.StatusNotFound {
 			tflog.Warn(ctx, "Resource already deleted, removing from state", map[string]any{"id": state.GetID()})
 			resp.State.RemoveResource(ctx)
@@ -322,6 +345,20 @@ func (r *GenericResource[TFModel, APIRequest, APIResponse]) Delete(
 	tflog.Debug(ctx, fmt.Sprintf("Deleted PostHog %s", r.ops.ResourceName()), map[string]any{
 		"id": state.GetID(),
 	})
+}
+
+// addLegacyOrganizationNotFoundError reports a 404 for a resource whose state held the retired
+// "@current" alias. That alias named whichever organization the user last opened in the app, so
+// the resource may live in another organization than the one looked up. Removing it from state
+// would make the next apply create a duplicate there, so the operation fails instead.
+func (r *GenericResource[TFModel, APIRequest, APIResponse]) addLegacyOrganizationNotFoundError(diags *diag.Diagnostics, model TFModel) {
+	diags.AddError(
+		fmt.Sprintf("%s not found in organization %s", r.ops.ResourceName(), effectiveOrganizationID(&model)),
+		fmt.Sprintf(`%s %s was not found in organization %s. Its state holds organization_id "@current", which PostHog resolved to the organization last opened in the app, so it may belong to another organization. `+
+			"If it does, set organization_id on the resource to that organization's UUID and run `terraform apply -refresh=false` once to record it. "+
+			"If it was deleted, remove it from state with `terraform state rm`.",
+			r.ops.ResourceName(), model.GetID(), effectiveOrganizationID(&model)),
+	)
 }
 
 func (r *GenericResource[TFModel, APIRequest, APIResponse]) ImportState(

@@ -71,6 +71,9 @@ func OrganizationScopedImportParser[TFModel Identifiable]() ImportIDParser[TFMod
 		if !ok {
 			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
 		}
+		if organizationID == httpclient.CurrentOrganizationAlias {
+			return model, httpclient.ErrCurrentOrganizationAlias
+		}
 		orgInit.InitializeOrganizationID(organizationID)
 
 		return model, nil
@@ -96,6 +99,9 @@ func OrganizationMemberImportParser[TFModel Identifiable]() ImportIDParser[TFMod
 		orgInit, ok := any(&model).(OrganizationIDInitializer)
 		if !ok {
 			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
+		}
+		if organizationID == httpclient.CurrentOrganizationAlias {
+			return model, httpclient.ErrCurrentOrganizationAlias
 		}
 		orgInit.InitializeOrganizationID(organizationID)
 
@@ -129,6 +135,9 @@ func RoleMembershipImportParser[TFModel Identifiable]() ImportIDParser[TFModel] 
 		orgInit, ok := any(&model).(OrganizationIDInitializer)
 		if !ok {
 			return model, fmt.Errorf("model %T does not implement OrganizationIDInitializer", model)
+		}
+		if organizationID == httpclient.CurrentOrganizationAlias {
+			return model, httpclient.ErrCurrentOrganizationAlias
 		}
 		orgInit.InitializeOrganizationID(organizationID)
 

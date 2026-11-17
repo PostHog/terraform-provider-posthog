@@ -3,12 +3,12 @@
 page_title: "posthog_proxy_record Resource - posthog"
 subcategory: ""
 description: |-
-  Manages an organization-scoped PostHog custom domain proxy record. The resource is immutable — changing the domain triggers replacement, and there is no in-place update path. Create returns immediately with a target_cname; converging to status = "valid" requires DNS to point at that target and is driven outside Terraform.
+  Manages an organization-scoped PostHog custom domain proxy record. PostHog cannot update a proxy record, so changing the domain triggers replacement. The only in-place change is organization_id moving off the retired "@current" alias. Create returns immediately with a target_cname; converging to status = "valid" requires DNS to point at that target and is driven outside Terraform.
 ---
 
 # posthog_proxy_record (Resource)
 
-Manages an organization-scoped PostHog custom domain proxy record. The resource is immutable — changing the `domain` triggers replacement, and there is no in-place update path. `Create` returns immediately with a `target_cname`; converging to `status = "valid"` requires DNS to point at that target and is driven outside Terraform.
+Manages an organization-scoped PostHog custom domain proxy record. PostHog cannot update a proxy record, so changing the `domain` triggers replacement. The only in-place change is `organization_id` moving off the retired `"@current"` alias. `Create` returns immediately with a `target_cname`; converging to `status = "valid"` requires DNS to point at that target and is driven outside Terraform.
 
 ## Example Usage
 
@@ -34,7 +34,7 @@ output "analytics_proxy_target_cname" {
 
 ### Optional
 
-- `organization_id` (String) Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID, an organization slug, or the literal `@current` (the authenticated user's organization); slugs and `@current` are resolved to a UUID for API calls while your original value is preserved in state.
+- `organization_id` (String) Organization for this resource. Overrides the provider-level organization_id. Accepts an organization UUID or slug; slugs are resolved to a UUID for API calls while your original value is preserved in state. `@current` is not accepted.
 
 ### Read-Only
 

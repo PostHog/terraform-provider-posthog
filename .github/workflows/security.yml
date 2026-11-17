@@ -84,3 +84,9 @@ jobs:
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
+          # GHSA-fc5q-39xc-vjpf (CVE-2026-112366): ReDoS in picomatch through repeated extglobs, with no
+          # fixed release yet (4.0.7 is affected). picomatch comes in only through the Changesets CLI
+          # (@changesets/config, @changesets/git, tinyglobby), which the Release workflow runs on this
+          # repository's own globs, never on outside input. Remove this once a picomatch release past
+          # 4.0.7 is in pnpm-lock.yaml.
+          allow-ghsas: GHSA-fc5q-39xc-vjpf

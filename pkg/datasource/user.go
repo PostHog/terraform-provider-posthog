@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/posthog/terraform-provider/pkg/data"
@@ -50,6 +51,7 @@ func (d *UserDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "The organization ID to search for the user in. Defaults to the provider-level organization_id.",
+				Validators:          []validator.String{core.NotCurrentOrganizationAlias{}},
 			},
 			"email": schema.StringAttribute{
 				Required:            true,
