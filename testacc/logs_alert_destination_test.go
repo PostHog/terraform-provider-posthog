@@ -26,6 +26,9 @@ const (
 var writeOnlyDestinationAttributes = []string{"slack_channel_name", "webhook_url"}
 
 func terraformIDOf(destination httpclient.LogsAlertDestination) string {
+	if destination.ID != nil && *destination.ID != "" {
+		return *destination.ID
+	}
 	return strings.Join(slices.Sorted(slices.Values(destination.HogFunctionIDs)), ",")
 }
 
@@ -71,6 +74,9 @@ func testAccCheckLogsAlertDestinationDestroy(s *terraform.State) error {
 
 		stateIDs := strings.Split(rs.Primary.ID, ",")
 		for _, destination := range destinations {
+			if terraformIDOf(destination) == rs.Primary.ID {
+				return fmt.Errorf("logs alert destination %s still exists", rs.Primary.ID)
+			}
 			for _, id := range destination.HogFunctionIDs {
 				if slices.Contains(stateIDs, id) {
 					return fmt.Errorf("logs alert destination %s still exists", rs.Primary.ID)
@@ -148,7 +154,6 @@ func TestLogsAlertDestination_Webhook(t *testing.T) {
 					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "type", "webhook"),
 					resource.TestCheckResourceAttr(logsAlertDestinationAddress, "webhook_url", "https://example.com/hooks/first"),
 					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "id"),
-					resource.TestCheckResourceAttrSet(logsAlertDestinationAddress, "hog_function_ids.#"),
 					resource.TestCheckResourceAttrPair(logsAlertDestinationAddress, "alert_id", "posthog_logs_alert.test", "id"),
 					testAccCheckLogsAlertDestinationExists(logsAlertDestinationAddress),
 				),
@@ -354,17 +359,15 @@ func TestLogsAlertDestination_Import(t *testing.T) {
 					if !ok {
 						return "", fmt.Errorf("resource not found: %s", logsAlertDestinationAddress)
 					}
-					oneHogFunctionIDOfTheGroup := strings.Split(rs.Primary.ID, ",")[0]
-					return fmt.Sprintf("%s/%s/%s", getProjectID(), rs.Primary.Attributes["alert_id"], oneHogFunctionIDOfTheGroup), nil
+					// The row id, or one hog function of the group when PostHog gave the destination no row.
+					destinationID := strings.Split(rs.Primary.ID, ",")[0]
+					return fmt.Sprintf("%s/%s/%s", getProjectID(), rs.Primary.Attributes["alert_id"], destinationID), nil
 				},
 				ImportStateVerify:       true,
 				ImportStateVerifyIgnore: writeOnlyDestinationAttributes,
 				ImportStateCheck: func(states []*terraform.InstanceState) error {
 					if len(states) != 1 {
 						return fmt.Errorf("expected 1 imported state, got %d", len(states))
-					}
-					if got := states[0].Attributes["hog_function_ids.#"]; got == "" || got == "0" {
-						return fmt.Errorf("imported destination has no hog_function_ids")
 					}
 					if got, ok := states[0].Attributes["webhook_url"]; ok {
 						return fmt.Errorf("imported destination has webhook_url %q, expected it unset", got)
@@ -390,8 +393,7 @@ func TestLogsAlertDestination_ExternalDeletion(t *testing.T) {
 	)
 	projectID := os.Getenv("POSTHOG_PROJECT_ID")
 
-	var alertID string
-	var hogFunctionIDs []string
+	var alertID, destinationID string
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -406,14 +408,20 @@ func TestLogsAlertDestination_ExternalDeletion(t *testing.T) {
 						return fmt.Errorf("resource not found: %s", logsAlertDestinationAddress)
 					}
 					alertID = rs.Primary.Attributes["alert_id"]
-					hogFunctionIDs = strings.Split(rs.Primary.ID, ",")
+					destinationID = rs.Primary.ID
 					return nil
 				},
 			},
 			{
 				PreConfig: func() {
-					if _, err := (&client).DeleteLogsAlertDestination(context.Background(), projectID, alertID, hogFunctionIDs); err != nil {
-						t.Fatalf("deleting logs alert destination %v externally: %v", hogFunctionIDs, err)
+					var err error
+					if strings.Contains(destinationID, ",") {
+						_, err = (&client).DeleteLogsAlertDestinationHogFunctions(context.Background(), projectID, alertID, strings.Split(destinationID, ","))
+					} else {
+						_, err = (&client).DeleteLogsAlertDestination(context.Background(), projectID, alertID, destinationID)
+					}
+					if err != nil {
+						t.Fatalf("deleting logs alert destination %s externally: %v", destinationID, err)
 					}
 				},
 				Config:             config,

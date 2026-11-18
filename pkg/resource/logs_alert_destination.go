@@ -74,18 +74,23 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 			"~> **Every attribute forces replacement.** PostHog has no update endpoint for destinations, so " +
 			"changing a channel or a URL destroys the destination and creates a new one. There is a short " +
 			"window during the apply where the alert has no destination and would notify nobody if it fired.\n\n" +
-			"Each resource represents one user-visible destination. PostHog implements that destination as a " +
-			"group of hog functions, one per alert transition " +
-			"(firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id " +
-			"of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by " +
-			"commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or " +
-			"delete them. Terraform creates and deletes each managed group through the alert's " +
-			"destinations API, and reads it back from the alert itself.",
+			"Each resource represents one user-visible destination, and its `id` is the destination's own " +
+			"id, the `destinations[].id` the logs alerts API returns. Terraform creates and deletes the " +
+			"destination through the alert's destinations API, and reads it back from the alert itself.\n\n" +
+			"-> **The `id` changes once, on the next refresh after upgrading to 1.0.32.** Earlier releases " +
+			"tracked a destination by the hog functions PostHog built for it, so their `id` is the " +
+			"destination's `hog_function_ids`, sorted and joined by commas. PostHog now gives each " +
+			"destination an id of its own and stops building hog functions for new ones. The first refresh " +
+			"finds the destination by its old `id` and records the new one. Nothing is replaced, and the plan " +
+			"shows no changes. A destination PostHog has not given an id yet keeps the old form until it has " +
+			"one. Releases before 1.0.32 cannot create destinations: PostHog refuses the create with a " +
+			"`terraform_provider_upgrade_required` error and writes nothing.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true,
-				MarkdownDescription: "The destination's `hog_function_ids`, sorted and joined by commas. " +
-					"PostHog gives a destination no id of its own.",
+				MarkdownDescription: "The destination's id, `destinations[].id` in the logs alerts API. A " +
+					"destination PostHog has not given an id yet uses its `hog_function_ids`, sorted and joined " +
+					"by commas, until it has one.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -162,8 +167,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 					"value and never compares it against the live one. A destination's URL cannot change " +
 					"in place: PostHog has no update endpoint for one, and the Hog Function API refuses " +
 					"writes to alert-owned destinations. Changing a URL outside Terraform means deleting " +
-					"the destination and adding another, which changes `hog_function_ids` and does show up " +
-					"as drift. Rotate the URL by changing it here.",
+					"the destination and adding another, which changes its `id`, so Terraform sees the " +
+					"destination as deleted and creates it again. Rotate the URL by changing it here.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 				},
@@ -175,7 +180,8 @@ func (o LogsAlertDestinationOps) Schema() schema.Schema {
 				Computed:    true,
 				ElementType: types.StringType,
 				MarkdownDescription: "UUIDs of the hog functions PostHog built for this destination, one per " +
-					"alert transition. Useful for finding the destination in the PostHog UI.",
+					"alert transition. Unset for a destination PostHog delivers without hog functions, which " +
+					"includes every destination created from 1.0.32 on.",
 			},
 		},
 	}
@@ -233,11 +239,11 @@ func destinationIncludesConfiguration(resp httpclient.LogsAlertDestination) bool
 func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp httpclient.LogsAlertDestination, model *LogsAlertDestinationTFModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	if len(resp.HogFunctionIDs) == 0 {
+	if !hasRowID(resp) && len(resp.HogFunctionIDs) == 0 {
 		diags.AddError(
-			"Log alert destination has no hog functions",
+			"Log alert destination has no id",
 			fmt.Sprintf(
-				"PostHog returned a destination with no hog_function_ids, which Terraform cannot track. "+
+				"PostHog returned a destination with neither an id nor hog_function_ids, which Terraform cannot track. "+
 					"The destination may still exist on the alert. Open %s in PostHog to see its current "+
 					"state, then apply again.",
 				logsAlertNotificationsPath(model.GetEffectiveProjectID(), model.GetAlertID()),
@@ -248,7 +254,7 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 
 	writeOnly := writeOnlyAttributesOf(*model)
 
-	model.ID = types.StringValue(logsAlertDestinationID(resp.HogFunctionIDs))
+	model.ID = types.StringValue(logsAlertDestinationID(resp))
 
 	hogFunctionIDs, d := core.TagsToSet(ctx, resp.HogFunctionIDs)
 	diags.Append(d...)
@@ -257,7 +263,7 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 	}
 	model.HogFunctionIDs = hogFunctionIDs
 
-	// The create response returns only hog_function_ids, so an empty Type marks a create and we
+	// The create response returns only the ids, so an empty Type marks a create and we
 	// keep the caller's configured values. A populated Type marks a read or import, where we adopt
 	// the server's canonical values. The shared MapResponseToModel signature carries no operation
 	// flag, so this emptiness check stands in for it. Write-only attributes are always restored
@@ -273,7 +279,20 @@ func (o LogsAlertDestinationOps) MapResponseToModel(ctx context.Context, resp ht
 	return diags
 }
 
-func logsAlertDestinationID(hogFunctionIDs []string) string {
+func hasRowID(destination httpclient.LogsAlertDestination) bool {
+	return destination.ID != nil && *destination.ID != ""
+}
+
+// logsAlertDestinationID is the destination's row id, or, for a destination PostHog has
+// not given a row yet, the id releases before row ids used.
+func logsAlertDestinationID(destination httpclient.LogsAlertDestination) string {
+	if hasRowID(destination) {
+		return *destination.ID
+	}
+	return hogFunctionGroupID(destination.HogFunctionIDs)
+}
+
+func hogFunctionGroupID(hogFunctionIDs []string) string {
 	sorted := slices.Clone(hogFunctionIDs)
 	slices.Sort(sorted)
 	return strings.Join(sorted, hogFunctionIDSeparator)
@@ -402,7 +421,14 @@ func (o LogsAlertDestinationOps) Read(ctx context.Context, client httpclient.Pos
 		return httpclient.LogsAlertDestination{}, status, err
 	}
 
-	stateIDs := hogFunctionIDsFromState(model)
+	if destination, ok := findByRowID(destinations, model.GetID()); ok {
+		return destination, status, nil
+	}
+
+	// No row has this id, so it is a hog function group from a release before row ids, an
+	// import that named one hog function, or a row PostHog replaced with a new one. Match on
+	// hog functions; MapResponseToModel then moves the state to the match's row id.
+	stateIDs := hogFunctionIDsFromState(ctx, model)
 	matches := make([]httpclient.LogsAlertDestination, 0, 1)
 	for _, destination := range destinations {
 		if sharesHogFunction(destination.HogFunctionIDs, stateIDs) {
@@ -442,11 +468,57 @@ func (o LogsAlertDestinationOps) Update(_ context.Context, _ httpclient.PosthogC
 }
 
 func (o LogsAlertDestinationOps) Delete(ctx context.Context, client httpclient.PosthogClient, model LogsAlertDestinationTFModel) (httpclient.HTTPStatusCode, error) {
-	return client.DeleteLogsAlertDestination(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), hogFunctionIDsFromState(model))
+	if trackedByRowID(ctx, model) {
+		return client.DeleteLogsAlertDestination(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), model.GetID())
+	}
+	return client.DeleteLogsAlertDestinationHogFunctions(ctx, model.GetEffectiveProjectID(), model.GetAlertID(), hogFunctionIDsFromID(model))
 }
 
-func hogFunctionIDsFromState(model LogsAlertDestinationTFModel) []string {
+func findByRowID(destinations []httpclient.LogsAlertDestination, id string) (httpclient.LogsAlertDestination, bool) {
+	if id == "" || strings.Contains(id, hogFunctionIDSeparator) {
+		return httpclient.LogsAlertDestination{}, false
+	}
+	for _, destination := range destinations {
+		if hasRowID(destination) && *destination.ID == id {
+			return destination, true
+		}
+	}
+	return httpclient.LogsAlertDestination{}, false
+}
+
+// trackedByRowID tells a row id from the hog function group id releases before row ids
+// wrote. Both are UUIDs, so a one-function group looks like a row id; a group's id is always
+// made from the hog_function_ids recorded beside it, and a row id never is.
+func trackedByRowID(ctx context.Context, model LogsAlertDestinationTFModel) bool {
+	id := model.GetID()
+	if strings.Contains(id, hogFunctionIDSeparator) {
+		return false
+	}
+	recorded := recordedHogFunctionIDs(ctx, model)
+	return len(recorded) == 0 || id != hogFunctionGroupID(recorded)
+}
+
+func recordedHogFunctionIDs(ctx context.Context, model LogsAlertDestinationTFModel) []string {
+	recorded, diags := core.ExtractTags(ctx, model.HogFunctionIDs)
+	if diags.HasError() {
+		return nil
+	}
+	return recorded
+}
+
+func hogFunctionIDsFromID(model LogsAlertDestinationTFModel) []string {
 	return strings.Split(model.GetID(), hogFunctionIDSeparator)
+}
+
+// hogFunctionIDsFromState names the hog functions to look for when no row matches the
+// state's id. Those recorded in hog_function_ids come first: for a row id they are the only
+// ones, and PostHog keeps them on a row that replaces it, which is how a destination survives
+// its row being replaced. An import has none recorded and names one hog function as its id.
+func hogFunctionIDsFromState(ctx context.Context, model LogsAlertDestinationTFModel) []string {
+	if recorded := recordedHogFunctionIDs(ctx, model); len(recorded) > 0 {
+		return recorded
+	}
+	return hogFunctionIDsFromID(model)
 }
 
 func sharesHogFunction(destinationIDs, stateIDs []string) bool {

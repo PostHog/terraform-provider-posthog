@@ -85,6 +85,9 @@ func (c *PosthogClient) DeleteLogsAlert(ctx context.Context, projectID, id strin
 }
 
 type LogsAlertDestination struct {
+	// ID is the destination's AlertDestination row. PostHog serves null for a destination
+	// that has no row yet, which is tracked by its HogFunctionIDs instead.
+	ID                 *string  `json:"id,omitempty"`
 	HogFunctionIDs     []string `json:"hog_function_ids"`
 	Type               string   `json:"type,omitempty"`
 	SlackWorkspaceID   *int64   `json:"slack_workspace_id,omitempty"`
@@ -101,7 +104,8 @@ type LogsAlertDestinationRequest struct {
 }
 
 type logsAlertDestinationDeleteRequest struct {
-	HogFunctionIDs []string `json:"hog_function_ids"`
+	DestinationIDs []string `json:"destination_ids,omitempty"`
+	HogFunctionIDs []string `json:"hog_function_ids,omitempty"`
 }
 
 func logsAlertDestinationsPath(projectID, alertID string) string {
@@ -121,7 +125,15 @@ func (c *PosthogClient) CreateLogsAlertDestination(ctx context.Context, projectI
 	return result, err
 }
 
-func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
+// DeleteLogsAlertDestination deletes a destination by its row id.
+func (c *PosthogClient) DeleteLogsAlertDestination(ctx context.Context, projectID, alertID, destinationID string) (HTTPStatusCode, error) {
+	path := logsAlertDestinationsPath(projectID, alertID) + "delete"
+	return doPostNoContent(c, ctx, path, logsAlertDestinationDeleteRequest{DestinationIDs: []string{destinationID}})
+}
+
+// DeleteLogsAlertDestinationHogFunctions deletes a destination that has no row id by the
+// hog functions it is built from.
+func (c *PosthogClient) DeleteLogsAlertDestinationHogFunctions(ctx context.Context, projectID, alertID string, hogFunctionIDs []string) (HTTPStatusCode, error) {
 	path := logsAlertDestinationsPath(projectID, alertID) + "delete"
 	return doPostNoContent(c, ctx, path, logsAlertDestinationDeleteRequest{HogFunctionIDs: hogFunctionIDs})
 }
