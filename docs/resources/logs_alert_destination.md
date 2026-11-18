@@ -49,11 +49,11 @@ resource "posthog_logs_alert_destination" "checkout_errors_oncall" {
   webhook_url = "https://example.com/hooks/oncall"
 }
 
-# Microsoft Teams takes the same incoming webhook URL, under its own type.
+# Microsoft Teams takes a Teams workflow URL, under its own type.
 resource "posthog_logs_alert_destination" "checkout_errors_teams" {
   alert_id    = posthog_logs_alert.checkout_errors.id
   type        = "teams"
-  webhook_url = "https://example.webhook.office.com/webhookb2/00000000-0000-0000-0000-000000000000"
+  webhook_url = "https://example.logic.azure.com/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke"
 }
 
 # An alert can hold several destinations. Each Terraform resource aggregates the lifecycle
