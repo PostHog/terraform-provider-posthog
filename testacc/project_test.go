@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
@@ -92,10 +93,9 @@ func TestProject_OrganizationSlug(t *testing.T) {
 	})
 }
 
-// TestProject_OrganizationCurrent exercises the "@current" resolution branch
-// (issue #99): organization_id is the literal "@current", which the provider
-// resolves to the authenticated user's org via GET /api/organizations/@current/.
-// State keeps "@current", not the resolved UUID.
+// TestProject_OrganizationCurrent checks that organization_id "@current" fails at
+// plan time. PostHog resolves the alias to the organization the user last opened in
+// the app, which can change between runs.
 func TestProject_OrganizationCurrent(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -106,12 +106,8 @@ func TestProject_OrganizationCurrent(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccProjectBasic("@current", rName),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("posthog_project.test", "name", rName),
-					resource.TestCheckResourceAttr("posthog_project.test", "organization_id", "@current"),
-					resource.TestCheckResourceAttrSet("posthog_project.test", "id"),
-				),
+				Config:      testAccProjectBasic("@current", rName),
+				ExpectError: regexp.MustCompile(`organization_id "@current" is no longer supported`),
 			},
 		},
 	})

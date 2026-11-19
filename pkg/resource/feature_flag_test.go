@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +16,7 @@ import (
 func TestFeatureFlagMapResponseToModel_NormalizesServerOnlyFilterFields(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
-		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":0}]}`),
+		Filters: core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":0}]}`),
 	}
 
 	resp := httpclient.FeatureFlag{
@@ -42,7 +42,7 @@ func TestFeatureFlagMapResponseToModel_NormalizesServerOnlyFilterFields(t *testi
 // TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder reproduces issue #111:
 // PostHog's API returns filters JSON with alphabetically-sorted object keys, while the
 // user's config uses a natural (non-alphabetical) key order. A byte-for-byte comparison
-// of config vs. state therefore reports an endless diff. Using jsontypes.Normalized makes
+// of config vs. state therefore reports an endless diff. Using core.NormalizedJSON makes
 // the framework compare the two semantically, so equivalent JSON no longer drifts.
 func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 	ops := FeatureFlagOps{}
@@ -50,7 +50,7 @@ func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 	// User config: property object keys in a natural (non-alphabetical) order.
 	configJSON := `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@posthog.com"}]}]}`
 	model := FeatureFlagTFModel{
-		Filters: jsontypes.NewNormalizedValue(configJSON),
+		Filters: core.NewNormalizedJSONValue(configJSON),
 	}
 
 	// API returns the same data but with alphabetically-sorted keys.
@@ -78,7 +78,7 @@ func TestFeatureFlagMapResponseToModel_NoPerpetualDiffOnKeyOrder(t *testing.T) {
 
 	// The stored state must be semantically equal to the user's config; otherwise
 	// Terraform reports a perpetual diff even though nothing changed.
-	eq, d := model.Filters.StringSemanticEquals(context.Background(), jsontypes.NewNormalizedValue(configJSON))
+	eq, d := model.Filters.StringSemanticEquals(context.Background(), core.NewNormalizedJSONValue(configJSON))
 	require.False(t, d.HasError(), d.Errors())
 	assert.True(t, eq, "filters state must be semantically equal to config to avoid a perpetual diff")
 }
@@ -322,7 +322,7 @@ func TestFeatureFlagMapResponseToModel_ExplicitIgnoreFilterFieldsReplacesDefault
 	ignore, d := types.SetValue(types.StringType, []attr.Value{types.StringValue("super_groups")})
 	require.False(t, d.HasError(), d.Errors())
 	model := FeatureFlagTFModel{
-		Filters:            jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
+		Filters:            core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`),
 		IgnoreFilterFields: ignore,
 	}
 
@@ -344,7 +344,7 @@ func TestFeatureFlagMapResponseToModel_ExplicitIgnoreFilterFieldsReplacesDefault
 func TestFeatureFlagMapResponseToModel_PreservesRemoteFilterDrift(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
-		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100},{"properties":[{"key":"email","operator":"exact","type":"person","value":["admin@example.com"]}],"rollout_percentage":100}]}`),
+		Filters: core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100},{"properties":[{"key":"email","operator":"exact","type":"person","value":["admin@example.com"]}],"rollout_percentage":100}]}`),
 	}
 
 	resp := httpclient.FeatureFlag{
@@ -488,8 +488,8 @@ func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		planFilters  jsontypes.Normalized
-		stateFilters jsontypes.Normalized
+		planFilters  core.NormalizedJSON
+		stateFilters core.NormalizedJSON
 		stateRollout types.Int64
 		want         string // empty: the update sends no filters
 	}{
@@ -497,36 +497,36 @@ func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
 			// Filters unknown in the plan and a changed rollout: the update keeps
 			// the flag's release conditions and changes only the first one's rollout.
 			name:         "unconfigured filters keep the flag's current conditions",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
-			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			planFilters:  core.NewNormalizedJSONUnknown(),
+			stateFilters: core.NewNormalizedJSONValue(targeted),
 			stateRollout: types.Int64Value(100),
 			want:         `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":25},{"rollout_percentage":10}]}`,
 		},
 		{
 			// A rename must not write back filters that may have changed in the UI.
 			name:         "unconfigured filters are not sent when the rollout does not change",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
-			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			planFilters:  core.NewNormalizedJSONUnknown(),
+			stateFilters: core.NewNormalizedJSONValue(targeted),
 			stateRollout: types.Int64Value(25),
 		},
 		{
 			// ModifyResourcePlan plans unconfigured filters as they are in state for a rename.
 			name:         "filters planned from state are not sent",
-			planFilters:  jsontypes.NewNormalizedValue(targeted),
-			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			planFilters:  core.NewNormalizedJSONValue(targeted),
+			stateFilters: core.NewNormalizedJSONValue(targeted),
 			stateRollout: types.Int64Value(25),
 		},
 		{
 			name:         "a flag without filters gets a single condition",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
-			stateFilters: jsontypes.NewNormalizedNull(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
+			stateFilters: core.NewNormalizedJSONNull(),
 			stateRollout: types.Int64Null(),
 			want:         `{"groups":[{"rollout_percentage":25}]}`,
 		},
 		{
 			name:         "configured filters replace the flag's current ones",
-			planFilters:  jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
-			stateFilters: jsontypes.NewNormalizedValue(targeted),
+			planFilters:  core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`),
+			stateFilters: core.NewNormalizedJSONValue(targeted),
 			stateRollout: types.Int64Value(25),
 			want:         `{"groups":[{"rollout_percentage":25}]}`,
 		},
@@ -555,51 +555,51 @@ func TestFeatureFlagBuildUpdateRequestRolloutPercentage(t *testing.T) {
 }
 
 func TestPlannedFiltersForRollout(t *testing.T) {
-	stateFilters := jsontypes.NewNormalizedValue(`{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":100},{"rollout_percentage":10}],"payloads":{"test":"{}"}}`)
+	stateFilters := core.NewNormalizedJSONValue(`{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":100},{"rollout_percentage":10}],"payloads":{"test":"{}"}}`)
 
 	tests := []struct {
 		name         string
-		planFilters  jsontypes.Normalized
+		planFilters  core.NormalizedJSON
 		planRollout  types.Int64
-		stateFilters jsontypes.Normalized
+		stateFilters core.NormalizedJSON
 		want         string // empty: filters stay as the framework planned them
 	}{
 		{
 			name:         "a rollout change plans the flag's filters with the new percentage",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
 			planRollout:  types.Int64Value(25),
 			stateFilters: stateFilters,
 			want:         `{"groups":[{"properties":[{"key":"email","type":"person","operator":"icontains","value":"@example.com"}],"rollout_percentage":25},{"rollout_percentage":10}],"payloads":{"test":"{}"}}`,
 		},
 		{
 			name:         "an unchanged rollout leaves filters to be read after apply",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
 			planRollout:  types.Int64Value(100),
 			stateFilters: stateFilters,
 		},
 		{
 			name:         "a rollout known only at apply leaves filters unknown",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
 			planRollout:  types.Int64Unknown(),
 			stateFilters: stateFilters,
 		},
 		{
 			name:         "a flag without filters leaves them unknown",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
 			planRollout:  types.Int64Value(25),
-			stateFilters: jsontypes.NewNormalizedNull(),
+			stateFilters: core.NewNormalizedJSONNull(),
 		},
 		{
 			name:         "known planned filters are left alone",
-			planFilters:  jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`),
+			planFilters:  core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`),
 			planRollout:  types.Int64Value(25),
 			stateFilters: stateFilters,
 		},
 		{
 			name:         "filters without release conditions get one with the new percentage",
-			planFilters:  jsontypes.NewNormalizedUnknown(),
+			planFilters:  core.NewNormalizedJSONUnknown(),
 			planRollout:  types.Int64Value(25),
-			stateFilters: jsontypes.NewNormalizedValue(`{"payloads":{"true":"{}"}}`),
+			stateFilters: core.NewNormalizedJSONValue(`{"payloads":{"true":"{}"}}`),
 			want:         `{"groups":[{"rollout_percentage":25}],"payloads":{"true":"{}"}}`,
 		},
 	}
@@ -622,8 +622,8 @@ func TestPlannedFiltersForRollout(t *testing.T) {
 }
 
 func TestPlannedFiltersForRollout_InvalidStateFilters(t *testing.T) {
-	plan := FeatureFlagTFModel{Filters: jsontypes.NewNormalizedUnknown(), RolloutPercentage: types.Int64Value(25)}
-	state := FeatureFlagTFModel{Filters: jsontypes.NewNormalizedValue(`not json`), RolloutPercentage: types.Int64Value(100)}
+	plan := FeatureFlagTFModel{Filters: core.NewNormalizedJSONUnknown(), RolloutPercentage: types.Int64Value(25)}
+	state := FeatureFlagTFModel{Filters: core.NewNormalizedJSONValue(`not json`), RolloutPercentage: types.Int64Value(100)}
 
 	_, ok, err := plannedFiltersForRollout(plan, state)
 	assert.Error(t, err)
@@ -658,7 +658,7 @@ func TestFeatureFlagMapResponseToModel_EnsureExperienceContinuity(t *testing.T) 
 func TestFeatureFlagMapResponseToModel_DefaultIgnoresFeatureEnrollment(t *testing.T) {
 	ops := FeatureFlagOps{}
 	model := FeatureFlagTFModel{
-		Filters: jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":0}]}`),
+		Filters: core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":0}]}`),
 	}
 
 	resp := httpclient.FeatureFlag{ID: 1, Key: "new-editor", Filters: map[string]interface{}{
@@ -687,7 +687,7 @@ func TestFeatureFlagMapResponseToModel_ExplicitEmptyIgnoreStillPreservesEAFOwner
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := FeatureFlagTFModel{
-				Filters:            jsontypes.NewNormalizedValue(tc.filters),
+				Filters:            core.NewNormalizedJSONValue(tc.filters),
 				IgnoreFilterFields: ignore,
 			}
 			diags := (FeatureFlagOps{}).MapResponseToModel(context.Background(), response, &model)
@@ -700,20 +700,20 @@ func TestFeatureFlagMapResponseToModel_ExplicitEmptyIgnoreStillPreservesEAFOwner
 func TestValidateRolloutMatchesFilters(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		filters   jsontypes.Normalized
+		filters   core.NormalizedJSON
 		rollout   types.Int64
 		wantError bool
 	}{
-		{"matching", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":50},{"rollout_percentage":10}]}`), types.Int64Value(50), false},
-		{"different", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Value(70), true},
-		{"first condition without a rollout", jsontypes.NewNormalizedValue(`{"groups":[{"properties":[]}]}`), types.Int64Value(55), true},
-		{"no release conditions", jsontypes.NewNormalizedValue(`{"payloads":{}}`), types.Int64Value(55), true},
-		{"only filters", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Null(), false},
-		{"only rollout", jsontypes.NewNormalizedNull(), types.Int64Value(55), false},
-		{"filters unknown until apply", jsontypes.NewNormalizedUnknown(), types.Int64Value(55), false},
-		{"rollout unknown until apply", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Unknown(), false},
-		{"fractional first condition", jsontypes.NewNormalizedValue(`{"groups":[{"rollout_percentage":50.5}]}`), types.Int64Value(50), true},
-		{"filters that do not parse", jsontypes.NewNormalizedValue(`not json`), types.Int64Value(50), false},
+		{"matching", core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":50},{"rollout_percentage":10}]}`), types.Int64Value(50), false},
+		{"different", core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Value(70), true},
+		{"first condition without a rollout", core.NewNormalizedJSONValue(`{"groups":[{"properties":[]}]}`), types.Int64Value(55), true},
+		{"no release conditions", core.NewNormalizedJSONValue(`{"payloads":{}}`), types.Int64Value(55), true},
+		{"only filters", core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Null(), false},
+		{"only rollout", core.NewNormalizedJSONNull(), types.Int64Value(55), false},
+		{"filters unknown until apply", core.NewNormalizedJSONUnknown(), types.Int64Value(55), false},
+		{"rollout unknown until apply", core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":100}]}`), types.Int64Unknown(), false},
+		{"fractional first condition", core.NewNormalizedJSONValue(`{"groups":[{"rollout_percentage":50.5}]}`), types.Int64Value(50), true},
+		{"filters that do not parse", core.NewNormalizedJSONValue(`not json`), types.Int64Value(50), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			diags := validateRolloutMatchesFilters(FeatureFlagTFModel{Filters: tc.filters, RolloutPercentage: tc.rollout})

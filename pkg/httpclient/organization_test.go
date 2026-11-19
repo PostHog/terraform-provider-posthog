@@ -32,18 +32,16 @@ func TestResolveOrganizationID_UUIDPassthrough(t *testing.T) {
 	assert.Equal(t, int32(0), atomic.LoadInt32(&requestCount), "resolving a UUID must not make any HTTP request")
 }
 
-func TestResolveOrganizationID_CurrentAlias(t *testing.T) {
+func TestResolveOrganizationID_RejectsCurrentAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/organizations/@current/", r.URL.Path, "@current should hit the @current endpoint")
-		writeJSONResponse(t, w, Organization{ID: testOrgUUID, Slug: testOrgSlug, Name: "Acme Corp"})
+		t.Errorf("@current must be rejected without an HTTP request, got %s", r.URL.Path)
 	}))
 	defer server.Close()
 
 	client := NewClient(server.Client(), server.URL, testAPIKey, testClientVersion)
-	resolved, err := client.ResolveOrganizationID(context.Background(), CurrentOrganizationAlias)
+	_, err := client.ResolveOrganizationID(context.Background(), CurrentOrganizationAlias)
 
-	require.NoError(t, err, "resolving @current should not error")
-	assert.Equal(t, testOrgUUID, resolved, "@current should resolve to the returned organization ID")
+	require.ErrorIs(t, err, ErrCurrentOrganizationAlias)
 }
 
 func TestResolveOrganizationID_SlugResolution(t *testing.T) {
@@ -84,20 +82,6 @@ func TestResolveOrganizationID_SlugNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "does-not-exist", "error should name the unresolved slug")
 }
 
-func TestResolveOrganizationID_CurrentAliasHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/organizations/@current/", r.URL.Path)
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer server.Close()
-
-	client := NewClient(server.Client(), server.URL, testAPIKey, testClientVersion)
-	_, err := client.ResolveOrganizationID(context.Background(), CurrentOrganizationAlias)
-
-	require.Error(t, err, "a non-2xx response from the @current endpoint should surface an error")
-	assert.Contains(t, err.Error(), CurrentOrganizationAlias, "error should reference the @current alias")
-}
-
 func TestResolveOrganizationID_SlugListHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/organizations/", r.URL.Path)
@@ -136,27 +120,6 @@ func TestResolveOrganizationID_CachesSlugResolution(t *testing.T) {
 	assert.Equal(t, testOrgUUID, second)
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&requestCount), "second resolution should be served from cache without a new HTTP request")
-}
-
-func TestResolveOrganizationID_CachesCurrentAlias(t *testing.T) {
-	var requestCount int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requestCount, 1)
-		writeJSONResponse(t, w, Organization{ID: testOrgUUID, Slug: testOrgSlug, Name: "Acme Corp"})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.Client(), server.URL, testAPIKey, testClientVersion)
-
-	first, err := client.ResolveOrganizationID(context.Background(), CurrentOrganizationAlias)
-	require.NoError(t, err, "first @current resolution should not error")
-	assert.Equal(t, testOrgUUID, first)
-
-	second, err := client.ResolveOrganizationID(context.Background(), CurrentOrganizationAlias)
-	require.NoError(t, err, "second @current resolution should not error")
-	assert.Equal(t, testOrgUUID, second)
-
-	assert.Equal(t, int32(1), atomic.LoadInt32(&requestCount), "second @current resolution should be served from cache without a new HTTP request")
 }
 
 func TestResolveOrganizationID_CacheSharedAcrossClientCopies(t *testing.T) {

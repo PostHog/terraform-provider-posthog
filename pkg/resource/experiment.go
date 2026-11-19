@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -68,9 +67,9 @@ type ExperimentTFModel struct {
 	Name               types.String           `tfsdk:"name"`
 	Description        types.String           `tfsdk:"description"`
 	FeatureFlagKey     types.String           `tfsdk:"feature_flag_key"`
-	Metrics            jsontypes.Normalized   `tfsdk:"metrics"`
-	MetricsSecondary   jsontypes.Normalized   `tfsdk:"metrics_secondary"`
-	ExposureCriteria   jsontypes.Normalized   `tfsdk:"exposure_criteria"`
+	Metrics            core.NormalizedJSON    `tfsdk:"metrics"`
+	MetricsSecondary   core.NormalizedJSON    `tfsdk:"metrics_secondary"`
+	ExposureCriteria   core.NormalizedJSON    `tfsdk:"exposure_criteria"`
 	HoldoutID          types.Int64            `tfsdk:"holdout_id"`
 	AllowUnknownEvents types.Bool             `tfsdk:"allow_unknown_events"`
 	Status             *ExperimentStatusModel `tfsdk:"status"`
@@ -156,7 +155,7 @@ func (o ExperimentOps) Schema() schema.Schema {
 				MarkdownDescription: "ID of an existing holdout group to reference. Holdout management itself is out of scope.",
 			},
 			"metrics": schema.StringAttribute{
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				Optional:   true,
 				Computed:   true,
 				MarkdownDescription: "Primary metrics as a JSON array. Compared semantically, so key ordering and " +
@@ -164,13 +163,13 @@ func (o ExperimentOps) Schema() schema.Schema {
 					"tracked; server-computed fields (e.g. metric fingerprints) are ignored.",
 			},
 			"metrics_secondary": schema.StringAttribute{
-				CustomType:          jsontypes.NormalizedType{},
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Secondary metrics as a JSON array. Same semantic-compare handling as `metrics`.",
 			},
 			"exposure_criteria": schema.StringAttribute{
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				Optional:   true,
 				Computed:   true,
 				MarkdownDescription: "Exposure criteria as a JSON object (this is where `filterTestAccounts` lives). " +
@@ -591,9 +590,9 @@ func runTransition(ctx context.Context, client experimentLifecycleClient, projec
 	return last, code, err
 }
 
-// rawFromNormalized converts a jsontypes.Normalized field into a JSON request body value,
+// rawFromNormalized converts a core.NormalizedJSON field into a JSON request body value,
 // returning nil (omitted from the request) when null/unknown/empty.
-func rawFromNormalized(n jsontypes.Normalized) json.RawMessage {
+func rawFromNormalized(n core.NormalizedJSON) json.RawMessage {
 	if n.IsNull() || n.IsUnknown() {
 		return nil
 	}
@@ -606,13 +605,13 @@ func rawFromNormalized(n jsontypes.Normalized) json.RawMessage {
 
 // normalizeRawForState normalizes an API JSON blob against the configured value so reordered keys
 // and server-computed fields do not surface as a perpetual diff (whitelist to user-declared fields).
-func normalizeRawForState(raw json.RawMessage, current jsontypes.Normalized) jsontypes.Normalized {
+func normalizeRawForState(raw json.RawMessage, current core.NormalizedJSON) core.NormalizedJSON {
 	if len(raw) == 0 || string(raw) == "null" {
-		return jsontypes.NewNormalizedNull()
+		return core.NewNormalizedJSONNull()
 	}
 	var apiData interface{}
 	if err := json.Unmarshal(raw, &apiData); err != nil {
-		return jsontypes.NewNormalizedNull()
+		return core.NewNormalizedJSONNull()
 	}
 	userJSON := ""
 	if core.IsKnown(current) {
@@ -620,7 +619,7 @@ func normalizeRawForState(raw json.RawMessage, current jsontypes.Normalized) jso
 	}
 	normalized, err := normalizeJSONForState(apiData, userJSON)
 	if err != nil || normalized == "" {
-		return jsontypes.NewNormalizedNull()
+		return core.NewNormalizedJSONNull()
 	}
-	return jsontypes.NewNormalizedValue(normalized)
+	return core.NewNormalizedJSONValue(normalized)
 }

@@ -5,7 +5,8 @@ subcategory: ""
 description: |-
   Manage where a log alert https://posthog.com/docs/logs/alerts sends its notifications. A posthog_logs_alert with no destination still evaluates and reports its state, but notifies nobody.
   ~> Every attribute forces replacement. PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
-  Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's id is the group's hog_function_ids, sorted and joined by commas. Those hog functions are owned by the alert: posthog_hog_function cannot create, update, or delete them. Terraform creates and deletes each managed group through the alert's destinations API, and reads it back from the alert itself.
+  Each resource represents one user-visible destination, and its id is the destination's own id, the destinations[].id the logs alerts API returns. Terraform creates and deletes the destination through the alert's destinations API, and reads it back from the alert itself.
+  -> The id changes once, on the next refresh after upgrading to 1.0.32. Earlier releases tracked a destination by the hog functions PostHog built for it, so their id is the destination's hog_function_ids, sorted and joined by commas. PostHog now gives each destination an id of its own and stops building hog functions for new ones. The first refresh finds the destination by its old id and records the new one. Nothing is replaced, and the plan shows no changes. A destination PostHog has not given an id yet keeps the old form until it has one. Releases before 1.0.32 cannot create destinations: PostHog refuses the create with a terraform_provider_upgrade_required error and writes nothing.
 ---
 
 # posthog_logs_alert_destination (Resource)
@@ -14,7 +15,9 @@ Manage where a [log alert](https://posthog.com/docs/logs/alerts) sends its notif
 
 ~> **Every attribute forces replacement.** PostHog has no update endpoint for destinations, so changing a channel or a URL destroys the destination and creates a new one. There is a short window during the apply where the alert has no destination and would notify nobody if it fired.
 
-Each resource represents one user-visible destination. PostHog implements that destination as a group of hog functions, one per alert transition (firing, resolved, errored, auto-disabled), sharing the configuration below. The group has no id of its own, so this resource's `id` is the group's `hog_function_ids`, sorted and joined by commas. Those hog functions are owned by the alert: `posthog_hog_function` cannot create, update, or delete them. Terraform creates and deletes each managed group through the alert's destinations API, and reads it back from the alert itself.
+Each resource represents one user-visible destination, and its `id` is the destination's own id, the `destinations[].id` the logs alerts API returns. Terraform creates and deletes the destination through the alert's destinations API, and reads it back from the alert itself.
+
+-> **The `id` changes once, on the next refresh after upgrading to 1.0.32.** Earlier releases tracked a destination by the hog functions PostHog built for it, so their `id` is the destination's `hog_function_ids`, sorted and joined by commas. PostHog now gives each destination an id of its own and stops building hog functions for new ones. The first refresh finds the destination by its old `id` and records the new one. Nothing is replaced, and the plan shows no changes. A destination PostHog has not given an id yet keeps the old form until it has one. Releases before 1.0.32 cannot create destinations: PostHog refuses the create with a `terraform_provider_upgrade_required` error and writes nothing.
 
 ## Example Usage
 
@@ -49,11 +52,11 @@ resource "posthog_logs_alert_destination" "checkout_errors_oncall" {
   webhook_url = "https://example.com/hooks/oncall"
 }
 
-# Microsoft Teams takes the same incoming webhook URL, under its own type.
+# Microsoft Teams takes a Teams workflow URL, under its own type.
 resource "posthog_logs_alert_destination" "checkout_errors_teams" {
   alert_id    = posthog_logs_alert.checkout_errors.id
   type        = "teams"
-  webhook_url = "https://example.webhook.office.com/webhookb2/00000000-0000-0000-0000-000000000000"
+  webhook_url = "https://example.logic.azure.com/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke"
 }
 
 # An alert can hold several destinations. Each Terraform resource aggregates the lifecycle
@@ -79,12 +82,12 @@ Write-only: PostHog uses it to build the display name and never stores it, so no
 - `slack_workspace_id` (Number) ID of the Slack integration to post through, as created by connecting Slack to the project in the PostHog UI. Required when `type` is `slack`.
 - `webhook_url` (String, Sensitive) URL to POST the notification to. Required when `type` is `webhook` or `teams`. For `teams`, this is the Microsoft Teams incoming webhook URL. Marked sensitive because the secret is in the URL: whoever holds it can post to the channel.
 
-PostHog redacts the URL when reading destinations, so Terraform keeps the configured value and never compares it against the live one. A destination's URL cannot change in place: PostHog has no update endpoint for one, and the Hog Function API refuses writes to alert-owned destinations. Changing a URL outside Terraform means deleting the destination and adding another, which changes `hog_function_ids` and does show up as drift. Rotate the URL by changing it here.
+PostHog redacts the URL when reading destinations, so Terraform keeps the configured value and never compares it against the live one. A destination's URL cannot change in place: PostHog has no update endpoint for one, and the Hog Function API refuses writes to alert-owned destinations. Changing a URL outside Terraform means deleting the destination and adding another, which changes its `id`, so Terraform sees the destination as deleted and creates it again. Rotate the URL by changing it here.
 
 ### Read-Only
 
-- `hog_function_ids` (Set of String) UUIDs of the hog functions PostHog built for this destination, one per alert transition. Useful for finding the destination in the PostHog UI.
-- `id` (String) The destination's `hog_function_ids`, sorted and joined by commas. PostHog gives a destination no id of its own.
+- `hog_function_ids` (Set of String) UUIDs of the hog functions PostHog built for this destination, one per alert transition. Unset for a destination PostHog delivers without hog functions, which includes every destination created from 1.0.32 on.
+- `id` (String) The destination's id, `destinations[].id` in the logs alerts API. A destination PostHog has not given an id yet uses its `hog_function_ids`, sorted and joined by commas, until it has one.
 
 ## Import
 
@@ -93,12 +96,12 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Import using: project_id/alert_id/hog_function_id
+# Import using: project_id/alert_id/destination_id
 #
-# A destination has no ID of its own: PostHog builds it as a group of hog functions, one per
-# alert transition. Name any one of them and Terraform adopts the whole group. List them
-# in the PostHog UI or through the project's generic Hog Functions list API.
-terraform import posthog_logs_alert_destination.example 12345/your-logs-alert-uuid/your-hog-function-uuid
+# destination_id is the destination's id, `destinations[].id` on the alert in the logs alerts
+# API. A destination PostHog built from hog functions can also be imported by any one of
+# them; Terraform adopts the whole destination and records its id.
+terraform import posthog_logs_alert_destination.example 12345/your-logs-alert-uuid/your-destination-uuid
 
 # slack_channel_name is write-only, so an imported Slack destination has it unset. Add it to
 # your configuration to name the destination in the PostHog UI, which replaces it.

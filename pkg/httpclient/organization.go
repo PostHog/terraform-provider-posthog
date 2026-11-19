@@ -2,15 +2,24 @@ package httpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// CurrentOrganizationAlias is the special identifier PostHog accepts to refer to
-// the authenticated user's organization.
+// CurrentOrganizationAlias is PostHog's alias for the organization the user last
+// opened in the app. The provider rejects it: that organization can change between
+// Terraform runs, so a configuration using it could act on another organization.
 const CurrentOrganizationAlias = "@current"
+
+// ErrCurrentOrganizationAlias is returned wherever an organization is given as
+// CurrentOrganizationAlias.
+var ErrCurrentOrganizationAlias = errors.New(
+	`organization_id "@current" is no longer supported, because PostHog resolves it to the organization the user last opened in the app, which can change between runs. ` +
+		`Set organization_id to the organization's UUID or slug`,
+)
 
 // uuidPattern matches a canonical UUID (8-4-4-4-12 hex groups). PostHog
 // organization IDs are UUIDs, so anything matching this is treated as an ID and
@@ -18,7 +27,7 @@ const CurrentOrganizationAlias = "@current"
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Organization is a subset of the PostHog organization resource, containing the
-// fields needed to resolve a user-supplied slug or "@current" to a UUID.
+// fields needed to resolve a user-supplied slug to a UUID.
 type Organization struct {
 	ID   string `json:"id"`
 	Slug string `json:"slug"`
@@ -33,8 +42,9 @@ func (c *PosthogClient) ListOrganizations(ctx context.Context) ([]Organization, 
 // ResolveOrganizationID resolves a user-supplied organization identifier to a
 // UUID suitable for building API paths. It accepts:
 //   - a UUID, which is returned unchanged with no API call;
-//   - the literal "@current", resolved via GET /api/organizations/@current/;
 //   - an organization slug, resolved by listing organizations and matching slug.
+//
+// CurrentOrganizationAlias is rejected with ErrCurrentOrganizationAlias.
 //
 // Resolution is purely for constructing request URLs — the caller must never
 // persist the resolved UUID back into Terraform state, otherwise a config that
@@ -54,6 +64,10 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 		return "", nil
 	}
 
+	if idOrSlug == CurrentOrganizationAlias {
+		return "", ErrCurrentOrganizationAlias
+	}
+
 	// UUIDs are already valid path segments; no resolution needed.
 	if uuidPattern.MatchString(idOrSlug) {
 		return idOrSlug, nil
@@ -64,29 +78,20 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 		return cached, nil
 	}
 
+	tflog.Debug(ctx, "resolving organization slug via API", map[string]any{"key": idOrSlug})
+	orgs, err := c.ListOrganizations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to list organizations to resolve slug %q: %w", idOrSlug, err)
+	}
 	var resolved string
-	if idOrSlug == CurrentOrganizationAlias {
-		tflog.Debug(ctx, "resolving @current organization via API", map[string]any{"key": idOrSlug})
-		org, _, err := doGet[Organization](c, ctx, "/api/organizations/@current/")
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve %q organization: %w", CurrentOrganizationAlias, err)
+	for _, org := range orgs {
+		if org.Slug == idOrSlug {
+			resolved = org.ID
+			break
 		}
-		resolved = org.ID
-	} else {
-		tflog.Debug(ctx, "resolving organization slug via API", map[string]any{"key": idOrSlug})
-		orgs, err := c.ListOrganizations(ctx)
-		if err != nil {
-			return "", fmt.Errorf("failed to list organizations to resolve slug %q: %w", idOrSlug, err)
-		}
-		for _, org := range orgs {
-			if org.Slug == idOrSlug {
-				resolved = org.ID
-				break
-			}
-		}
-		if resolved == "" {
-			return "", fmt.Errorf("no organization found matching slug %q; pass a valid organization UUID, slug, or %q", idOrSlug, CurrentOrganizationAlias)
-		}
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("no organization found matching slug %q; pass a valid organization UUID or slug", idOrSlug)
 	}
 
 	c.storeOrganizationID(idOrSlug, resolved)
@@ -94,7 +99,7 @@ func (c *PosthogClient) ResolveOrganizationID(ctx context.Context, idOrSlug stri
 	return resolved, nil
 }
 
-// orgPath resolves orgIDOrSlug (a UUID, slug, or "@current") to a UUID and formats
+// orgPath resolves orgIDOrSlug (a UUID or slug) to a UUID and formats
 // an org-scoped API path from it, with the resolved id as the first `%s`. It is the
 // single place client methods perform org resolution, so adding a new org-scoped
 // endpoint is a one-line call rather than a repeated resolve-and-check block.

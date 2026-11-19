@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -37,21 +36,21 @@ func NewFeatureFlag() resource.Resource {
 type FeatureFlagTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	Key                        types.String         `tfsdk:"key"`
-	Name                       types.String         `tfsdk:"name"`
-	EvaluationRuntime          types.String         `tfsdk:"evaluation_runtime"`
-	BucketingIdentifier        types.String         `tfsdk:"bucketing_identifier"`
-	Archived                   types.Bool           `tfsdk:"archived"`
-	EvaluationContexts         types.Set            `tfsdk:"evaluation_contexts"`
-	IsRemoteConfiguration      types.Bool           `tfsdk:"is_remote_configuration"`
-	Active                     types.Bool           `tfsdk:"active"`
-	Filters                    jsontypes.Normalized `tfsdk:"filters"`
-	IgnoreFilterFields         types.Set            `tfsdk:"ignore_filter_fields"`
-	RolloutPercentage          types.Int64          `tfsdk:"rollout_percentage"`
-	Tags                       types.Set            `tfsdk:"tags"`
-	Deleted                    types.Bool           `tfsdk:"deleted"`
-	EnsureExperienceContinuity types.Bool           `tfsdk:"ensure_experience_continuity"`
-	CreateUsageDashboard       types.Bool           `tfsdk:"create_usage_dashboard"`
+	Key                        types.String        `tfsdk:"key"`
+	Name                       types.String        `tfsdk:"name"`
+	EvaluationRuntime          types.String        `tfsdk:"evaluation_runtime"`
+	BucketingIdentifier        types.String        `tfsdk:"bucketing_identifier"`
+	Archived                   types.Bool          `tfsdk:"archived"`
+	EvaluationContexts         types.Set           `tfsdk:"evaluation_contexts"`
+	IsRemoteConfiguration      types.Bool          `tfsdk:"is_remote_configuration"`
+	Active                     types.Bool          `tfsdk:"active"`
+	Filters                    core.NormalizedJSON `tfsdk:"filters"`
+	IgnoreFilterFields         types.Set           `tfsdk:"ignore_filter_fields"`
+	RolloutPercentage          types.Int64         `tfsdk:"rollout_percentage"`
+	Tags                       types.Set           `tfsdk:"tags"`
+	Deleted                    types.Bool          `tfsdk:"deleted"`
+	EnsureExperienceContinuity types.Bool          `tfsdk:"ensure_experience_continuity"`
+	CreateUsageDashboard       types.Bool          `tfsdk:"create_usage_dashboard"`
 }
 
 type FeatureFlagOps struct{}
@@ -134,7 +133,7 @@ func (o FeatureFlagOps) Schema() schema.Schema {
 				},
 			},
 			"filters": schema.StringAttribute{
-				CustomType:          jsontypes.NormalizedType{},
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Feature flag filters as JSON. Compared semantically, so key ordering and whitespace differences from the PostHog API do not produce a diff. Fields present in the API response but absent from this config are kept in state so remote changes surface as drift — except the top-level keys listed in `ignore_filter_fields` and an undeclared `feature_enrollment` marker owned by Early Access Features.",
@@ -307,7 +306,7 @@ func validateRolloutMatchesFilters(config FeatureFlagTFModel) diag.Diagnostics {
 // percentage on the first release condition. ok is false when there is nothing to plan: the
 // filters are already known, the percentage does not change or is unknown until apply, or the
 // flag has no filters yet.
-func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes.Normalized, ok bool, err error) {
+func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned core.NormalizedJSON, ok bool, err error) {
 	if !plan.Filters.IsUnknown() || !rolloutChanges(plan, state) || !core.IsKnown(state.Filters) {
 		return planned, false, nil
 	}
@@ -319,7 +318,7 @@ func plannedFiltersForRollout(plan, state FeatureFlagTFModel) (planned jsontypes
 	if err != nil {
 		return planned, false, err
 	}
-	return jsontypes.NewNormalizedValue(value), true, nil
+	return core.NewNormalizedJSONValue(value), true, nil
 }
 
 func (o FeatureFlagOps) BuildCreateRequest(ctx context.Context, model FeatureFlagTFModel) (httpclient.FeatureFlagRequest, diag.Diagnostics) {
@@ -466,9 +465,9 @@ func (o FeatureFlagOps) MapResponseToModel(ctx context.Context, resp httpclient.
 			diags.AddError("Failed to normalize filters", err.Error())
 			return diags
 		}
-		model.Filters = jsontypes.NewNormalizedValue(normalizedFilters)
+		model.Filters = core.NewNormalizedJSONValue(normalizedFilters)
 	} else {
-		model.Filters = jsontypes.NewNormalizedNull()
+		model.Filters = core.NewNormalizedJSONNull()
 	}
 
 	// ignore_filter_fields is config-only (never from the API). On paths that start from an
@@ -651,7 +650,7 @@ func rolloutChanges(plan, state FeatureFlagTFModel) bool {
 
 // filtersWithRollout parses filters, or starts a single release condition when there are none,
 // and applies the rollout percentage to the first condition.
-func filtersWithRollout(filtersJSON jsontypes.Normalized, percentage types.Int64) (map[string]interface{}, error) {
+func filtersWithRollout(filtersJSON core.NormalizedJSON, percentage types.Int64) (map[string]interface{}, error) {
 	var filters map[string]interface{}
 	if core.IsKnown(filtersJSON) {
 		if err := json.Unmarshal([]byte(filtersJSON.ValueString()), &filters); err != nil {

@@ -1,20 +1,49 @@
 # Changelog
 
-## Unreleased
+## 1.0.32
+
+### Fixes
+
+- **`posthog_logs_alert_destination`:** A destination's `id` is now its own id, `destinations[].id` in the logs alerts API, instead of its `hog_function_ids` sorted and joined by commas. PostHog is moving logs alert destinations off hog functions, and new destinations will have no `hog_function_ids` to track. Releases before this one cannot create destinations once that happens: PostHog refuses the create with a `terraform_provider_upgrade_required` error and writes nothing.
+    - Existing destinations need no action. The next refresh finds each one by its old `id` and records the new one, without replacing it, and the plan shows no changes. A destination PostHog has not given an id yet keeps the old form until it has one.
+    - `terraform import` now takes `project_id/alert_id/destination_id`, where `destination_id` is the destination's id or, as before, any one of its hog function ids.
+
+## 1.0.31
+
+### Breaking changes
+
+- **`organization_id = "@current"` is no longer accepted**, in the provider block, `POSTHOG_ORGANIZATION_ID`, resources, data sources, or import IDs. Set the organization's UUID or slug instead. This change is required: PostHog resolves `@current` to the organization the user last opened in the app, and Terraform state kept the literal `"@current"`. Switching organization in the app between runs pointed an existing configuration at a different organization, so reads got a 404, resources dropped out of state, and the next apply created them in the other organization.
+  - To migrate, set the provider's `organization_id` (or `POSTHOG_ORGANIZATION_ID`) to the UUID of the organization your resources are in, replace any `"@current"` on resources, and apply. Resources whose state holds `"@current"` are updated in place to record the real ID, not replaced. Until that apply, they read the provider's `organization_id`. A resource that is not in that organization fails the plan instead of being recreated: set `organization_id` on it to its organization's UUID and run `terraform apply -refresh=false` once.
+
+## 1.0.30
+
+### Fixes
+
+- JSON attributes no longer fail with "Provider produced inconsistent result after apply" when the configuration writes a whole number as a float, such as `50.0`, which Pulumi Python's `json.dumps` does. The provider reads numbers back from PostHog as `50`, and these attributes compared number text, so `50.0` never matched. They now compare numbers by value (`50.0` equals `50`, `1e3` equals `1000`), and `posthog_insight` `query_json` now ignores key order and whitespace as well. Affected attributes: `posthog_cohort` `filters`, `posthog_dashboard_layout` `tiles[*].layouts_json`, `posthog_early_access_feature` `payload`, `posthog_experiment` `metrics`, `metrics_secondary` and `exposure_criteria`, `posthog_feature_flag` `filters`, `posthog_hog_function` `inputs_json`, `inputs_schema_json`, `filters_json`, `masking_json` and `mappings_json`, `posthog_insight` `query_json`, `posthog_logs_alert` `filter_group_json`, `posthog_project_settings` `test_account_filters`, and `posthog_subscription` `ai_prompt_config`.
+
+### Upgrade notes
+
+- Provider builds, tests, and documentation generation now use Go 1.27.4. It fixes a `crypto/x509` vulnerability ([GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)) in the certificate checks behind every HTTPS request to PostHog, and a `net/http` vulnerability ([GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859)) in the standard-library HTTP code the provider uses for those requests. Building from source requires Go 1.27.4 or newer, and Go 1.27-produced macOS binaries require macOS 13 Ventura or newer.
+
+## 1.0.29
+
+### Fixes
+
+- **`posthog_survey`:** Preserve question IDs explicitly set in `questions_json`, fixing "Provider produced inconsistent result after apply". Server-generated question IDs remain excluded when not configured and during import. ([#145](https://github.com/PostHog/terraform-provider-posthog/issues/145))
+
+## 1.0.28
+
+### Internal
+
+- The provider's Go packages moved from `internal/` to `pkg/`, so other Go modules can import them; tools that embed a Terraform provider in-process, such as Crossplane's upjet or Pulumi's Terraform bridge, can call `provider.New` from `github.com/posthog/terraform-provider/pkg/provider` without a fork. Terraform users are unaffected: the binary, registry address, schemas, and state are unchanged. The Go packages are not a stable API and can change in any release. ([#191](https://github.com/PostHog/terraform-provider-posthog/issues/191))
+- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`pkg/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
+
+## 1.0.27
 
 ### Features
 
 - **`posthog_feature_flag`:** New `evaluation_runtime` attribute accepts `server`, `client`, or `all`, so each flag can declare its runtime in Terraform. Omitted values preserve the existing runtime; new flags use PostHog's `all` default.
 - **`posthog_feature_flag`:** Manage `archived`, `bucketing_identifier`, `evaluation_contexts`, and `is_remote_configuration`. Omitted settings preserve remote values, including when applying a saved plan. Set contexts to `[]` to clear them; context names must be lowercase without surrounding whitespace. Archived flags must be disabled, and device bucketing cannot be combined with authentication persistence. Remote configuration uses the API's default rollout when omitted; explicit filters must include nonzero rollout percentages on creation. Evaluation contexts are applied only when the feature is enabled for your organization; otherwise the apply fails with an error that says so instead of "Provider produced inconsistent result after apply", and a flag it was creating is deleted again rather than left serving in every context.
-- **New Data Source:** `posthog_feature_flags` - Lists a project's feature flags (`id`, `key`, `name`, `active`, `archived`), so a `for_each` `import {}` block can adopt flags that already exist and create the rest without anyone writing a flag ID. The project can be given by `project_name` instead of `project_id`, for a project created in the same configuration whose ID is not known until apply; a name that matches no project returns no flags rather than an error, and a name shared by two projects is an error. Archived flags are included, because an archived flag still holds its key and a new flag with that key cannot be created; deleted flags are not, nor are the flags PostHog creates internally for surveys and product tours. Listing takes one request per 100 flags, in two passes: unarchived flags, then archived ones.
-- **`posthog_project_settings`:** New `anonymize_ips` attribute - manages the "Discard client IP data" project setting (`/api/environments/{id}/`), previously only editable from the UI. ([#146](https://github.com/PostHog/terraform-provider-posthog/issues/146))
-- **New Resource:** `posthog_platform_alert` - An alert on PostHog's shared alerts platform, one resource for every kind of alert, chosen by `source_kind`. `logs` is the first kind, with its filters and condition in a typed `logs` block. Every setting has the default PostHog stores, declared in the schema, so it shows in the plan and a UI edit reads as drift. The logs condition defaults to above 100 in 5 minutes, the defaults of `posthog_logs_alert`. Changing `source_kind` replaces the alert. Changing `grouping.keys` makes PostHog drop the existing groups without a resolve message. An existing `posthog_logs_alert` moves onto it with a `moved` block (Terraform 1.8 and later) and no destroy, once its project has begun moving logs alerts to the platform; the move stores the logs alert's id and the next refresh looks up the platform id. Manage each alert with one resource only, since the provider cannot detect two. The API is behind the `platform-alerts` feature flag, and a key needs `alert:write` and `logs:write`.
-- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing and notification destinations are managed as code). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
-- **New Resource:** `posthog_logs_alert_destination` - Slack, webhook, and Microsoft Teams notification destinations for a `posthog_logs_alert`. PostHog has no update endpoint for destinations, so every attribute forces replacement. `slack_channel_name` is write-only: PostHog uses it to label the destination and never stores it, so it is never read back and an imported destination has it unset.
-- **New Resource:** `posthog_warehouse_table` - A self-managed data warehouse table that queries files in place from an S3-compatible bucket you control (Amazon S3, Google Cloud Storage via HMAC keys, Cloudflare R2), previously only linkable from the UI or the REST API. PostHog reads the files on create to work out the columns, so unreadable files or a bad key fail the apply. Changing `format` or `url_pattern` replaces the table, because PostHog only re-reads the columns on create; renaming it or rotating the key updates it in place. The key and secret are write-only, so an imported table has them unset until the first apply.
-- **New Resource:** `posthog_early_access_feature` - A feature users opt into from your app's feature previews list, previously only manageable from the UI or the REST API. Link it to a `posthog_feature_flag` with `feature_flag_id`, or leave that out and PostHog creates a flag from the name. The flag can only be linked on create, so changing `feature_flag_id` replaces the feature. Moving to `alpha`, `beta`, or `general-availability` adds an opt-in gate; GA remains opt-in gated unless PostHog's separate rollout-to-all action is used. Destroying the feature removes that gate but keeps the flag and its rollout rules, so a flag PostHog created is left behind.
-- **`posthog_alert`:** Alerts on SQL (HogQL) insights, via the new `evaluation`, `column` and `label_column` attributes. `series_index` is now optional and exactly one of it and `evaluation` has to be set: `series_index` sends PostHog a `TrendsAlertConfig`, `evaluation` sends a `HogQLAlertConfig`, and PostHog validates each against the insight kind. `evaluation` is `last_row` (query ordered oldest to newest), `first_row` (newest to oldest) or `any_row` (fire if any row breaches, absolute conditions only). An unset `column` asks PostHog to use the single numeric column. `check_ongoing_interval` is rejected alongside `evaluation`, because a SQL query owns its own time window. ([#163](https://github.com/PostHog/terraform-provider-posthog/issues/163))
-- **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
 
 ### Fixes
 
@@ -22,32 +51,96 @@
 - **`posthog_feature_flag`:** Updating a flag whose config leaves out `filters` no longer replaces the flag's release conditions. Any update, even a rename, used to rebuild `filters` from `rollout_percentage` alone, so a flag created in the PostHog UI and imported (for example with the `posthog_feature_flags` data source) lost its targeting and its other conditions on the first apply, and rolled out to that percentage of everyone. The plan only showed `filters` as `(known after apply)`. Now an update leaves such filters alone unless `rollout_percentage` changes; then it changes only the first condition's rollout, keeps everything else, and the plan shows the resulting `filters`. Removing `filters` from a config likewise keeps the flag's current filters instead of resetting them. A saved plan that changes `rollout_percentage` sends the release conditions as they were when the plan was made.
 - **`posthog_feature_flag`:** Changing the first condition's rollout inside `filters`, with `rollout_percentage` left out, now applies; the previous `rollout_percentage` used to override it and fail every apply. When `filters` is configured and `rollout_percentage` is not, `rollout_percentage` shows as `(known after apply)` on updates, so references to it are unknown until apply. Setting both to different rollouts is now rejected at plan time instead of failing on every apply.
 - **`posthog_feature_flag`:** Empty and whitespace-padded names no longer fail apply with "Provider produced inconsistent result after apply". Empty API names stay empty strings, and configured names are preserved when the API only trims surrounding whitespace. Substantive remote name changes still appear as drift. A flag that an earlier version left tainted after this error is replaced on the next apply unless you run `terraform untaint <address>` first.
+
+## 1.0.26
+
+### Features
+
+- **New Data Source:** `posthog_feature_flags` - Lists a project's feature flags (`id`, `key`, `name`, `active`, `archived`), so a `for_each` `import {}` block can adopt flags that already exist and create the rest without anyone writing a flag ID. The project can be given by `project_name` instead of `project_id`, for a project created in the same configuration whose ID is not known until apply; a name that matches no project returns no flags rather than an error, and a name shared by two projects is an error. Archived flags are included, because an archived flag still holds its key and a new flag with that key cannot be created; deleted flags are not, nor are the flags PostHog creates internally for surveys and product tours. Listing takes one request per 100 flags, in two passes: unarchived flags, then archived ones.
+
+### Fixes
+
 - **`posthog_project_settings`:** Updates send only configured settings, so applying a saved plan preserves changes made to omitted settings in PostHog. Omitted settings become unknown and show as `(known after apply)` when the plan changes, so references to them can also be unknown until apply. Their current PostHog values refresh into state after the update.
 - **Paginated lists:** a page whose link to the next page cannot be parsed now fails the read instead of silently ending the list there. This affects `posthog_role` and organization lookups as well; a truncated list there looked like a role or organization that does not exist.
 - **HTTP retries:** a rate-limited request (429) now waits as long as PostHog's `Retry-After` asks, up to 60 seconds per wait and 5 minutes in total, instead of giving up after three waits of at most 5 seconds. PostHog limits each personal API key per minute and per hour (480 and 4,800 for most endpoints, lower for insights), and a plan refreshes every managed resource with its own request, so a configuration with a few hundred resources hit the per-minute limit and failed after about 15 seconds of waiting. Waits on a 429 no longer count against the three retries for server errors, since PostHog rejects a rate-limited request before doing any work. A `Retry-After` longer than 60 seconds comes from an hourly limit, which the provider does not wait out: the request fails at once with an error that includes PostHog's message saying when the key can be used again. A `Retry-After: 0`, which PostHog sends when a slot frees up within the second, waits one second. A 429 without a `Retry-After`, for example from a proxy in front of PostHog, keeps the ordinary three retries. Each wait is written to the provider log at WARN level, so `TF_LOG=WARN` shows a plan waiting on the rate limit, and the final error says how long the provider slept and why it stopped.
 - **`posthog_feature_flag`:** a flag whose release condition targets a deleted cohort no longer shows a diff on every plan. PostHog marks such a condition with `cohort_deleted`, and also with `cohort_missing` when no cohort with that id exists in the project ([PostHog/posthog#119792](https://github.com/PostHog/posthog/pull/119792)). The provider now strips both keys, as it already strips `cohort_name`, unless the configured `filters` set them. Applying such a flag still fails, because PostHog refuses a release condition on a deleted cohort.
-- **`posthog_feature_flag`:** a flag linked to an Early Access Feature in an active stage (`alpha`, `beta`, or `general-availability`) no longer shows a diff on every plan, and applying it no longer fails with "Provider produced inconsistent result after apply". PostHog marks such a flag with `feature_enrollment` in `filters`, which the default `ignore_filter_fields` did not cover: it listed `super_groups`, the key PostHog used before. PostHog keeps the marker when an update leaves it out, so the apply could never clear the diff. `feature_enrollment` is now ignored whenever it is absent from the configured `filters`, including with `ignore_filter_fields = []`; declaring it explicitly still tracks it.
+
+### Upgrade notes
+
+- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop. A rate-limited request can additionally wait up to 5 minutes, per request and per page.
+
+## 1.0.25
+
+No changelog entries. See the [v1.0.25 release](https://github.com/PostHog/terraform-provider-posthog/releases/tag/v1.0.25).
+
+## 1.0.24
+
+### Fixes
+
 - **`posthog_feature_flag`:** `create_usage_dashboard = true` now fails during planning for new flags instead of silently doing nothing. Existing flags with the setting remain readable, and PostHog shows usage charts on the flag's Usage tab.
-- **HTTP retries:** a read that fails by timing out is now retried. The 30-second timeout was set on the HTTP client, which bounds the whole retry loop including the waits between attempts, so the first retry of a timed-out request was cancelled before it began and the apply failed with `(attempt: 1) sleeping: context deadline exceeded`. Each attempt now gets its own 30-second budget instead. `POST` and `PATCH` are the exception, for the reason in the next entry: a timeout cannot tell you whether PostHog already applied the write, so they are not sent again. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
-- **HTTP retries:** `POST` and `PATCH` requests are no longer replayed after a 500, 502, 503, 504, a timeout, or a dropped connection. None of those failures say whether PostHog had already committed the write, so retrying a create could leave behind a second resource that Terraform never records and will not clean up. They are still retried on 429, which PostHog returns before processing the request at all. `GET`, `HEAD`, `PUT`, and `DELETE` are safe to send twice and are unaffected, as is any request whose connection was never established, since nothing was sent. A `POST` or `PATCH` carrying an `Idempotency-Key` (or `X-Idempotency-Key`) header is replayed too, the same two headers `net/http` honours for the same purpose. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
-- **HTTP retries:** a response body that stalls is now retried like any other timeout. The retry loop used to end as soon as the response headers arrived, so a read that hung partway through failed outside it and was never retried.
-- **HTTP retries:** a failed request now says which deadline expired, how many attempts it took, and, when a create or update was deliberately not sent again, that it may already have been applied — so you can check before re-running rather than risk a second resource. Previously that reason went only to `TF_LOG=DEBUG`, and the error was a bare `context deadline exceeded` indistinguishable from cancelling the run yourself. `TF_LOG=DEBUG` also records each retry and the reason the provider stopped, so a request that was deliberately not replayed can be told apart from one that ran out of attempts. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
-- **`posthog_insight`:** `create_in_folder` no longer fails the apply with "inconsistent result after apply". PostHog consumes the folder only on create and never returns it, but the provider read it back anyway and overwrote the configured value with null, so every apply that set a folder errored and the insight never landed in state. The provider now keeps the configured value, matching how `posthog_survey` already handles the same field. ([#161](https://github.com/PostHog/terraform-provider-posthog/issues/161))
-
-### Internal
-
-- The provider's Go packages moved from `internal/` to `pkg/`, so other Go modules can import them; tools that embed a Terraform provider in-process, such as Crossplane's upjet or Pulumi's Terraform bridge, can call `provider.New` from `github.com/posthog/terraform-provider/pkg/provider` without a fork. Terraform users are unaffected: the binary, registry address, schemas, and state are unchanged. The Go packages are not a stable API and can change in any release. ([#191](https://github.com/PostHog/terraform-provider-posthog/issues/191))
-- `NewRetryTransport` fills in any unset retry tunable, so a hand-built `RetryConfig` cannot end up with no request deadline or a zero backoff that retries with no spacing. `JitterFactor` and `MaxRetries` are left alone, because zero is a meaningful value for both.
-- The `WithNoRetry` and `WithRetryConfig` client options replace an installed retry transport instead of stacking a second one on it. Stacked, the outer transport's per-attempt deadline had to cover the inner transport's whole retry loop, and `WithNoRetry` did not actually disable retries.
-- Quiet-hours window validation is shared by `posthog_alert` and `posthog_logs_alert` (`pkg/resource/core/quiethours.go`) instead of being implemented twice. Diagnostic wording is unified on "Quiet-hours ..." across both resources, so `posthog_alert`'s messages change text but not meaning.
 
 ### Upgrade notes
 
 - **`posthog_feature_flag`:** Remove `create_usage_dashboard = true` before creating or replacing a flag. An existing flag can still be read and updated with the old setting. If you rely on saved usage dashboards from an older self-hosted PostHog server, stay on the previous provider version until you migrate that workflow.
 
-- An unresponsive PostHog endpoint now takes up to about two minutes to fail a read, rather than 30 seconds: the four attempts each get the full 30-second budget that previously covered all of them together. This is the same ceiling the three configured retries were always meant to have. It is per request, so a read that pages through a long list can take that long per page, and a host that redirects spends it again on each hop. A rate-limited request can additionally wait up to 5 minutes, per request and per page.
+## 1.0.23
+
+### Features
+
+- **New Resource:** `posthog_early_access_feature` - A feature users opt into from your app's feature previews list, previously only manageable from the UI or the REST API. Link it to a `posthog_feature_flag` with `feature_flag_id`, or leave that out and PostHog creates a flag from the name. The flag can only be linked on create, so changing `feature_flag_id` replaces the feature. Moving to `alpha`, `beta`, or `general-availability` adds an opt-in gate; GA remains opt-in gated unless PostHog's separate rollout-to-all action is used. Destroying the feature removes that gate but keeps the flag and its rollout rules, so a flag PostHog created is left behind.
+- **`posthog_alert`:** Alerts on SQL (HogQL) insights, via the new `evaluation`, `column` and `label_column` attributes. `series_index` is now optional and exactly one of it and `evaluation` has to be set: `series_index` sends PostHog a `TrendsAlertConfig`, `evaluation` sends a `HogQLAlertConfig`, and PostHog validates each against the insight kind. `evaluation` is `last_row` (query ordered oldest to newest), `first_row` (newest to oldest) or `any_row` (fire if any row breaches, absolute conditions only). An unset `column` asks PostHog to use the single numeric column. `check_ongoing_interval` is rejected alongside `evaluation`, because a SQL query owns its own time window. ([#163](https://github.com/PostHog/terraform-provider-posthog/issues/163))
+
+### Fixes
+
+- **`posthog_feature_flag`:** a flag linked to an Early Access Feature in an active stage (`alpha`, `beta`, or `general-availability`) no longer shows a diff on every plan, and applying it no longer fails with "Provider produced inconsistent result after apply". PostHog marks such a flag with `feature_enrollment` in `filters`, which the default `ignore_filter_fields` did not cover: it listed `super_groups`, the key PostHog used before. PostHog keeps the marker when an update leaves it out, so the apply could never clear the diff. `feature_enrollment` is now ignored whenever it is absent from the configured `filters`, including with `ignore_filter_fields = []`; declaring it explicitly still tracks it.
+
+## 1.0.22
+
+### Features
+
+- **New Resource:** `posthog_warehouse_table` - A self-managed data warehouse table that queries files in place from an S3-compatible bucket you control (Amazon S3, Google Cloud Storage via HMAC keys, Cloudflare R2), previously only linkable from the UI or the REST API. PostHog reads the files on create to work out the columns, so unreadable files or a bad key fail the apply. Changing `format` or `url_pattern` replaces the table, because PostHog only re-reads the columns on create; renaming it or rotating the key updates it in place. The key and secret are write-only, so an imported table has them unset until the first apply.
+
+## 1.0.21
+
+### Fixes
+
+- **`posthog_insight`:** `create_in_folder` no longer fails the apply with "inconsistent result after apply". PostHog consumes the folder only on create and never returns it, but the provider read it back anyway and overwrote the configured value with null, so every apply that set a folder errored and the insight never landed in state. The provider now keeps the configured value, matching how `posthog_survey` already handles the same field. ([#161](https://github.com/PostHog/terraform-provider-posthog/issues/161))
+
+## 1.0.20
+
+### Features
+
+- **`posthog_project_settings`:** New `anonymize_ips` attribute - manages the "Discard client IP data" project setting (`/api/environments/{id}/`), previously only editable from the UI. ([#146](https://github.com/PostHog/terraform-provider-posthog/issues/146))
+
+## 1.0.19
+
+### Fixes
+
+- **HTTP retries:** a read that fails by timing out is now retried. The 30-second timeout was set on the HTTP client, which bounds the whole retry loop including the waits between attempts, so the first retry of a timed-out request was cancelled before it began and the apply failed with `(attempt: 1) sleeping: context deadline exceeded`. Each attempt now gets its own 30-second budget instead. `POST` and `PATCH` are the exception, for the reason in the next entry: a timeout cannot tell you whether PostHog already applied the write, so they are not sent again. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+- **HTTP retries:** `POST` and `PATCH` requests are no longer replayed after a 500, 502, 503, 504, a timeout, or a dropped connection. None of those failures say whether PostHog had already committed the write, so retrying a create could leave behind a second resource that Terraform never records and will not clean up. They are still retried on 429, which PostHog returns before processing the request at all. `GET`, `HEAD`, `PUT`, and `DELETE` are safe to send twice and are unaffected, as is any request whose connection was never established, since nothing was sent. A `POST` or `PATCH` carrying an `Idempotency-Key` (or `X-Idempotency-Key`) header is replayed too, the same two headers `net/http` honours for the same purpose. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+- **HTTP retries:** a response body that stalls is now retried like any other timeout. The retry loop used to end as soon as the response headers arrived, so a read that hung partway through failed outside it and was never retried.
+- **HTTP retries:** a failed request now says which deadline expired, how many attempts it took, and, when a create or update was deliberately not sent again, that it may already have been applied — so you can check before re-running rather than risk a second resource. Previously that reason went only to `TF_LOG=DEBUG`, and the error was a bare `context deadline exceeded` indistinguishable from cancelling the run yourself. `TF_LOG=DEBUG` also records each retry and the reason the provider stopped, so a request that was deliberately not replayed can be told apart from one that ran out of attempts. ([#156](https://github.com/PostHog/terraform-provider-posthog/issues/156))
+
+### Internal
+
+- `NewRetryTransport` fills in any unset retry tunable, so a hand-built `RetryConfig` cannot end up with no request deadline or a zero backoff that retries with no spacing. `JitterFactor` and `MaxRetries` are left alone, because zero is a meaningful value for both.
+- The `WithNoRetry` and `WithRetryConfig` client options replace an installed retry transport instead of stacking a second one on it. Stacked, the outer transport's per-attempt deadline had to cover the inner transport's whole retry loop, and `WithNoRetry` did not actually disable retries.
+
+## 1.0.18
+
+### Features
+
+- **New Resource:** `posthog_logs_alert` - Threshold-based alerting on logs, with severity, service, and attribute filters, repeat-breach thresholds, and quiet hours (snoozing and notification destinations are managed as code). Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
+- **New Resource:** `posthog_logs_alert_destination` - Slack, webhook, and Microsoft Teams notification destinations for a `posthog_logs_alert`. PostHog has no update endpoint for destinations, so every attribute forces replacement. `slack_channel_name` is write-only: PostHog uses it to label the destination and never stores it, so it is never read back and an imported destination has it unset.
+- **`posthog_alert`:** New `schedule_restriction` attribute for quiet hours - blocked local time windows during which the alert is not evaluated. Window length and count limits are enforced by PostHog and reported on apply; the provider only rejects configurations PostHog would silently reshape.
+
+### Upgrade notes
+
 - **`posthog_alert`:** quiet hours set outside Terraform on an alert this provider manages will show as a removal on the next plan, because the provider now sends `schedule_restriction` on every update. Add them to your configuration to keep them. Rarely, PostHog stores a shape it will not accept back: splitting an overnight window at midnight can leave a piece shorter than its own minimum, which it then refuses on apply. Widen or drop that window.
-- Provider builds, tests, and documentation generation now use Go 1.27.3, which fixes a `crypto/x509` vulnerability ([GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809)) in the certificate checks behind every HTTPS request to PostHog. Building from source requires Go 1.27.3 or newer, and Go 1.27-produced macOS binaries require macOS 13 Ventura or newer.
+
+## 1.0.1 to 1.0.17
+
+No changelog entries. See the [GitHub releases](https://github.com/PostHog/terraform-provider-posthog/releases).
 
 ## 1.0.0
 

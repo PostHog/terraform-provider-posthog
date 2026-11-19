@@ -76,7 +76,7 @@ func hogFunctionJSONValue(t *testing.T, attribute, rawJSON string) basetypes.Str
 
 	semantic, ok := value.(basetypes.StringValuableWithSemanticEquals)
 	require.True(t, ok,
-		"attribute %s is compared as a raw string; it must use a type with semantic JSON equality (jsontypes.Normalized) or key reordering by the API causes a perpetual diff",
+		"attribute %s is compared as a raw string; it must use a type with semantic JSON equality (core.NormalizedJSON) or key reordering by the API causes a perpetual diff",
 		attribute)
 
 	return semantic

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -50,8 +49,8 @@ type ProjectSettingsModel struct {
 	RecordingDomains      types.List   `tfsdk:"recording_domains"`
 	// TestAccountFilters is the "internal and test users" filter list as a normalized
 	// JSON array; server-injected cohort_name is stripped in MapResponseToModel.
-	TestAccountFilters               jsontypes.Normalized `tfsdk:"test_account_filters"`
-	TestAccountFiltersDefaultChecked types.Bool           `tfsdk:"test_account_filters_default_checked"`
+	TestAccountFilters               core.NormalizedJSON `tfsdk:"test_account_filters"`
+	TestAccountFiltersDefaultChecked types.Bool          `tfsdk:"test_account_filters_default_checked"`
 }
 
 // NetworkPayloadCaptureModel is the Terraform shape of the
@@ -175,7 +174,7 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 				MarkdownDescription: "Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.",
 			},
 			"test_account_filters": schema.StringAttribute{
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				Optional:   true,
 				Computed:   true,
 				MarkdownDescription: "The **internal and test users** filter list as a JSON array of filter objects — the definition every managed insight and hog function references through `filter_test_accounts`. " +
@@ -399,7 +398,7 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	model.RecordingDomains = recordingDomains
 
 	if resp.TestAccountFilters == nil {
-		model.TestAccountFilters = jsontypes.NewNormalizedNull()
+		model.TestAccountFilters = core.NewNormalizedJSONNull()
 	} else {
 		// PostHog injects a server-computed cohort_name into cohort-referencing filter
 		// objects; strip it so the filter round-trips without a perpetual diff.
@@ -409,7 +408,7 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 			diags.AddError("Failed to normalize test_account_filters", err.Error())
 			return diags
 		}
-		model.TestAccountFilters = jsontypes.NewNormalizedValue(jsonStr)
+		model.TestAccountFilters = core.NewNormalizedJSONValue(jsonStr)
 	}
 
 	model.TestAccountFiltersDefaultChecked = core.PtrToBool(resp.TestAccountFiltersDefaultChecked)

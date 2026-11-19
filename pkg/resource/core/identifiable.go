@@ -5,6 +5,8 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
 
 type Identifiable interface {
@@ -89,10 +91,62 @@ type BaseOrganizationID struct {
 }
 
 func (b *BaseOrganizationID) GetEffectiveOrganizationID() string {
-	if IsKnown(b.OrganizationID) && b.OrganizationID.ValueString() != "" {
-		return b.OrganizationID.ValueString()
+	value := b.OrganizationID.ValueString()
+	if !IsKnown(b.OrganizationID) || value == "" {
+		return b.defaultOrganizationID
 	}
-	return b.defaultOrganizationID
+	// State written before the alias was rejected can still hold it until the next apply. Read it as the
+	// provider's organization so refresh keeps working. With no provider organization the alias is
+	// returned, and the client rejects it with an error that says what to set.
+	if value == httpclient.CurrentOrganizationAlias && b.defaultOrganizationID != "" {
+		return b.defaultOrganizationID
+	}
+	return value
+}
+
+// legacyOrganizationIDReplacer is implemented by models that embed BaseOrganizationID.
+type legacyOrganizationIDReplacer interface {
+	currentOrganizationID() types.String
+	replaceLegacyOrganizationID(next types.String)
+	GetEffectiveOrganizationID() string
+}
+
+// holdsLegacyOrganizationID reports whether model's organization_id is still the retired alias.
+func holdsLegacyOrganizationID[TFModel any](model *TFModel) bool {
+	replacer, ok := any(model).(legacyOrganizationIDReplacer)
+	return ok && replacer.currentOrganizationID().ValueString() == httpclient.CurrentOrganizationAlias
+}
+
+// effectiveOrganizationID returns the organization model's requests go to, or "" for models that
+// are not organization-scoped.
+func effectiveOrganizationID[TFModel any](model *TFModel) string {
+	if replacer, ok := any(model).(legacyOrganizationIDReplacer); ok {
+		return replacer.GetEffectiveOrganizationID()
+	}
+	return ""
+}
+
+func (b *BaseOrganizationID) currentOrganizationID() types.String {
+	return b.OrganizationID
+}
+
+// replaceLegacyOrganizationID sets next when b still holds the retired alias.
+func (b *BaseOrganizationID) replaceLegacyOrganizationID(next types.String) {
+	if b.OrganizationID.ValueString() == httpclient.CurrentOrganizationAlias {
+		b.OrganizationID = next
+	}
+}
+
+// replaceLegacyOrganizationIDFromPlan points a state that still holds the retired alias at the
+// planned organization, so an update calls the API for the organization the plan names.
+func replaceLegacyOrganizationIDFromPlan[TFModel any](state, plan *TFModel) {
+	stateReplacer, ok := any(state).(legacyOrganizationIDReplacer)
+	if !ok {
+		return
+	}
+	if planReplacer, ok := any(plan).(legacyOrganizationIDReplacer); ok {
+		stateReplacer.replaceLegacyOrganizationID(planReplacer.currentOrganizationID())
+	}
 }
 
 func (b *BaseOrganizationID) InitializeOrganizationID(defaultOrganizationID string) {

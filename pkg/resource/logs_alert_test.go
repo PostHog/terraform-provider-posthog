@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,7 +141,7 @@ func TestLogsAlertMapResponseToModel_PreservesConfiguredEmptySet(t *testing.T) {
 
 // PostHog re-serializes filterGroup through its own model and adds keys the user never
 // wrote — a leaf sent as {key,type,operator,value} reads back with "label":null (verified
-// against a live alert). jsontypes.Normalized ignores key order and whitespace but NOT
+// against a live alert). core.NormalizedJSON ignores key order and whitespace but NOT
 // added keys, so without projection the state written after apply differs from the config
 // and Terraform aborts with "Provider produced inconsistent result after apply".
 //
@@ -151,7 +151,7 @@ func TestLogsAlertMapResponseToModel_StripsServerAddedFilterGroupFields(t *testi
 	userFilterGroup := `{"type":"AND","values":[{"type":"AND","values":[{"type":"log_attribute","key":"status_code","operator":"exact","value":["500"]}]}]}`
 
 	model := LogsAlertTFModel{
-		FilterGroupJSON: jsontypes.NewNormalizedValue(userFilterGroup),
+		FilterGroupJSON: core.NewNormalizedJSONValue(userFilterGroup),
 	}
 
 	diags := LogsAlertOps{}.MapResponseToModel(context.Background(), httpclient.LogsAlert{
@@ -231,7 +231,7 @@ func TestLogsAlertMapResponseToModel_PreservesConfiguredEmptyBlockedWindows(t *t
 
 func TestLogsAlertBuildCreateRequest_RejectsInvalidFilterGroupJSON(t *testing.T) {
 	model := LogsAlertTFModel{
-		FilterGroupJSON: jsontypes.NewNormalizedValue(`{"type":`),
+		FilterGroupJSON: core.NewNormalizedJSONValue(`{"type":`),
 	}
 
 	_, diags := LogsAlertOps{}.BuildCreateRequest(context.Background(), model)
@@ -425,8 +425,8 @@ func TestValidateLogsAlertPlan(t *testing.T) {
 		},
 		{
 			name:   "unknown filter group does not trip the filter check",
-			plan:   LogsAlertTFModel{FilterGroupJSON: jsontypes.NewNormalizedUnknown()},
-			config: LogsAlertTFModel{FilterGroupJSON: jsontypes.NewNormalizedUnknown()},
+			plan:   LogsAlertTFModel{FilterGroupJSON: core.NewNormalizedJSONUnknown()},
+			config: LogsAlertTFModel{FilterGroupJSON: core.NewNormalizedJSONUnknown()},
 		},
 		{
 			name:      "explicitly empty sets still trip the filter check",

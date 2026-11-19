@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -29,12 +28,12 @@ func NewCohort() resource.Resource {
 type CohortTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	Name        types.String         `tfsdk:"name"`
-	Description types.String         `tfsdk:"description"`
-	Filters     jsontypes.Normalized `tfsdk:"filters"`
-	IsStatic    types.Bool           `tfsdk:"is_static"`
-	CreatedAt   types.String         `tfsdk:"created_at"`
-	Deleted     types.Bool           `tfsdk:"deleted"`
+	Name        types.String        `tfsdk:"name"`
+	Description types.String        `tfsdk:"description"`
+	Filters     core.NormalizedJSON `tfsdk:"filters"`
+	IsStatic    types.Bool          `tfsdk:"is_static"`
+	CreatedAt   types.String        `tfsdk:"created_at"`
+	Deleted     types.Bool          `tfsdk:"deleted"`
 }
 
 type CohortOps struct{}
@@ -68,7 +67,7 @@ func (o CohortOps) Schema() schema.Schema {
 				},
 			},
 			"filters": schema.StringAttribute{
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				Optional:   true,
 				Computed:   true,
 				MarkdownDescription: "Cohort membership rules as JSON, matching the `filters` object of the " +
@@ -168,9 +167,9 @@ func (o CohortOps) MapResponseToModel(_ context.Context, resp httpclient.Cohort,
 			diags.AddError("Failed to normalize filters", err.Error())
 			return diags
 		}
-		model.Filters = jsontypes.NewNormalizedValue(normalized)
+		model.Filters = core.NewNormalizedJSONValue(normalized)
 	} else {
-		model.Filters = jsontypes.NewNormalizedNull()
+		model.Filters = core.NewNormalizedJSONNull()
 	}
 
 	// Treat a missing is_static/deleted as false so an omitted key cannot leave

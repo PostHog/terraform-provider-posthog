@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,7 +64,7 @@ func severityFilter(t *testing.T, levels ...string) *PlatformAlertLogsFiltersTFM
 	return &PlatformAlertLogsFiltersTFModel{
 		SeverityLevels:  stringSet(t, levels...),
 		ServiceNames:    types.SetNull(types.StringType),
-		FilterGroupJSON: jsontypes.NewNormalizedNull(),
+		FilterGroupJSON: core.NewNormalizedJSONNull(),
 	}
 }
 
@@ -100,7 +100,7 @@ func TestPlatformAlertMove_ReadsBackAsTheRewrittenConfigPlans(t *testing.T) {
 		Enabled:           types.BoolValue(true),
 		SeverityLevels:    stringSet(t, "error"),
 		ServiceNames:      types.SetNull(types.StringType),
-		FilterGroupJSON:   jsontypes.NewNormalizedNull(),
+		FilterGroupJSON:   core.NewNormalizedJSONNull(),
 		ThresholdCount:    types.Int64Value(100),
 		ThresholdOperator: types.StringValue("above"),
 		WindowMinutes:     types.Int64Value(5),
@@ -158,10 +158,10 @@ func TestLogsSourceConfigToModel(t *testing.T) {
 		"declared empty set stays empty": {
 			raw: `{"filters":{"serviceNames":["api"]},"condition":{"threshold_count":1,"threshold_operator":"above","window_minutes":5}}`,
 			current: &PlatformAlertLogsTFModel{Filters: &PlatformAlertLogsFiltersTFModel{
-				SeverityLevels: emptyStringSet(t), ServiceNames: stringSet(t, "api"), FilterGroupJSON: jsontypes.NewNormalizedNull(),
+				SeverityLevels: emptyStringSet(t), ServiceNames: stringSet(t, "api"), FilterGroupJSON: core.NewNormalizedJSONNull(),
 			}},
 			wantFilters: &PlatformAlertLogsFiltersTFModel{
-				SeverityLevels: emptyStringSet(t), ServiceNames: stringSet(t, "api"), FilterGroupJSON: jsontypes.NewNormalizedNull(),
+				SeverityLevels: emptyStringSet(t), ServiceNames: stringSet(t, "api"), FilterGroupJSON: core.NewNormalizedJSONNull(),
 			},
 		},
 		"server-added filter group fields are not tracked": {
@@ -169,12 +169,12 @@ func TestLogsSourceConfigToModel(t *testing.T) {
 			current: &PlatformAlertLogsTFModel{Filters: &PlatformAlertLogsFiltersTFModel{
 				SeverityLevels:  types.SetNull(types.StringType),
 				ServiceNames:    types.SetNull(types.StringType),
-				FilterGroupJSON: jsontypes.NewNormalizedValue(`{"type":"AND","values":[{"key":"status","type":"log_attribute","operator":"exact","value":["500"]}]}`),
+				FilterGroupJSON: core.NewNormalizedJSONValue(`{"type":"AND","values":[{"key":"status","type":"log_attribute","operator":"exact","value":["500"]}]}`),
 			}},
 			wantFilters: &PlatformAlertLogsFiltersTFModel{
 				SeverityLevels:  types.SetNull(types.StringType),
 				ServiceNames:    types.SetNull(types.StringType),
-				FilterGroupJSON: jsontypes.NewNormalizedValue(`{"type":"AND","values":[{"key":"status","operator":"exact","type":"log_attribute","value":["500"]}]}`),
+				FilterGroupJSON: core.NewNormalizedJSONValue(`{"type":"AND","values":[{"key":"status","operator":"exact","type":"log_attribute","value":["500"]}]}`),
 			},
 		},
 	}

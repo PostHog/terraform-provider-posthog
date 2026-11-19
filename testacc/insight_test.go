@@ -114,6 +114,33 @@ func TestInsight_Basic(t *testing.T) {
 	})
 }
 
+// TestInsight_QueryJSONFormatting guards query_json written as a heredoc, the
+// way Pulumi and hand-written configs produce it. The provider reads the query
+// back as compact Go JSON with sorted keys and escaped <, > and &, and PostHog
+// returns the configured 2.0 as 2. Before query_json was compared as JSON,
+// create failed with "Provider produced inconsistent result after apply".
+// jsonencode() cannot catch this, because it already writes the compact form.
+func TestInsight_QueryJSONFormatting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInsightDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightQueryJSONHeredoc(rName),
+			},
+			{
+				Config:   testAccInsightQueryJSONHeredoc(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 // TestInsight_CreateInFolder asserts create_in_folder round-trips. PostHog
 // consumes it only on create and never echoes it back. The provider must keep
 // the configured value in state instead of overwriting it with the empty
@@ -1026,6 +1053,28 @@ resource "posthog_insight" "test" {
       }]
     }
   })
+}
+`, name)
+}
+
+func testAccInsightQueryJSONHeredoc(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight" "test" {
+  name = %q
+
+  query_json = <<-EOT
+    {
+      "source": {
+        "series": [ { "event": "$pageview", "kind": "EventsNode", "custom_name": "Views <wide> & tall", "math": "total" } ],
+        "properties": [ { "type": "hogql", "key": "toInt(properties.$screen_width) > 1000" } ],
+        "trendsFilter": { "decimalPlaces": 2.0 },
+        "kind": "TrendsQuery"
+      },
+      "kind": "InsightVizNode"
+    }
+  EOT
 }
 `, name)
 }

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -119,9 +118,9 @@ type PlatformAlertLogsTFModel struct {
 }
 
 type PlatformAlertLogsFiltersTFModel struct {
-	SeverityLevels  types.Set            `tfsdk:"severity_levels"`
-	ServiceNames    types.Set            `tfsdk:"service_names"`
-	FilterGroupJSON jsontypes.Normalized `tfsdk:"filter_group_json"`
+	SeverityLevels  types.Set           `tfsdk:"severity_levels"`
+	ServiceNames    types.Set           `tfsdk:"service_names"`
+	FilterGroupJSON core.NormalizedJSON `tfsdk:"filter_group_json"`
 }
 
 type PlatformAlertLogsConditionTFModel struct {
@@ -341,7 +340,7 @@ func (o PlatformAlertOps) Schema() schema.Schema {
 								MarkdownDescription: "Service names to scope the alert to.",
 							},
 							"filter_group_json": schema.StringAttribute{
-								CustomType: jsontypes.NormalizedType{},
+								CustomType: core.NormalizedJSONType{},
 								Optional:   true,
 								MarkdownDescription: "Attribute-level filters as JSON, the same value `filter_group_json` takes " +
 									"on `posthog_logs_alert`. It stays JSON because a filter group nests property " +
@@ -585,7 +584,7 @@ func logsSourceConfigToModel(ctx context.Context, raw json.RawMessage, current *
 		currentFilters = &PlatformAlertLogsFiltersTFModel{
 			SeverityLevels:  types.SetNull(types.StringType),
 			ServiceNames:    types.SetNull(types.StringType),
-			FilterGroupJSON: jsontypes.NewNormalizedNull(),
+			FilterGroupJSON: core.NewNormalizedJSONNull(),
 		}
 	}
 
@@ -597,7 +596,7 @@ func logsSourceConfigToModel(ctx context.Context, raw json.RawMessage, current *
 		return current, diags
 	}
 
-	filterGroupJSON := jsontypes.NewNormalizedNull()
+	filterGroupJSON := core.NewNormalizedJSONNull()
 	// Projected onto the declared fields for the reason given in posthog_logs_alert's mapper:
 	// PostHog adds its own defaults to a saved filter group.
 	if len(filters.FilterGroup) > 0 {
@@ -606,7 +605,7 @@ func logsSourceConfigToModel(ctx context.Context, raw json.RawMessage, current *
 			diags.AddError("Invalid filter group in response", fmt.Sprintf("Could not encode filterGroup returned by PostHog: %s", err.Error()))
 			return current, diags
 		}
-		filterGroupJSON = jsontypes.NewNormalizedValue(encoded)
+		filterGroupJSON = core.NewNormalizedJSONValue(encoded)
 	}
 
 	logs.Filters = &PlatformAlertLogsFiltersTFModel{

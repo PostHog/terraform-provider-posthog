@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -36,27 +35,27 @@ func NewSubscription() resource.Resource {
 type SubscriptionResourceTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	TargetType              types.String         `tfsdk:"target_type"`
-	TargetValue             types.String         `tfsdk:"target_value"`
-	IntegrationID           types.Int64          `tfsdk:"integration_id"`
-	DashboardID             types.Int64          `tfsdk:"dashboard_id"`
-	InsightID               types.Int64          `tfsdk:"insight_id"`
-	AIPrompt                types.String         `tfsdk:"ai_prompt"`
-	AIPromptConfig          jsontypes.Normalized `tfsdk:"ai_prompt_config"`
-	SummaryEnabled          types.Bool           `tfsdk:"summary_enabled"`
-	SummaryPromptGuide      types.String         `tfsdk:"summary_prompt_guide"`
-	DashboardExportInsights types.Set            `tfsdk:"dashboard_export_insights"`
-	Frequency               types.String         `tfsdk:"frequency"`
-	Interval                types.Int64          `tfsdk:"interval"`
-	StartDate               types.String         `tfsdk:"start_date"`
-	ByWeekday               types.Set            `tfsdk:"byweekday"`
-	BySetPos                types.Int64          `tfsdk:"bysetpos"`
-	Enabled                 types.Bool           `tfsdk:"enabled"`
-	Title                   types.String         `tfsdk:"title"`
-	ResourceType            types.String         `tfsdk:"resource_type"`
-	Summary                 types.String         `tfsdk:"summary"`
-	NextDeliveryDate        types.String         `tfsdk:"next_delivery_date"`
-	CreatedAt               types.String         `tfsdk:"created_at"`
+	TargetType              types.String        `tfsdk:"target_type"`
+	TargetValue             types.String        `tfsdk:"target_value"`
+	IntegrationID           types.Int64         `tfsdk:"integration_id"`
+	DashboardID             types.Int64         `tfsdk:"dashboard_id"`
+	InsightID               types.Int64         `tfsdk:"insight_id"`
+	AIPrompt                types.String        `tfsdk:"ai_prompt"`
+	AIPromptConfig          core.NormalizedJSON `tfsdk:"ai_prompt_config"`
+	SummaryEnabled          types.Bool          `tfsdk:"summary_enabled"`
+	SummaryPromptGuide      types.String        `tfsdk:"summary_prompt_guide"`
+	DashboardExportInsights types.Set           `tfsdk:"dashboard_export_insights"`
+	Frequency               types.String        `tfsdk:"frequency"`
+	Interval                types.Int64         `tfsdk:"interval"`
+	StartDate               types.String        `tfsdk:"start_date"`
+	ByWeekday               types.Set           `tfsdk:"byweekday"`
+	BySetPos                types.Int64         `tfsdk:"bysetpos"`
+	Enabled                 types.Bool          `tfsdk:"enabled"`
+	Title                   types.String        `tfsdk:"title"`
+	ResourceType            types.String        `tfsdk:"resource_type"`
+	Summary                 types.String        `tfsdk:"summary"`
+	NextDeliveryDate        types.String        `tfsdk:"next_delivery_date"`
+	CreatedAt               types.String        `tfsdk:"created_at"`
 }
 
 type SubscriptionOps struct{}
@@ -127,7 +126,7 @@ func (o SubscriptionOps) Schema() schema.Schema {
 			},
 			"ai_prompt_config": schema.StringAttribute{
 				Optional:   true,
-				CustomType: jsontypes.NormalizedType{},
+				CustomType: core.NormalizedJSONType{},
 				MarkdownDescription: "Optional JSON config for an `ai_prompt` subscription, e.g. the analysis window " +
 					"(`{\"window\":{\"mode\":\"last_n_days\",\"start_days_ago\":7,\"end_days_ago\":null}}`). Compared " +
 					"semantically, so key ordering and whitespace do not produce a diff. Only meaningful when `ai_prompt` is set.",
@@ -360,10 +359,10 @@ func (o SubscriptionOps) MapResponseToModel(ctx context.Context, resp httpclient
 // then defers to normalizeRawForState (the same helper experiment.go uses) so
 // the value is filtered to the user's configured keys — this keeps drift
 // protection consistent if PostHog ever echoes server-added keys.
-func aiPromptConfigToModel(raw json.RawMessage, current jsontypes.Normalized) jsontypes.Normalized {
+func aiPromptConfigToModel(raw json.RawMessage, current core.NormalizedJSON) core.NormalizedJSON {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "{}" || trimmed == "null" {
-		return jsontypes.NewNormalizedNull()
+		return core.NewNormalizedJSONNull()
 	}
 	return normalizeRawForState(json.RawMessage(trimmed), current)
 }
