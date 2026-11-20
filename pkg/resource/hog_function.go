@@ -83,7 +83,8 @@ func (o HogFunctionOps) Schema() schema.Schema {
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Description of the Hog function.",
+				Computed:            true,
+				MarkdownDescription: "Description of the Hog function. If omitted, PostHog manages the description. Set it to an empty string to clear it.",
 			},
 			"enabled": schema.BoolAttribute{
 				Optional:            true,
@@ -283,15 +284,8 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 	return req, diags
 }
 
-func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, state HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
-	req, diags := o.BuildCreateRequest(ctx, plan)
-
-	// Clear description if removed from config
-	if core.ShouldClearString(plan.Description, state.Description) {
-		req.Description = util.StringPtr("")
-	}
-
-	return req, diags
+func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, _ HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
+	return o.BuildCreateRequest(ctx, plan)
 }
 
 func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.HogFunction, model *HogFunctionResourceTFModel) diag.Diagnostics {
@@ -306,7 +300,12 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	}
 
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
-	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	serverDescription := core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	// The API can represent a cleared description as null or an empty string.
+	// Preserve an explicitly planned empty string when the server agrees it is blank.
+	if !core.IsKnown(model.Description) || model.Description.ValueString() != "" || !serverDescription.IsNull() {
+		model.Description = serverDescription
+	}
 	model.Enabled = core.PtrToBool(resp.Enabled)
 	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
 
