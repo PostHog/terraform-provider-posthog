@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
 	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/posthog/terraform-provider/pkg/util"
@@ -702,6 +703,68 @@ func TestStripServerFields(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			result := util.StripFields(tt.input, hogFunctionServerFields)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestHogFunctionDescription(t *testing.T) {
+	ctx := context.Background()
+	ops := HogFunctionOps{}
+	previous := HogFunctionResourceTFModel{Description: types.StringValue("Previous description")}
+
+	for _, tc := range []struct {
+		name     string
+		plan     types.String
+		request  *string
+		response *string
+		state    types.String
+	}{
+		{
+			name:     "template default",
+			plan:     types.StringUnknown(),
+			response: util.StringPtr("Template default"),
+			state:    types.StringValue("Template default"),
+		},
+		{
+			name:     "explicit description",
+			plan:     types.StringValue("Custom description"),
+			request:  util.StringPtr("Custom description"),
+			response: util.StringPtr("Custom description"),
+			state:    types.StringValue("Custom description"),
+		},
+		{
+			name:     "omitted description leaves remote value alone",
+			plan:     types.StringNull(),
+			response: util.StringPtr("Previous description"),
+			state:    types.StringValue("Previous description"),
+		},
+		{
+			name:    "explicit empty description survives null response",
+			plan:    types.StringValue(""),
+			request: util.StringPtr(""),
+			state:   types.StringValue(""),
+		},
+		{
+			name:     "explicit empty description survives empty response",
+			plan:     types.StringValue(""),
+			request:  util.StringPtr(""),
+			response: util.StringPtr(""),
+			state:    types.StringValue(""),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := HogFunctionResourceTFModel{Description: tc.plan}
+			create, diags := ops.BuildCreateRequest(ctx, model)
+			require.False(t, diags.HasError(), "%v", diags)
+			assert.Equal(t, tc.request, create.Description)
+
+			update, diags := ops.BuildUpdateRequest(ctx, model, previous)
+			require.False(t, diags.HasError(), "%v", diags)
+			assert.Equal(t, tc.request, update.Description)
+
+			diags = ops.MapResponseToModel(ctx, httpclient.HogFunction{Description: tc.response}, &model)
+			require.False(t, diags.HasError(), "%v", diags)
+			assert.Equal(t, tc.state, model.Description)
 		})
 	}
 }
