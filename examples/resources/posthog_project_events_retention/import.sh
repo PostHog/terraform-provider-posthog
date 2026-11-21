@@ -1,0 +1,1 @@
+terraform import posthog_project_events_retention.example your-project-id
