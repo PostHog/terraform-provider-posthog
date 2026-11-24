@@ -81,10 +81,12 @@ func (o HogFunctionOps) Schema() schema.Schema {
 				Optional:            true,
 				MarkdownDescription: "Name of the Hog function.",
 			},
+			// No UseStateForUnknown: an update that leaves description out must not
+			// send back a stale one and overwrite an edit made in PostHog.
 			"description": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Description of the Hog function. If omitted, PostHog manages the description. Set it to an empty string to clear it.",
+				MarkdownDescription: "Description of the Hog function. When omitted, the function keeps the description it has in PostHog; a new function created from a template gets the template's. Set it to an empty string to clear it. To clear a template's description, first create the function without `description`: creating it with an empty string fails, because PostHog fills in the template's.",
 			},
 			"enabled": schema.BoolAttribute{
 				Optional:            true,
@@ -301,9 +303,9 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
 	serverDescription := core.PtrToStringNullIfEmptyTrimmed(resp.Description)
-	// The API can represent a cleared description as null or an empty string.
-	// Preserve an explicitly planned empty string when the server agrees it is blank.
-	if !core.IsKnown(model.Description) || model.Description.ValueString() != "" || !serverDescription.IsNull() {
+	// A blank server description reads as null, which would not match a configured "".
+	keepEmpty := serverDescription.IsNull() && model.Description.Equal(types.StringValue(""))
+	if !keepEmpty {
 		model.Description = serverDescription
 	}
 	model.Enabled = core.PtrToBool(resp.Enabled)

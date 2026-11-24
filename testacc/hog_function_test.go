@@ -125,6 +125,72 @@ func TestHogFunction_Update(t *testing.T) {
 	})
 }
 
+// TestHogFunction_TemplateDescription tests that a function created from a template
+// takes the template's description when the config leaves it out, and that removing
+// a configured description keeps it.
+func TestHogFunction_TemplateDescription(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+	const address = "posthog_hog_function.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckHogFunctionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccHogFunctionTemplateDescription(rName, ""),
+				Check:  resource.TestMatchResourceAttr(address, "description", regexp.MustCompile(`\S`)),
+			},
+			// An unrelated update keeps it
+			{
+				Config: testAccHogFunctionTemplateDescription(rName+"-updated", ""),
+				Check:  resource.TestMatchResourceAttr(address, "description", regexp.MustCompile(`\S`)),
+			},
+			{
+				Config: testAccHogFunctionTemplateDescription(rName+"-updated", `description = "Custom"`),
+				Check:  resource.TestCheckResourceAttr(address, "description", "Custom"),
+			},
+			// Removed from the config
+			{
+				Config: testAccHogFunctionTemplateDescription(rName+"-updated", ""),
+				Check:  resource.TestCheckResourceAttr(address, "description", "Custom"),
+			},
+			// Cleared
+			{
+				Config: testAccHogFunctionTemplateDescription(rName+"-updated", `description = ""`),
+				Check:  resource.TestCheckResourceAttr(address, "description", ""),
+			},
+		},
+	})
+}
+
+func testAccHogFunctionTemplateDescription(name, description string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_hog_function" "test" {
+  name        = %q
+  type        = "destination"
+  enabled     = false
+  template_id = "template-webhook"
+  %s
+
+  inputs_json = jsonencode({
+    url = { value = "https://example.com/webhook" }
+  })
+
+  filters_json = jsonencode({
+    events = [{
+      id   = "$pageview"
+      type = "events"
+    }]
+  })
+}
+`, name, description)
+}
+
 // TestHogFunction_EnableDisable tests enabling and disabling a hog function.
 func TestHogFunction_EnableDisable(t *testing.T) {
 	skipIfNotAcceptance(t)

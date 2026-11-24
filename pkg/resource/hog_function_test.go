@@ -710,7 +710,6 @@ func TestStripServerFields(t *testing.T) {
 func TestHogFunctionDescription(t *testing.T) {
 	ctx := context.Background()
 	ops := HogFunctionOps{}
-	previous := HogFunctionResourceTFModel{Description: types.StringValue("Previous description")}
 
 	for _, tc := range []struct {
 		name     string
@@ -733,10 +732,10 @@ func TestHogFunctionDescription(t *testing.T) {
 			state:    types.StringValue("Custom description"),
 		},
 		{
-			name:     "omitted description leaves remote value alone",
-			plan:     types.StringNull(),
-			response: util.StringPtr("Previous description"),
-			state:    types.StringValue("Previous description"),
+			name:     "omitted description without a template is blank",
+			plan:     types.StringUnknown(),
+			response: util.StringPtr(""),
+			state:    types.StringNull(),
 		},
 		{
 			name:    "explicit empty description survives null response",
@@ -751,16 +750,19 @@ func TestHogFunctionDescription(t *testing.T) {
 			response: util.StringPtr(""),
 			state:    types.StringValue(""),
 		},
+		{
+			name:     "explicit empty description does not hide a remote one",
+			plan:     types.StringValue(""),
+			request:  util.StringPtr(""),
+			response: util.StringPtr("Template default"),
+			state:    types.StringValue("Template default"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := HogFunctionResourceTFModel{Description: tc.plan}
-			create, diags := ops.BuildCreateRequest(ctx, model)
+			req, diags := ops.BuildUpdateRequest(ctx, model, HogFunctionResourceTFModel{})
 			require.False(t, diags.HasError(), "%v", diags)
-			assert.Equal(t, tc.request, create.Description)
-
-			update, diags := ops.BuildUpdateRequest(ctx, model, previous)
-			require.False(t, diags.HasError(), "%v", diags)
-			assert.Equal(t, tc.request, update.Description)
+			assert.Equal(t, tc.request, req.Description)
 
 			diags = ops.MapResponseToModel(ctx, httpclient.HogFunction{Description: tc.response}, &model)
 			require.False(t, diags.HasError(), "%v", diags)

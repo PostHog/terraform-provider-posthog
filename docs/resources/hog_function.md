@@ -17,7 +17,7 @@ Manage PostHog Hog functions. Hog functions enable destinations, webhooks, and t
 
 ### Optional
 
-- `description` (String) Description of the Hog function. If omitted, PostHog manages the description. Set it to an empty string to clear it.
+- `description` (String) Description of the Hog function. When omitted, the function keeps the description it has in PostHog; a new function created from a template gets the template's. Set it to an empty string to clear it. To clear a template's description, first create the function without `description`: creating it with an empty string fails, because PostHog fills in the template's.
 - `enabled` (Boolean) Whether the Hog function is enabled. Defaults to true.
 - `execution_order` (Number) Order in which this Hog function executes relative to others (0-32767).
 - `filters_json` (String) JSON object defining filters for when the Hog function should execute. Includes `events`, `actions`, `properties`, and `filter_test_accounts` options.
