@@ -46,14 +46,15 @@ func TestProjectSettingsSavedPlanKeepsOmittedSettings(t *testing.T) {
 	retentionMonths := 24
 	var retentionPosts []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-api-key" {
+		isRetention := r.URL.Path == "/api/projects/123/events_retention/"
+		if (!isRetention && r.URL.Path != "/api/environments/123/") || r.Header.Get("Authorization") != "Bearer test-api-key" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if r.URL.Path == "/api/projects/123/events_retention/" {
+		if isRetention {
 			if r.Method == http.MethodPost {
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -68,11 +69,6 @@ func TestProjectSettingsSavedPlanKeepsOmittedSettings(t *testing.T) {
 			if err := json.NewEncoder(w).Encode(map[string]any{"project_retention_months": retentionMonths}); err != nil {
 				t.Errorf("encode retention: %s", err)
 			}
-			return
-		}
-		if r.URL.Path != "/api/environments/123/" {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
 		switch r.Method {
@@ -158,20 +154,10 @@ resource "posthog_project_settings" "test" {
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
-				PostApplyFunc: func() {
-					mu.Lock()
-					defer mu.Unlock()
-					assert.Empty(t, retentionPosts)
-				},
 			},
 			{
 				Config: fmt.Sprintf(config, "anonymize_ips = true\n  surveys_opt_in = true\n  events_retention_months = 12"),
 				Check:  resource.TestCheckResourceAttr(address, "events_retention_months", "12"),
-				PostApplyFunc: func() {
-					mu.Lock()
-					defer mu.Unlock()
-					assert.Equal(t, []map[string]any{{"retention_months": float64(12)}}, retentionPosts)
-				},
 			},
 			{
 				// A saved plan from 12 to 24 months stops before any write when the
@@ -193,6 +179,6 @@ resource "posthog_project_settings" "test" {
 	})
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Len(t, retentionPosts, 1, "the period changed in PostHog must not be sent back")
+	assert.Equal(t, []map[string]any{{"retention_months": float64(12)}}, retentionPosts, "only the step that changes the period sends it")
 	assert.Len(t, patches, 2, "the stopped apply must not PATCH the environment")
 }

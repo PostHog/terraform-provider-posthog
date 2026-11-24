@@ -6,11 +6,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -47,6 +45,7 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	model.CookielessServerHashMode = types.Int64Value(2)
 	model.AutocaptureWebVitalsOptIn = types.BoolValue(true)
 	model.AnonymizeIps = types.BoolValue(true)
+	model.EventsRetentionMonths = types.Int64Value(12)
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -65,6 +64,7 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	assert.True(t, *req.AutocaptureWebVitalsOptIn)
 	require.NotNil(t, req.AnonymizeIps)
 	assert.True(t, *req.AnonymizeIps)
+	assert.Equal(t, types.Int64Value(12), req.EventsRetentionMonths)
 }
 
 // TestProjectSettingsBuildCreateRequest_ZeroValues guards the zero-value path:
@@ -104,6 +104,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	model.RecordingDomains = types.ListUnknown(types.StringType)
 	model.TestAccountFilters = core.NewNormalizedJSONUnknown()
 	model.TestAccountFiltersDefaultChecked = types.BoolUnknown()
+	model.EventsRetentionMonths = types.Int64Unknown()
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -122,6 +123,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	assert.Nil(t, req.RecordingDomains)
 	assert.Nil(t, req.TestAccountFilters)
 	assert.Nil(t, req.TestAccountFiltersDefaultChecked)
+	assert.True(t, req.EventsRetentionMonths.IsUnknown())
 
 	body, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -354,7 +356,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 	}
 
 	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp, EventsRetentionMonths: types.Int64Value(24)}, &model)
 
 	assert.False(t, diags.HasError())
 	assert.Equal(t, testProjectSettingsProjectID, model.ID.ValueString())
@@ -365,6 +367,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 	assert.Equal(t, int64(1), model.CookielessServerHashMode.ValueInt64())
 	assert.True(t, model.AutocaptureWebVitalsOptIn.ValueBool())
 	assert.True(t, model.AnonymizeIps.ValueBool())
+	assert.Equal(t, types.Int64Value(24), model.EventsRetentionMonths)
 }
 
 // TestProjectSettingsMapResponseToModel_ZeroValues ensures a returned 0 / false
@@ -406,6 +409,7 @@ func TestProjectSettingsMapResponseToModel_NilFieldsBecomeNull(t *testing.T) {
 	assert.True(t, model.NetworkPayloadCapture.IsNull())
 	assert.True(t, model.TestAccountFilters.IsNull())
 	assert.True(t, model.TestAccountFiltersDefaultChecked.IsNull())
+	assert.True(t, model.EventsRetentionMonths.IsNull())
 }
 
 func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testing.T) {
@@ -644,7 +648,7 @@ type fakeProjectSettingsAPI struct {
 	posted     []int64
 }
 
-func (f *fakeProjectSettingsAPI) client() (httpclient.PosthogClient, func()) {
+func (f *fakeProjectSettingsAPI) client() httpclient.PosthogClient {
 	envPath := "/api/environments/" + testProjectSettingsProjectID + "/"
 	retentionPath := "/api/projects/" + testProjectSettingsProjectID + "/events_retention/"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -672,52 +676,39 @@ func (f *fakeProjectSettingsAPI) client() (httpclient.PosthogClient, func()) {
 			w.WriteHeader(http.StatusTeapot)
 		}
 	}))
-	return httpclient.NewClient(server.Client(), server.URL, "test-key", "test"), server.Close
+	f.t.Cleanup(server.Close)
+	return httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
 }
 
 func TestProjectSettingsCRUDFlow(t *testing.T) {
 	patchEnv := "PATCH /api/environments/" + testProjectSettingsProjectID + "/"
 	getRetention := "GET /api/projects/" + testProjectSettingsProjectID + "/events_retention/"
 	postRetention := "POST /api/projects/" + testProjectSettingsProjectID + "/events_retention/"
-	// setTo12 sets the period to 12 months, from a plan made when the project
-	// used the organization's period (unknown on create).
+	// setTo12 sets the period to 12 months, from a plan made against plannedFrom.
 	setTo12 := func(plannedFrom types.Int64) projectSettingsRequest {
-		return projectSettingsRequest{EventsRetentionMonths: new(int64(12)), PlannedFromEventsRetentionMonths: plannedFrom}
+		return projectSettingsRequest{EventsRetentionMonths: types.Int64Value(12), PlannedFromEventsRetentionMonths: plannedFrom}
 	}
 
 	t.Run("create without a period reads it and does not set it", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(24))}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
 		created, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), projectSettingsRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, []string{getRetention, patchEnv}, api.calls)
-		assert.Equal(t, new(int64(24)), created.EventsRetentionMonths)
+		assert.Equal(t, types.Int64Value(24), created.EventsRetentionMonths)
 		require.NotNil(t, created.HeatmapsOptIn)
 	})
 
 	t.Run("a different period is set after the environment", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
 		updated, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Null()))
 		require.NoError(t, err)
 		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
 		assert.Equal(t, []int64{12}, api.posted)
-		assert.Equal(t, new(int64(12)), updated.EventsRetentionMonths)
-	})
-
-	t.Run("a period PostHog already has is not sent again", func(t *testing.T) {
-		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(12))}
-		client, closeServer := api.client()
-		defer closeServer()
-
-		created, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
-		require.NoError(t, err)
-		assert.Empty(t, api.posted)
-		assert.Equal(t, new(int64(12)), created.EventsRetentionMonths)
+		assert.Equal(t, types.Int64Value(12), updated.EventsRetentionMonths)
 	})
 
 	for _, test := range []struct {
@@ -731,8 +722,7 @@ func TestProjectSettingsCRUDFlow(t *testing.T) {
 	} {
 		t.Run(test.name+" stops before any write when the period changed in PostHog after the plan", func(t *testing.T) {
 			api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(84))}
-			client, closeServer := api.client()
-			defer closeServer()
+			client := api.client()
 
 			_, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(test.plannedFrom))
 			require.ErrorContains(t, err, test.want)
@@ -740,42 +730,41 @@ func TestProjectSettingsCRUDFlow(t *testing.T) {
 		})
 	}
 
-	t.Run("a period changed in PostHog to the one the plan sets is not an error", func(t *testing.T) {
+	t.Run("a period PostHog already has is not sent, even when it changed there after the plan", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(12))}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
-		_, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Value(24)))
+		updated, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Value(24)))
 		require.NoError(t, err)
 		assert.Equal(t, []string{getRetention, patchEnv}, api.calls)
+		assert.Equal(t, types.Int64Value(12), updated.EventsRetentionMonths)
 	})
 
-	t.Run("a create applies to whatever period PostHog has", func(t *testing.T) {
+	t.Run("a create replaces whatever period PostHog has", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(84))}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
-		_, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
+		created, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
 		require.NoError(t, err)
+		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
 		assert.Equal(t, []int64{12}, api.posted)
+		assert.Equal(t, types.Int64Value(12), created.EventsRetentionMonths)
 	})
 
 	t.Run("read without a retention endpoint reads no period", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusNotFound}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
 		read, status, err := ProjectSettingsOps{}.Read(context.Background(), client, newProjectSettingsModel())
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, int(status))
-		assert.Nil(t, read.EventsRetentionMonths)
+		assert.True(t, read.EventsRetentionMonths.IsNull())
 		require.NotNil(t, read.HeatmapsOptIn)
 	})
 
 	t.Run("a configured period fails without a retention endpoint", func(t *testing.T) {
-		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusNotFound, postStatus: http.StatusNotFound}
-		client, closeServer := api.client()
-		defer closeServer()
+		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusNotFound}
+		client := api.client()
 
 		_, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
 		require.ErrorContains(t, err, "PostHog returned 404 for /api/projects/"+testProjectSettingsProjectID+"/events_retention/, which events_retention_months needs")
@@ -784,95 +773,47 @@ func TestProjectSettingsCRUDFlow(t *testing.T) {
 
 	t.Run("a refused set fails after the environment applied", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, postStatus: http.StatusForbidden}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
-		_, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Null()))
+		_, status, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Null()))
 		require.ErrorContains(t, err, "the other settings were saved, but setting events_retention_months to 12 failed")
 		require.ErrorContains(t, err, "Your organization access level is insufficient.")
 		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
+		assert.Equal(t, http.StatusOK, int(status), "the set's own status must not decide whether the settings still exist")
 	})
 
 	t.Run("read fails when the retention read fails", func(t *testing.T) {
 		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusInternalServerError}
-		client, closeServer := api.client()
-		defer closeServer()
+		client := api.client()
 
 		_, _, err := ProjectSettingsOps{}.Read(context.Background(), client, newProjectSettingsModel())
 		require.ErrorContains(t, err, "failed to read events retention")
 	})
 }
 
-func TestProjectSettingsEventsRetentionMonths(t *testing.T) {
-	ctx := context.Background()
-	ops := ProjectSettingsOps{}
+// TestProjectSettingsRequest_PlannedFromEventsRetentionMonths covers the period
+// Update compares PostHog's against to stop a stale plan.
+func TestProjectSettingsRequest_PlannedFromEventsRetentionMonths(t *testing.T) {
+	plan, state := newProjectSettingsModel(), newProjectSettingsModel()
+	plan.EventsRetentionMonths, state.EventsRetentionMonths = types.Int64Value(12), types.Int64Value(24)
 
-	t.Run("a configured period is requested", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		model.EventsRetentionMonths = types.Int64Value(12)
-		req, diags := ops.BuildCreateRequest(ctx, model)
-		require.False(t, diags.HasError())
-		assert.Equal(t, new(int64(12)), req.EventsRetentionMonths)
-	})
+	update, diags := ProjectSettingsOps{}.BuildUpdateRequest(context.Background(), plan, state)
+	require.False(t, diags.HasError())
+	assert.Equal(t, types.Int64Value(24), update.PlannedFromEventsRetentionMonths)
 
-	t.Run("an omitted period is not requested", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		model.EventsRetentionMonths = types.Int64Unknown()
-		req, diags := ops.BuildUpdateRequest(ctx, model, newProjectSettingsModel())
-		require.False(t, diags.HasError())
-		assert.Nil(t, req.EventsRetentionMonths)
-	})
-
-	t.Run("an update records the period its plan was made against", func(t *testing.T) {
-		plan, state := newProjectSettingsModel(), newProjectSettingsModel()
-		plan.EventsRetentionMonths, state.EventsRetentionMonths = types.Int64Value(12), types.Int64Value(24)
-		req, diags := ops.BuildUpdateRequest(ctx, plan, state)
-		require.False(t, diags.HasError())
-		assert.Equal(t, new(int64(12)), req.EventsRetentionMonths)
-		assert.Equal(t, types.Int64Value(24), req.PlannedFromEventsRetentionMonths)
-	})
-
-	t.Run("a create has no period its plan was made against", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		model.EventsRetentionMonths = types.Int64Value(12)
-		req, diags := ops.BuildCreateRequest(ctx, model)
-		require.False(t, diags.HasError())
-		assert.True(t, req.PlannedFromEventsRetentionMonths.IsUnknown())
-	})
-
-	t.Run("the period maps to state", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		diags := ops.MapResponseToModel(ctx, projectSettingsResponse{EventsRetentionMonths: new(int64(24))}, &model)
-		require.False(t, diags.HasError())
-		assert.Equal(t, types.Int64Value(24), model.EventsRetentionMonths)
-	})
-
-	t.Run("the organization's period maps to null", func(t *testing.T) {
-		model := newProjectSettingsModel()
-		diags := ops.MapResponseToModel(ctx, projectSettingsResponse{}, &model)
-		require.False(t, diags.HasError())
-		assert.True(t, model.EventsRetentionMonths.IsNull())
-	})
+	create, diags := ProjectSettingsOps{}.BuildCreateRequest(context.Background(), plan)
+	require.False(t, diags.HasError())
+	assert.True(t, create.PlannedFromEventsRetentionMonths.IsUnknown(), "a create has no period its plan was made against")
 }
 
 func TestProjectSettingsEventsRetentionMonthsValidator(t *testing.T) {
-	ctx := context.Background()
 	attribute := ProjectSettingsOps{}.Schema().Attributes["events_retention_months"].(schema.Int64Attribute)
-	for _, test := range []struct {
-		months int64
-		valid  bool
-	}{
-		// PostHog decides which periods it accepts, so any positive value plans.
-		{1, true}, {6, true}, {84, true}, {120, true},
-		{0, false}, {-1, false},
-	} {
-		t.Run(strconv.FormatInt(test.months, 10), func(t *testing.T) {
-			resp := &validator.Int64Response{}
-			for _, v := range attribute.Validators {
-				v.ValidateInt64(ctx, validator.Int64Request{Path: path.Root("events_retention_months"), ConfigValue: types.Int64Value(test.months)}, resp)
-			}
-			assert.Equal(t, !test.valid, resp.Diagnostics.HasError())
-		})
+	require.Len(t, attribute.Validators, 1)
+	// PostHog decides which periods it accepts, so any positive value plans.
+	for months, valid := range map[int64]bool{0: false, 1: true, 120: true} {
+		resp := &validator.Int64Response{}
+		attribute.Validators[0].ValidateInt64(context.Background(), validator.Int64Request{ConfigValue: types.Int64Value(months)}, resp)
+		assert.Equal(t, !valid, resp.Diagnostics.HasError(), "%d months", months)
 	}
 }
 
@@ -892,59 +833,40 @@ func TestProjectSettingsModifyPlanRetentionWarning(t *testing.T) {
 		return tftypes.NewValue(objectType, values)
 	}
 	settings := func(retention any) tftypes.Value { return settingsFor("123", retention) }
+	noState := tftypes.NewValue(objectType, nil)
 	for _, test := range []struct {
-		name  string
-		state tftypes.Value
-
-		planned any
-		want    string
+		name       string
+		state      tftypes.Value
+		configured any
+		want       string
 	}{
-		{"first apply", tftypes.NewValue(objectType, nil), int64(12), "replacing its current period in PostHog"},
-		{"update", settings(int64(24)), int64(12), "from 24 to 12 months"},
-		{"period only known at apply", settings(int64(24)), tftypes.UnknownValue, "a period only known at apply"},
-		{"replacement by another project", settingsFor("456", int64(24)), int64(12), "replacing its current period in PostHog"},
+		{"shorter period", settings(24), 12, "from 24 to 12 months"},
+		{"longer period", settings(12), 24, ""},
+		{"unchanged period", settings(12), 12, ""},
+		{"omitted period", settings(12), nil, ""},
+		{"period only known at apply", settings(24), tftypes.UnknownValue, "a period only known at apply"},
+		{"replaces the organization's period", settings(nil), 12, "replacing the organization's period"},
+		{"first apply", noState, 12, "replacing its current period in PostHog"},
+		{"omitted on first apply", noState, nil, ""},
+		{"replacement by another project", settingsFor("456", 24), 12, "replacing its current period in PostHog"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			req := tfresource.ModifyPlanRequest{
-				Config: tfsdk.Config{Schema: s, Raw: settings(test.planned)},
+				Config: tfsdk.Config{Schema: s, Raw: settings(test.configured)},
 				State:  tfsdk.State{Schema: s, Raw: test.state},
-				Plan:   tfsdk.Plan{Schema: s, Raw: settings(test.planned)},
+				Plan:   tfsdk.Plan{Schema: s, Raw: settings(test.configured)},
 			}
 			resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
 
 			ops.ModifyResourcePlan(ctx, req, &resp)
 
 			require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
-			require.Equal(t, 1, resp.Diagnostics.WarningsCount())
-			assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), test.want)
-		})
-	}
-}
-
-func TestShorterRetentionWarning(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		configured types.Int64
-		have       types.Int64
-		want       string
-	}{
-		{"shorter period", types.Int64Value(12), types.Int64Value(24), "from 24 to 12 months"},
-		{"replaces the organization's period", types.Int64Value(12), types.Int64Null(), "replacing the organization's period"},
-		{"first apply, current period unknown", types.Int64Value(12), types.Int64Unknown(), "replacing its current period in PostHog"},
-		{"longer period", types.Int64Value(24), types.Int64Value(12), ""},
-		{"unchanged period", types.Int64Value(12), types.Int64Value(12), ""},
-		{"omitted period", types.Int64Null(), types.Int64Value(12), ""},
-		{"period only known at apply", types.Int64Unknown(), types.Int64Value(12), "a period only known at apply"},
-		{"omitted on first apply", types.Int64Null(), types.Int64Unknown(), ""},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			diags := shorterRetentionWarning(test.configured, test.have)
 			if test.want == "" {
-				assert.Zero(t, diags.WarningsCount())
+				assert.Zero(t, resp.Diagnostics.WarningsCount())
 				return
 			}
-			require.Equal(t, 1, diags.WarningsCount())
-			assert.Contains(t, diags.Warnings()[0].Detail(), test.want)
+			require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+			assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), test.want)
 		})
 	}
 }
