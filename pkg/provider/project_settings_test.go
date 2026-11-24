@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sync"
 	"testing"
 
@@ -42,14 +43,36 @@ func TestProjectSettingsSavedPlanKeepsOmittedSettings(t *testing.T) {
 		"test_account_filters_default_checked": true,
 	}
 	var patches []map[string]any
+	retentionMonths := 24
+	var retentionPosts []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/environments/123/" || r.Header.Get("Authorization") != "Bearer test-api-key" {
+		isEnvironment := r.URL.Path == "/api/environments/123/"
+		isRetention := r.URL.Path == "/api/projects/123/events_retention/"
+		authorized := r.Header.Get("Authorization") == "Bearer test-api-key"
+		if !authorized || (!isEnvironment && !isRetention) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
+		if isRetention {
+			if r.Method == http.MethodPost {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode POST: %s", err)
+					http.Error(w, "invalid JSON", http.StatusBadRequest)
+					return
+				}
+				retentionPosts = append(retentionPosts, body)
+				retentionMonths = int(body["retention_months"].(float64))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(map[string]any{"project_retention_months": retentionMonths}); err != nil {
+				t.Errorf("encode retention: %s", err)
+			}
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 		case http.MethodPatch:
@@ -109,12 +132,14 @@ resource "posthog_project_settings" "test" {
 							defer mu.Unlock()
 							settings["session_recording_opt_in"] = false
 							settings["session_recording_network_payload_capture_config"] = map[string]any{"recordHeaders": false, "recordBody": true}
+							retentionMonths = 36
 						}),
 					},
 				},
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(address, "session_recording_opt_in", "false"),
 					resource.TestCheckResourceAttr(address, "session_recording_network_payload_capture_config.record_headers", "false"),
+					resource.TestCheckResourceAttr(address, "events_retention_months", "36"),
 				),
 				PostApplyFunc: func() {
 					mu.Lock()
@@ -122,8 +147,40 @@ resource "posthog_project_settings" "test" {
 					require.Len(t, patches, 1)
 					assert.Equal(t, true, patches[0]["anonymize_ips"])
 					assert.Equal(t, true, patches[0]["surveys_opt_in"])
+					assert.Empty(t, retentionPosts, "an omitted events retention period must not be sent")
 				},
+			},
+			{
+				// The period PostHog already has plans no change, so nothing is sent.
+				Config: fmt.Sprintf(config, "anonymize_ips = true\n  surveys_opt_in = true\n  events_retention_months = 36"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				Config: fmt.Sprintf(config, "anonymize_ips = true\n  surveys_opt_in = true\n  events_retention_months = 12"),
+				Check:  resource.TestCheckResourceAttr(address, "events_retention_months", "12"),
+			},
+			{
+				// A saved plan from 12 to 24 months stops before any write when the
+				// period changed to 84 in PostHog after the plan was made: applying it
+				// would delete events the plan never warned about.
+				Config: fmt.Sprintf(config, "anonymize_ips = false\n  surveys_opt_in = true\n  events_retention_months = 24"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						projectSettingsPlanCheck(func(_ context.Context, _ plancheck.CheckPlanRequest, _ *plancheck.CheckPlanResponse) {
+							mu.Lock()
+							defer mu.Unlock()
+							retentionMonths = 84
+						}),
+					},
+				},
+				ExpectError: regexp.MustCompile(`is 84 months in PostHog, but this plan was made when\s+it was 12 months`),
 			},
 		},
 	})
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []map[string]any{{"retention_months": float64(12)}}, retentionPosts, "only the step that changes the period sends it")
+	assert.Len(t, patches, 2, "the stopped apply must not PATCH the environment")
 }

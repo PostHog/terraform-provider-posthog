@@ -9,6 +9,7 @@ description: |-
   ~> Destroy Behavior: Destroying this resource is a no-op. It stops Terraform from managing the settings but does not reset any values on PostHog; the last-applied settings remain in effect.
   ~> Plan-gated settings: If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
   ~> Domains: app_urls is the project's authorized-domains list — shown in PostHog settings as Web analytics domains and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). recording_domains is the session-replay domains list.
+  ~> Events retention: events_retention_months is read and set through PostHog's events retention endpoint (/api/projects/{id}/events_retention/), not the environment, so it has its own access rules and is read on every refresh.
 ---
 
 # posthog_project_settings (Resource)
@@ -24,6 +25,8 @@ These settings live on the PostHog environment object (`/api/environments/{id}/`
 ~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
 
 ~> **Domains:** `app_urls` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). `recording_domains` is the session-replay domains list.
+
+~> **Events retention:** `events_retention_months` is read and set through PostHog's events retention endpoint (`/api/projects/{id}/events_retention/`), not the environment, so it has its own access rules and is read on every refresh.
 
 ## Example Usage
 
@@ -76,6 +79,11 @@ resource "posthog_project_settings" "example" {
   ])
   # Apply the filters above by default across the project.
   test_account_filters_default_checked = true
+
+  # Keep 12 months of events, overriding the organization's period. Only
+  # organization admins can change it. Careful: a shorter period permanently
+  # deletes older events at PostHog's next monthly cleanup.
+  events_retention_months = 12
 }
 
 # Use the provider-level project_id and manage only a subset of settings.
@@ -95,6 +103,7 @@ resource "posthog_project_settings" "minimal" {
 - `autocapture_web_vitals_opt_in` (Boolean) Whether web vitals autocapture is enabled.
 - `capture_performance_opt_in` (Boolean) Whether network performance capture is enabled for session replay. This must be `true` for `session_recording_network_payload_capture_config` to have any effect — without it, session replay does not capture network requests at all.
 - `cookieless_server_hash_mode` (Number) The cookieless server hash mode. Known values: `0` (disabled), `1` (stateless), `2` (stateful) — matching PostHog's `CookielessServerHashMode` enum. PostHog may add modes over time, so any non-negative value is accepted rather than a fixed set; consult the PostHog docs for the current options.
+- `events_retention_months` (Number) How many months of events this project keeps, overriding the organization's period. Null while the project uses the organization's period. PostHog currently accepts `1`, `3`, `12`, `24`, `36`, `60` and `84`, up to the longest period the organization's plan allows. PostHog checks the value when it's set, so a period it rejects fails the apply. Only organization admins can change it, and Terraform only sends it when it differs from PostHog's value. **A shorter period permanently deletes older events** at PostHog's next monthly cleanup, and they can't be restored. Queries may stop returning those events as soon as the period is set. The plan warns when it may shorten it, and an apply stops if the period changed in PostHog after its plan was made. Removing the attribute leaves the period as it is. To return the project to the organization's period, clear it in PostHog's project settings.
 - `heatmaps_opt_in` (Boolean) Whether heatmaps are enabled for web (the PostHog toolbar heatmap feature).
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
 - `recording_domains` (List of String) Authorized domains for session replay. Maps to the team `recording_domains` field. Order is preserved.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -23,10 +24,31 @@ import (
 )
 
 func NewProjectSettings() resource.Resource {
-	return core.NewGenericResource[ProjectSettingsModel, httpclient.EnvironmentSettingsRequest, httpclient.Environment](
+	return core.NewGenericResource[ProjectSettingsModel, projectSettingsRequest, projectSettingsResponse](
 		ProjectSettingsOps{},
 		core.ProjectSingletonImportParser[ProjectSettingsModel](),
 	)
+}
+
+// projectSettingsRequest is the environment PATCH body plus the events retention
+// period, which PostHog serves from its own endpoint rather than the environment.
+type projectSettingsRequest struct {
+	httpclient.EnvironmentSettingsRequest
+	// EventsRetentionMonths is the plan's period, null or unknown when the config
+	// leaves PostHog's value alone.
+	EventsRetentionMonths types.Int64
+	// PlannedFromEventsRetentionMonths is the period the plan was made against:
+	// state's value on update (null for the organization's period), unknown on
+	// create, which has no state.
+	PlannedFromEventsRetentionMonths types.Int64
+}
+
+// projectSettingsResponse is the environment plus the project's events retention period.
+type projectSettingsResponse struct {
+	httpclient.Environment
+	// EventsRetentionMonths is the project's own period, or null while the project
+	// uses its organization's period.
+	EventsRetentionMonths types.Int64
 }
 
 // ProjectSettingsModel manages environment-level settings for a PostHog project.
@@ -51,6 +73,7 @@ type ProjectSettingsModel struct {
 	// JSON array; server-injected cohort_name is stripped in MapResponseToModel.
 	TestAccountFilters               core.NormalizedJSON `tfsdk:"test_account_filters"`
 	TestAccountFiltersDefaultChecked types.Bool          `tfsdk:"test_account_filters_default_checked"`
+	EventsRetentionMonths            types.Int64         `tfsdk:"events_retention_months"`
 }
 
 // NetworkPayloadCaptureModel is the Terraform shape of the
@@ -91,7 +114,9 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 
 ~> **Plan-gated settings:** If PostHog accepts the update but silently ignores a setting (for example a feature that is not enabled for your plan), Terraform reports a generic "Provider produced inconsistent result after apply" error. The provider also emits a warning naming the specific attribute(s) PostHog did not apply, so you can tell which setting is unavailable for your project rather than a provider bug.
 
-~> **Domains:** ` + "`app_urls`" + ` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). ` + "`recording_domains`" + ` is the session-replay domains list.`,
+~> **Domains:** ` + "`app_urls`" + ` is the project's authorized-domains list — shown in PostHog settings as **Web analytics domains** and reused as the toolbar's Authorized URLs (web analytics has no separate allowlist of its own). ` + "`recording_domains`" + ` is the session-replay domains list.
+
+~> **Events retention:** ` + "`events_retention_months`" + ` is read and set through PostHog's events retention endpoint (` + "`/api/projects/{id}/events_retention/`" + `), not the environment, so it has its own access rules and is read on every refresh.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -187,21 +212,35 @@ These settings live on the PostHog environment object (` + "`/api/environments/{
 				Computed:            true,
 				MarkdownDescription: "Whether the **internal and test users** filters (`test_account_filters`) are applied by default across the project. PostHog may report this as null until it is first set.",
 			},
+			"events_retention_months": schema.Int64Attribute{
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "How many months of events this project keeps, overriding the organization's period. Null while the project uses the organization's period. " +
+					"PostHog currently accepts `1`, `3`, `12`, `24`, `36`, `60` and `84`, up to the longest period the organization's plan allows. PostHog checks the value when it's set, so a period it rejects fails the apply. " +
+					"Only organization admins can change it, and Terraform only sends it when it differs from PostHog's value. " +
+					"**A shorter period permanently deletes older events** at PostHog's next monthly cleanup, and they can't be restored. Queries may stop returning those events as soon as the period is set. The plan warns when it may shorten it, and an apply stops if the period changed in PostHog after its plan was made. " +
+					"Removing the attribute leaves the period as it is. To return the project to the organization's period, clear it in PostHog's project settings.",
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
+				},
+			},
 		},
 	}
 }
 
-func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+func (o ProjectSettingsOps) BuildCreateRequest(ctx context.Context, model ProjectSettingsModel) (projectSettingsRequest, diag.Diagnostics) {
 	req, diags := o.buildRequest(ctx, model)
+	req.PlannedFromEventsRetentionMonths = types.Int64Unknown()
 	diags.Append(networkCaptureWarning(model.NetworkPayloadCapture, model.CapturePerformanceOptIn)...)
 	return req, diags
 }
 
-// ModifyResourcePlan plans no change when every configured setting already
-// matches state. Otherwise the plan is left as the framework built it, with the
+// ModifyResourcePlan warns when the plan may shorten the events retention
+// period, then plans no change when every configured setting already matches
+// state. Otherwise the plan is left as the framework built it, with the
 // settings the config leaves out unknown until the update reads them back.
 func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
 		return
 	}
 	var config, state, plan types.Object
@@ -213,10 +252,17 @@ func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource
 	}
 	prior := state.Attributes()
 
-	// A changed project_id is a replacement the framework has already planned.
-	// It is compared plan to state because the config leaves it null when the
-	// provider-level project applies.
-	if !plan.Attributes()["project_id"].Equal(prior["project_id"]) {
+	// Without state for this project, the plan is a create or a replacement the
+	// framework has already planned, and the project's current events retention
+	// period is unknown. project_id is compared plan to state because the config
+	// leaves it null when the provider-level project applies.
+	hasPrior := plan.Attributes()["project_id"].Equal(prior["project_id"])
+	have := types.Int64Unknown()
+	if hasPrior {
+		have = prior["events_retention_months"].(types.Int64)
+	}
+	resp.Diagnostics.Append(shorterRetentionWarning(config.Attributes()["events_retention_months"].(types.Int64), have)...)
+	if !hasPrior {
 		return
 	}
 	for name, configured := range config.Attributes() {
@@ -234,17 +280,49 @@ func (o ProjectSettingsOps) ModifyResourcePlan(ctx context.Context, req resource
 	resp.Plan.Raw = req.State.Raw
 }
 
-func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+// shorterRetentionWarning warns when the configured events retention period may
+// be shorter than the project's current one: PostHog then deletes the older
+// events for good. configured is unknown when it comes from a value only known
+// at apply. have is null while the project uses the organization's period, and
+// unknown when Terraform hasn't read the project's period.
+func shorterRetentionWarning(configured, have types.Int64) diag.Diagnostics {
+	var change string
+	switch {
+	case configured.IsNull():
+		return nil
+	case configured.IsUnknown():
+		change = "sets the project's events retention to a period only known at apply, which may be shorter than its current one"
+	case have.IsUnknown():
+		change = fmt.Sprintf("sets the project's events retention to %d months, replacing its current period in PostHog, which may be longer", configured.ValueInt64())
+	case have.IsNull():
+		change = fmt.Sprintf("sets the project's events retention to %d months, replacing the organization's period, which may be longer", configured.ValueInt64())
+	case configured.ValueInt64() >= have.ValueInt64():
+		return nil
+	default:
+		change = fmt.Sprintf("shortens the project's events retention from %d to %d months", have.ValueInt64(), configured.ValueInt64())
+	}
 	var diags diag.Diagnostics
-	req := httpclient.EnvironmentSettingsRequest{
-		HeatmapsOptIn:              util.BoolPtrFromValue(model.HeatmapsOptIn),
-		AutocaptureExceptionsOptIn: util.BoolPtrFromValue(model.AutocaptureExceptionsOptIn),
-		SessionRecordingOptIn:      util.BoolPtrFromValue(model.SessionRecordingOptIn),
-		SurveysOptIn:               util.BoolPtrFromValue(model.SurveysOptIn),
-		AutocaptureWebVitalsOptIn:  util.BoolPtrFromValue(model.AutocaptureWebVitalsOptIn),
-		CapturePerformanceOptIn:    util.BoolPtrFromValue(model.CapturePerformanceOptIn),
-		AnonymizeIps:               util.BoolPtrFromValue(model.AnonymizeIps),
-		CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
+	diags.AddWarning(
+		"events_retention_months may delete events",
+		"This plan "+change+". Queries may stop returning events older than the new period as soon as it's set, and PostHog permanently deletes them at its next monthly cleanup. Deleted events can't be restored.",
+	)
+	return diags
+}
+
+func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSettingsModel) (projectSettingsRequest, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	req := projectSettingsRequest{
+		EnvironmentSettingsRequest: httpclient.EnvironmentSettingsRequest{
+			HeatmapsOptIn:              util.BoolPtrFromValue(model.HeatmapsOptIn),
+			AutocaptureExceptionsOptIn: util.BoolPtrFromValue(model.AutocaptureExceptionsOptIn),
+			SessionRecordingOptIn:      util.BoolPtrFromValue(model.SessionRecordingOptIn),
+			SurveysOptIn:               util.BoolPtrFromValue(model.SurveysOptIn),
+			AutocaptureWebVitalsOptIn:  util.BoolPtrFromValue(model.AutocaptureWebVitalsOptIn),
+			CapturePerformanceOptIn:    util.BoolPtrFromValue(model.CapturePerformanceOptIn),
+			AnonymizeIps:               util.BoolPtrFromValue(model.AnonymizeIps),
+			CookielessServerHashMode:   util.Int64PtrFromValue(model.CookielessServerHashMode),
+		},
+		EventsRetentionMonths: model.EventsRetentionMonths,
 	}
 
 	// An unset block stays nil so the PATCH omits the field entirely (leave
@@ -287,8 +365,9 @@ func (o ProjectSettingsOps) buildRequest(ctx context.Context, model ProjectSetti
 	return req, diags
 }
 
-func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, state ProjectSettingsModel) (httpclient.EnvironmentSettingsRequest, diag.Diagnostics) {
+func (o ProjectSettingsOps) BuildUpdateRequest(ctx context.Context, plan, state ProjectSettingsModel) (projectSettingsRequest, diag.Diagnostics) {
 	req, diags := o.buildRequest(ctx, plan)
+	req.PlannedFromEventsRetentionMonths = state.EventsRetentionMonths
 	// An omitted capture_performance_opt_in is unknown in an update plan, so the
 	// warning goes by the value PostHog last reported. The request still omits it.
 	capturePerformance := plan.CapturePerformanceOptIn
@@ -318,7 +397,7 @@ func networkCaptureWarning(payload types.Object, capturePerformance types.Bool) 
 	return diags
 }
 
-func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpclient.Environment, model *ProjectSettingsModel) diag.Diagnostics {
+func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp projectSettingsResponse, model *ProjectSettingsModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	// Before overwriting state, detect any setting the user explicitly configured
@@ -412,6 +491,7 @@ func (o ProjectSettingsOps) MapResponseToModel(ctx context.Context, resp httpcli
 	}
 
 	model.TestAccountFiltersDefaultChecked = core.PtrToBool(resp.TestAccountFiltersDefaultChecked)
+	model.EventsRetentionMonths = resp.EventsRetentionMonths
 
 	return diags
 }
@@ -442,17 +522,90 @@ func networkPayloadCaptureDiverged(ctx context.Context, configured types.Object,
 		util.BoolDiverged(cfg.RecordBody, server.RecordBody)
 }
 
-func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, error) {
-	result, _, err := client.UpdateEnvironment(ctx, model.GetEffectiveProjectID(), req)
+func (o ProjectSettingsOps) Create(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req projectSettingsRequest) (projectSettingsResponse, error) {
+	result, _, err := o.Update(ctx, client, model, req)
 	return result, err
 }
 
-func (o ProjectSettingsOps) Read(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel) (httpclient.Environment, httpclient.HTTPStatusCode, error) {
-	return client.GetEnvironment(ctx, model.GetEffectiveProjectID())
+func (o ProjectSettingsOps) Read(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel) (projectSettingsResponse, httpclient.HTTPStatusCode, error) {
+	env, status, err := client.GetEnvironment(ctx, model.GetEffectiveProjectID())
+	if err != nil {
+		return projectSettingsResponse{}, status, err
+	}
+	months, _, err := readEventsRetention(ctx, client, model.GetEffectiveProjectID())
+	return projectSettingsResponse{Environment: env, EventsRetentionMonths: months}, status, err
 }
 
-func (o ProjectSettingsOps) Update(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req httpclient.EnvironmentSettingsRequest) (httpclient.Environment, httpclient.HTTPStatusCode, error) {
-	return client.UpdateEnvironment(ctx, model.GetEffectiveProjectID(), req)
+// Update PATCHes the environment, then sets the events retention period when
+// it differs from PostHog's. If the set fails, the environment change has
+// already applied; the next apply sends both again.
+//
+// A set needs an organization admin and can delete events, so the period is
+// never sent unchanged, and the apply stops before any write when PostHog's
+// period is neither the one the plan was made against nor the one it sets:
+// someone changed it after the plan, which never showed or warned about it.
+func (o ProjectSettingsOps) Update(ctx context.Context, client httpclient.PosthogClient, model ProjectSettingsModel, req projectSettingsRequest) (projectSettingsResponse, httpclient.HTTPStatusCode, error) {
+	projectID := model.GetEffectiveProjectID()
+	months, found, err := readEventsRetention(ctx, client, projectID)
+	if err != nil {
+		return projectSettingsResponse{}, 0, err
+	}
+	want := req.EventsRetentionMonths
+	if core.IsKnown(want) && !found {
+		return projectSettingsResponse{}, 0, fmt.Errorf("PostHog returned 404 for /api/projects/%s/events_retention/, which events_retention_months needs: "+
+			"the project doesn't exist or this API key can't see it, or this PostHog version predates the events retention endpoint", projectID)
+	}
+	setsPeriod := core.IsKnown(want) && !want.Equal(months)
+	if from := req.PlannedFromEventsRetentionMonths; setsPeriod && !from.IsUnknown() && !from.Equal(months) {
+		return projectSettingsResponse{}, 0, fmt.Errorf(
+			"events_retention_months is %s in PostHog, but this plan was made when it was %s. Run terraform plan again, with refresh enabled, to review the change",
+			describeRetention(months), describeRetention(from))
+	}
+	env, status, err := client.UpdateEnvironment(ctx, projectID, req.EnvironmentSettingsRequest)
+	if err != nil {
+		return projectSettingsResponse{}, status, err
+	}
+	if setsPeriod {
+		tflog.Info(ctx, "setting events retention", map[string]any{
+			"project_id": projectID,
+			"from":       describeRetention(months),
+			"to":         describeRetention(want),
+		})
+		updated, _, err := client.SetEventsRetention(ctx, projectID, httpclient.EventsRetentionRequest{RetentionMonths: want.ValueInt64()})
+		if err != nil {
+			// Not the set's own status: the generic update takes a 404 to mean
+			// the settings are gone and drops them from state.
+			return projectSettingsResponse{}, status, fmt.Errorf("the other settings were saved, but setting events_retention_months to %d failed: %w", want.ValueInt64(), err)
+		}
+		months = util.PtrToInt64(updated.ProjectRetentionMonths)
+	}
+	return projectSettingsResponse{Environment: env, EventsRetentionMonths: months}, status, nil
+}
+
+// describeRetention names a project's events retention period for messages.
+func describeRetention(months types.Int64) string {
+	if months.IsNull() {
+		return "the organization's period"
+	}
+	return fmt.Sprintf("%d months", months.ValueInt64())
+}
+
+// readEventsRetention returns the project's own events retention period, or null
+// while it uses the organization's, and whether PostHog has the events
+// retention endpoint. Older self-hosted versions answer 404; that reads as no
+// period so existing configurations keep refreshing.
+func readEventsRetention(ctx context.Context, client httpclient.PosthogClient, projectID string) (types.Int64, bool, error) {
+	current, status, err := client.GetEventsRetention(ctx, projectID)
+	if status == http.StatusNotFound {
+		tflog.Warn(ctx, "events retention endpoint not found; reading events_retention_months as null", map[string]any{
+			"project_id": projectID,
+		})
+		return types.Int64Null(), false, nil
+	}
+	if err != nil {
+		return types.Int64Null(), false, fmt.Errorf("failed to read events retention: %w", err)
+	}
+	return util.PtrToInt64(current.ProjectRetentionMonths), true, nil
 }
 
 func (o ProjectSettingsOps) Delete(ctx context.Context, _ httpclient.PosthogClient, model ProjectSettingsModel) (httpclient.HTTPStatusCode, error) {

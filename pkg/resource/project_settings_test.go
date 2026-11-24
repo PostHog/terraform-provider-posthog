@@ -10,6 +10,8 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	tfresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -43,6 +45,7 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	model.CookielessServerHashMode = types.Int64Value(2)
 	model.AutocaptureWebVitalsOptIn = types.BoolValue(true)
 	model.AnonymizeIps = types.BoolValue(true)
+	model.EventsRetentionMonths = types.Int64Value(12)
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -61,6 +64,7 @@ func TestProjectSettingsBuildCreateRequest_AllFields(t *testing.T) {
 	assert.True(t, *req.AutocaptureWebVitalsOptIn)
 	require.NotNil(t, req.AnonymizeIps)
 	assert.True(t, *req.AnonymizeIps)
+	assert.Equal(t, types.Int64Value(12), req.EventsRetentionMonths)
 }
 
 // TestProjectSettingsBuildCreateRequest_ZeroValues guards the zero-value path:
@@ -100,6 +104,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	model.RecordingDomains = types.ListUnknown(types.StringType)
 	model.TestAccountFilters = core.NewNormalizedJSONUnknown()
 	model.TestAccountFiltersDefaultChecked = types.BoolUnknown()
+	model.EventsRetentionMonths = types.Int64Unknown()
 
 	req, diags := ops.BuildCreateRequest(context.Background(), model)
 
@@ -118,6 +123,7 @@ func TestProjectSettingsBuildCreateRequest_SubsetSet(t *testing.T) {
 	assert.Nil(t, req.RecordingDomains)
 	assert.Nil(t, req.TestAccountFilters)
 	assert.Nil(t, req.TestAccountFiltersDefaultChecked)
+	assert.True(t, req.EventsRetentionMonths.IsUnknown())
 
 	body, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -266,7 +272,7 @@ func TestProjectSettingsBuildUpdateRequest_NetworkCaptureWarning(t *testing.T) {
 					RecordHeaders: new(true),
 					RecordBody:    new(false),
 				},
-			}, req)
+			}, req.EnvironmentSettingsRequest)
 		})
 	}
 }
@@ -350,7 +356,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 	}
 
 	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp, EventsRetentionMonths: types.Int64Value(24)}, &model)
 
 	assert.False(t, diags.HasError())
 	assert.Equal(t, testProjectSettingsProjectID, model.ID.ValueString())
@@ -361,6 +367,7 @@ func TestProjectSettingsMapResponseToModel_AllFields(t *testing.T) {
 	assert.Equal(t, int64(1), model.CookielessServerHashMode.ValueInt64())
 	assert.True(t, model.AutocaptureWebVitalsOptIn.ValueBool())
 	assert.True(t, model.AnonymizeIps.ValueBool())
+	assert.Equal(t, types.Int64Value(24), model.EventsRetentionMonths)
 }
 
 // TestProjectSettingsMapResponseToModel_ZeroValues ensures a returned 0 / false
@@ -374,7 +381,7 @@ func TestProjectSettingsMapResponseToModel_ZeroValues(t *testing.T) {
 	}
 
 	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
 
 	assert.False(t, diags.HasError())
 	require.False(t, model.HeatmapsOptIn.IsNull(), "explicit false must map to a known value, not null")
@@ -388,7 +395,7 @@ func TestProjectSettingsMapResponseToModel_NilFieldsBecomeNull(t *testing.T) {
 	resp := httpclient.Environment{ID: 123}
 
 	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
 
 	assert.False(t, diags.HasError())
 	assert.True(t, model.HeatmapsOptIn.IsNull())
@@ -402,6 +409,7 @@ func TestProjectSettingsMapResponseToModel_NilFieldsBecomeNull(t *testing.T) {
 	assert.True(t, model.NetworkPayloadCapture.IsNull())
 	assert.True(t, model.TestAccountFilters.IsNull())
 	assert.True(t, model.TestAccountFiltersDefaultChecked.IsNull())
+	assert.True(t, model.EventsRetentionMonths.IsNull())
 }
 
 func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testing.T) {
@@ -416,7 +424,7 @@ func TestProjectSettingsMapResponseToModel_NetworkPayloadCapturePresent(t *testi
 	}
 
 	model := newProjectSettingsModel()
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
 
 	assert.False(t, diags.HasError())
 	assert.True(t, model.CapturePerformanceOptIn.ValueBool())
@@ -438,7 +446,7 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 		model := newProjectSettingsModel()
 		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{ID: 123}, &model)
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{ID: 123}}, &model)
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "session_recording_network_payload_capture_config")
@@ -448,13 +456,13 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 		model := newProjectSettingsModel()
 		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, true)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{
 			ID: 123,
 			SessionRecordingNetworkPayloadCaptureConfig: &httpclient.NetworkPayloadCaptureConfig{
 				RecordHeaders: util.BoolPtr(true),
 				RecordBody:    util.BoolPtr(false),
 			},
-		}, &model)
+		}}, &model)
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "session_recording_network_payload_capture_config")
@@ -464,10 +472,10 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 		model := newProjectSettingsModel()
 		model.CapturePerformanceOptIn = types.BoolValue(true)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{
 			ID:                      123,
 			CapturePerformanceOptIn: util.BoolPtr(false),
-		}, &model)
+		}}, &model)
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "capture_performance_opt_in")
@@ -477,10 +485,10 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 		model := newProjectSettingsModel()
 		model.AnonymizeIps = types.BoolValue(true)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{
 			ID:           123,
 			AnonymizeIps: util.BoolPtr(false),
-		}, &model)
+		}}, &model)
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "anonymize_ips")
@@ -495,13 +503,13 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 			map[string]attr.Value{"record_headers": types.StringValue("not-a-bool"), "record_body": types.BoolValue(true)},
 		)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{
 			ID: 123,
 			SessionRecordingNetworkPayloadCaptureConfig: &httpclient.NetworkPayloadCaptureConfig{
 				RecordHeaders: util.BoolPtr(true),
 				RecordBody:    util.BoolPtr(true),
 			},
-		}, &model)
+		}}, &model)
 
 		require.Equal(t, 1, diags.WarningsCount())
 		assert.Contains(t, diags.Warnings()[0].Detail(), "session_recording_network_payload_capture_config")
@@ -512,14 +520,14 @@ func TestProjectSettingsMapResponseToModel_DivergenceWarning(t *testing.T) {
 		model.CapturePerformanceOptIn = types.BoolValue(true)
 		model.NetworkPayloadCapture = networkPayloadCaptureObject(t, true, false)
 
-		diags := ops.MapResponseToModel(context.Background(), httpclient.Environment{
+		diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: httpclient.Environment{
 			ID:                      123,
 			CapturePerformanceOptIn: util.BoolPtr(true),
 			SessionRecordingNetworkPayloadCaptureConfig: &httpclient.NetworkPayloadCaptureConfig{
 				RecordHeaders: util.BoolPtr(true),
 				RecordBody:    util.BoolPtr(false),
 			},
-		}, &model)
+		}}, &model)
 
 		assert.Equal(t, 0, diags.WarningsCount())
 	})
@@ -593,7 +601,7 @@ func TestProjectSettingsMapResponseToModel_TestAccountFiltersStripsCohortName(t 
 	model := newProjectSettingsModel()
 	// The user configured the filter WITHOUT cohort_name.
 	model.TestAccountFilters = core.NewNormalizedJSONValue(cohortFilterJSON)
-	diags := ops.MapResponseToModel(context.Background(), resp, &model)
+	diags := ops.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
 
 	assert.False(t, diags.HasError())
 	require.False(t, model.TestAccountFilters.IsNull())
@@ -627,43 +635,238 @@ func TestProjectSettingsHasValidID(t *testing.T) {
 	assert.False(t, empty.HasValidID())
 }
 
-func TestProjectSettingsCRUDFlow(t *testing.T) {
-	// Verifies Create (PATCH) and Update (PATCH) hit the environment endpoint and
-	// Read (GET) maps the response back.
+// fakeProjectSettingsAPI serves the environment and events retention endpoints
+// for one project and records the calls made to them.
+type fakeProjectSettingsAPI struct {
+	t *testing.T
+	// retentionMonths is the project's events retention period on the server.
+	retentionMonths *int64
+	// getStatus and postStatus, when set, are returned by the retention read and set instead of a result.
+	getStatus  int
+	postStatus int
+	calls      []string
+	posted     []int64
+}
+
+func (f *fakeProjectSettingsAPI) client() httpclient.PosthogClient {
 	envPath := "/api/environments/" + testProjectSettingsProjectID + "/"
+	retentionPath := "/api/projects/" + testProjectSettingsProjectID + "/events_retention/"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, envPath, r.URL.Path)
-		switch r.Method {
-		case http.MethodPatch, http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.NewEncoder(w).Encode(httpclient.Environment{
-				ID:            123,
-				HeatmapsOptIn: util.BoolPtr(true),
-			}))
+		f.calls = append(f.calls, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == envPath && (r.Method == http.MethodPatch || r.Method == http.MethodGet):
+			assert.NoError(f.t, json.NewEncoder(w).Encode(httpclient.Environment{ID: 123, HeatmapsOptIn: util.BoolPtr(true)}))
+		case r.URL.Path == retentionPath && r.Method == http.MethodGet && f.getStatus != 0:
+			w.WriteHeader(f.getStatus)
+			_, _ = w.Write([]byte(`{"detail":"retention unavailable"}`))
+		case r.URL.Path == retentionPath && r.Method == http.MethodPost && f.postStatus != 0:
+			w.WriteHeader(f.postStatus)
+			_, _ = w.Write([]byte(`{"detail":"Your organization access level is insufficient."}`))
+		case r.URL.Path == retentionPath && r.Method == http.MethodPost:
+			var body httpclient.EventsRetentionRequest
+			assert.NoError(f.t, json.NewDecoder(r.Body).Decode(&body))
+			f.posted = append(f.posted, body.RetentionMonths)
+			f.retentionMonths = &body.RetentionMonths
+			assert.NoError(f.t, json.NewEncoder(w).Encode(httpclient.EventsRetention{ProjectRetentionMonths: f.retentionMonths}))
+		case r.URL.Path == retentionPath && r.Method == http.MethodGet:
+			assert.NoError(f.t, json.NewEncoder(w).Encode(httpclient.EventsRetention{ProjectRetentionMonths: f.retentionMonths}))
 		default:
-			t.Fatalf("unexpected method: %s", r.Method)
+			f.t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusTeapot)
 		}
 	}))
-	defer server.Close()
+	f.t.Cleanup(server.Close)
+	return httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+}
 
-	client := httpclient.NewClient(server.Client(), server.URL, "test-key", "test")
+func TestProjectSettingsCRUDFlow(t *testing.T) {
+	patchEnv := "PATCH /api/environments/" + testProjectSettingsProjectID + "/"
+	getRetention := "GET /api/projects/" + testProjectSettingsProjectID + "/events_retention/"
+	postRetention := "POST /api/projects/" + testProjectSettingsProjectID + "/events_retention/"
+	// setTo12 sets the period to 12 months, from a plan made against plannedFrom.
+	setTo12 := func(plannedFrom types.Int64) projectSettingsRequest {
+		return projectSettingsRequest{EventsRetentionMonths: types.Int64Value(12), PlannedFromEventsRetentionMonths: plannedFrom}
+	}
+
+	t.Run("create without a period reads it and does not set it", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(24))}
+		client := api.client()
+
+		created, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), projectSettingsRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, []string{getRetention, patchEnv}, api.calls)
+		assert.Equal(t, types.Int64Value(24), created.EventsRetentionMonths)
+		require.NotNil(t, created.HeatmapsOptIn)
+	})
+
+	t.Run("a different period is set after the environment", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t}
+		client := api.client()
+
+		updated, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Null()))
+		require.NoError(t, err)
+		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
+		assert.Equal(t, []int64{12}, api.posted)
+		assert.Equal(t, types.Int64Value(12), updated.EventsRetentionMonths)
+	})
+
+	for _, test := range []struct {
+		name        string
+		plannedFrom types.Int64
+		want        string
+	}{
+		{"a plan that keeps the period", types.Int64Value(12), "events_retention_months is 84 months in PostHog, but this plan was made when it was 12 months"},
+		{"a plan that changes the period", types.Int64Value(24), "events_retention_months is 84 months in PostHog, but this plan was made when it was 24 months"},
+		{"a plan made against the organization's period", types.Int64Null(), "but this plan was made when it was the organization's period"},
+	} {
+		t.Run(test.name+" stops before any write when the period changed in PostHog after the plan", func(t *testing.T) {
+			api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(84))}
+			client := api.client()
+
+			_, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(test.plannedFrom))
+			require.ErrorContains(t, err, test.want)
+			assert.Equal(t, []string{getRetention}, api.calls)
+		})
+	}
+
+	t.Run("a period PostHog already has is not sent, even when it changed there after the plan", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(12))}
+		client := api.client()
+
+		updated, _, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Value(24)))
+		require.NoError(t, err)
+		assert.Equal(t, []string{getRetention, patchEnv}, api.calls)
+		assert.Equal(t, types.Int64Value(12), updated.EventsRetentionMonths)
+	})
+
+	t.Run("a create replaces whatever period PostHog has", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, retentionMonths: new(int64(84))}
+		client := api.client()
+
+		created, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
+		require.NoError(t, err)
+		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
+		assert.Equal(t, []int64{12}, api.posted)
+		assert.Equal(t, types.Int64Value(12), created.EventsRetentionMonths)
+	})
+
+	t.Run("read without a retention endpoint reads no period", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusNotFound}
+		client := api.client()
+
+		read, status, err := ProjectSettingsOps{}.Read(context.Background(), client, newProjectSettingsModel())
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, int(status))
+		assert.True(t, read.EventsRetentionMonths.IsNull())
+		require.NotNil(t, read.HeatmapsOptIn)
+	})
+
+	t.Run("a configured period fails without a retention endpoint", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusNotFound}
+		client := api.client()
+
+		_, err := ProjectSettingsOps{}.Create(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Unknown()))
+		require.ErrorContains(t, err, "PostHog returned 404 for /api/projects/"+testProjectSettingsProjectID+"/events_retention/, which events_retention_months needs")
+		assert.Equal(t, []string{getRetention}, api.calls, "a configured period must fail before any write")
+	})
+
+	t.Run("a refused set fails after the environment applied", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, postStatus: http.StatusForbidden}
+		client := api.client()
+
+		_, status, err := ProjectSettingsOps{}.Update(context.Background(), client, newProjectSettingsModel(), setTo12(types.Int64Null()))
+		require.ErrorContains(t, err, "the other settings were saved, but setting events_retention_months to 12 failed")
+		require.ErrorContains(t, err, "Your organization access level is insufficient.")
+		assert.Equal(t, []string{getRetention, patchEnv, postRetention}, api.calls)
+		assert.Equal(t, http.StatusOK, int(status), "the set's own status must not decide whether the settings still exist")
+	})
+
+	t.Run("read fails when the retention read fails", func(t *testing.T) {
+		api := &fakeProjectSettingsAPI{t: t, getStatus: http.StatusInternalServerError}
+		client := api.client()
+
+		_, _, err := ProjectSettingsOps{}.Read(context.Background(), client, newProjectSettingsModel())
+		require.ErrorContains(t, err, "failed to read events retention")
+	})
+}
+
+// TestProjectSettingsRequest_PlannedFromEventsRetentionMonths covers the period
+// Update compares PostHog's against to stop a stale plan.
+func TestProjectSettingsRequest_PlannedFromEventsRetentionMonths(t *testing.T) {
+	plan, state := newProjectSettingsModel(), newProjectSettingsModel()
+	plan.EventsRetentionMonths, state.EventsRetentionMonths = types.Int64Value(12), types.Int64Value(24)
+
+	update, diags := ProjectSettingsOps{}.BuildUpdateRequest(context.Background(), plan, state)
+	require.False(t, diags.HasError())
+	assert.Equal(t, types.Int64Value(24), update.PlannedFromEventsRetentionMonths)
+
+	create, diags := ProjectSettingsOps{}.BuildCreateRequest(context.Background(), plan)
+	require.False(t, diags.HasError())
+	assert.True(t, create.PlannedFromEventsRetentionMonths.IsUnknown(), "a create has no period its plan was made against")
+}
+
+func TestProjectSettingsEventsRetentionMonthsValidator(t *testing.T) {
+	attribute := ProjectSettingsOps{}.Schema().Attributes["events_retention_months"].(schema.Int64Attribute)
+	require.Len(t, attribute.Validators, 1)
+	// PostHog decides which periods it accepts, so any positive value plans.
+	for months, valid := range map[int64]bool{0: false, 1: true, 120: true} {
+		resp := &validator.Int64Response{}
+		attribute.Validators[0].ValidateInt64(context.Background(), validator.Int64Request{ConfigValue: types.Int64Value(months)}, resp)
+		assert.Equal(t, !valid, resp.Diagnostics.HasError(), "%d months", months)
+	}
+}
+
+func TestProjectSettingsModifyPlanRetentionWarning(t *testing.T) {
+	ctx := context.Background()
 	ops := ProjectSettingsOps{}
-	model := newProjectSettingsModel()
-	model.HeatmapsOptIn = types.BoolValue(true)
+	s := ops.Schema()
+	objectType := s.Type().TerraformType(ctx).(tftypes.Object)
+	settingsFor := func(projectID string, retention any) tftypes.Value {
+		values := make(map[string]tftypes.Value)
+		for name, attributeType := range objectType.AttributeTypes {
+			values[name] = tftypes.NewValue(attributeType, nil)
+		}
+		values["id"] = tftypes.NewValue(tftypes.String, projectID)
+		values["project_id"] = tftypes.NewValue(tftypes.String, projectID)
+		values["events_retention_months"] = tftypes.NewValue(tftypes.Number, retention)
+		return tftypes.NewValue(objectType, values)
+	}
+	settings := func(retention any) tftypes.Value { return settingsFor("123", retention) }
+	noState := tftypes.NewValue(objectType, nil)
+	for _, test := range []struct {
+		name       string
+		state      tftypes.Value
+		configured any
+		want       string
+	}{
+		{"shorter period", settings(24), 12, "from 24 to 12 months"},
+		{"longer period", settings(12), 24, ""},
+		{"unchanged period", settings(12), 12, ""},
+		{"omitted period", settings(12), nil, ""},
+		{"period only known at apply", settings(24), tftypes.UnknownValue, "a period only known at apply"},
+		{"replaces the organization's period", settings(nil), 12, "replacing the organization's period"},
+		{"first apply", noState, 12, "replacing its current period in PostHog"},
+		{"omitted on first apply", noState, nil, ""},
+		{"replacement by another project", settingsFor("456", 24), 12, "replacing its current period in PostHog"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := tfresource.ModifyPlanRequest{
+				Config: tfsdk.Config{Schema: s, Raw: settings(test.configured)},
+				State:  tfsdk.State{Schema: s, Raw: test.state},
+				Plan:   tfsdk.Plan{Schema: s, Raw: settings(test.configured)},
+			}
+			resp := tfresource.ModifyPlanResponse{Plan: req.Plan}
 
-	created, err := ops.Create(context.Background(), client, model, httpclient.EnvironmentSettingsRequest{HeatmapsOptIn: util.BoolPtr(true)})
-	require.NoError(t, err)
-	require.NotNil(t, created.HeatmapsOptIn)
-	assert.True(t, *created.HeatmapsOptIn)
+			ops.ModifyResourcePlan(ctx, req, &resp)
 
-	read, status, err := ops.Read(context.Background(), client, model)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, int(status))
-	require.NotNil(t, read.HeatmapsOptIn)
-	assert.True(t, *read.HeatmapsOptIn)
-
-	updated, status, err := ops.Update(context.Background(), client, model, httpclient.EnvironmentSettingsRequest{HeatmapsOptIn: util.BoolPtr(true)})
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, int(status))
-	require.NotNil(t, updated.HeatmapsOptIn)
+			require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+			if test.want == "" {
+				assert.Zero(t, resp.Diagnostics.WarningsCount())
+				return
+			}
+			require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+			assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), test.want)
+		})
+	}
 }
