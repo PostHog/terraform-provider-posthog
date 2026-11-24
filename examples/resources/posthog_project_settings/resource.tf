@@ -46,6 +46,11 @@ resource "posthog_project_settings" "example" {
   ])
   # Apply the filters above by default across the project.
   test_account_filters_default_checked = true
+
+  # Keep 12 months of events, overriding the organization's period. Only
+  # organization admins can change it. Careful: a shorter period permanently
+  # deletes older events at PostHog's next monthly cleanup.
+  events_retention_months = 12
 }
 
 # Use the provider-level project_id and manage only a subset of settings.

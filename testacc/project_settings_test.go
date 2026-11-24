@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/util"
 )
 
 func TestProjectSettings_Basic(t *testing.T) {
@@ -384,4 +386,88 @@ resource "posthog_project_settings" "test" {
   }
 }
 `
+}
+
+// TestProjectSettings_EventsRetention runs on a throwaway project, because a
+// shorter events retention period deletes older events at PostHog's next
+// monthly cleanup. It sets a period, imports it, changes it, then drops the
+// attribute while another setting changes, which must leave the period alone.
+func TestProjectSettings_EventsRetention(t *testing.T) {
+	skipIfNotAcceptance(t)
+	testAccProjectPreCheck(t)
+
+	ctx := context.Background()
+	client := testAccAPIClient()
+	orgID := getOrganizationID()
+	project, err := client.CreateProject(ctx, orgID, httpclient.ProjectRequest{Name: util.StringPtr(acctest.RandomWithPrefix("tf-acc-retention"))})
+	if err != nil {
+		t.Fatalf("failed to create project via API: %s", err)
+	}
+	projectID := strconv.FormatInt(project.ID, 10)
+	t.Cleanup(func() {
+		if _, err := client.DeleteProject(ctx, orgID, projectID); err != nil {
+			t.Logf("failed to delete test project %s, delete it by hand: %s", projectID, err)
+		}
+	})
+
+	retentionOnPostHog := func(want int64) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			got, _, err := client.GetEventsRetention(ctx, projectID)
+			if err != nil {
+				return fmt.Errorf("reading events retention: %w", err)
+			}
+			if got.ProjectRetentionMonths == nil || *got.ProjectRetentionMonths != want {
+				return fmt.Errorf("expected PostHog to report events retention %d, got %v", want, got.ProjectRetentionMonths)
+			}
+			return nil
+		}
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccProjectPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccProjectSettingsConfigEventsRetention(projectID, false, "events_retention_months = 12"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "events_retention_months", "12"),
+					retentionOnPostHog(12),
+				),
+			},
+			{
+				ResourceName:            "posthog_project_settings.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateId:           projectID,
+				ImportStateVerifyIgnore: []string{"project_id"},
+			},
+			{
+				Config: testAccProjectSettingsConfigEventsRetention(projectID, false, "events_retention_months = 3"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "events_retention_months", "3"),
+					retentionOnPostHog(3),
+				),
+			},
+			{
+				Config: testAccProjectSettingsConfigEventsRetention(projectID, true, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "heatmaps_opt_in", "true"),
+					resource.TestCheckResourceAttr("posthog_project_settings.test", "events_retention_months", "3"),
+					retentionOnPostHog(3),
+				),
+			},
+		},
+	})
+}
+
+func testAccProjectSettingsConfigEventsRetention(projectID string, heatmaps bool, retention string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_project_settings" "test" {
+  project_id      = %q
+  heatmaps_opt_in = %t
+  %s
+}
+`, projectID, heatmaps, retention)
 }

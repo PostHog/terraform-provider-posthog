@@ -160,7 +160,7 @@ func TestProjectSettingsTestAccountFilters_WholeNumberFloatMatchesAPIInteger(t *
 	resp := decodeAPIResponse[httpclient.Environment](t,
 		`{"id":1,"test_account_filters":[{"key":"$session_duration","operator":"gt","type":"event","value":60}]}`)
 
-	diags := ProjectSettingsOps{}.MapResponseToModel(context.Background(), resp, &model)
+	diags := ProjectSettingsOps{}.MapResponseToModel(context.Background(), projectSettingsResponse{Environment: resp}, &model)
 	require.False(t, diags.HasError(), diags.Errors())
 
 	assertStateMatchesConfig(t, model.TestAccountFilters, configJSON)
