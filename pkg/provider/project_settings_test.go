@@ -46,8 +46,10 @@ func TestProjectSettingsSavedPlanKeepsOmittedSettings(t *testing.T) {
 	retentionMonths := 24
 	var retentionPosts []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isEnvironment := r.URL.Path == "/api/environments/123/"
 		isRetention := r.URL.Path == "/api/projects/123/events_retention/"
-		if (!isRetention && r.URL.Path != "/api/environments/123/") || r.Header.Get("Authorization") != "Bearer test-api-key" {
+		authorized := r.Header.Get("Authorization") == "Bearer test-api-key"
+		if !authorized || (!isEnvironment && !isRetention) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
