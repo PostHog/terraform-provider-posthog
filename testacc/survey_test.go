@@ -312,7 +312,7 @@ func TestSurvey_TargetingFilters(t *testing.T) {
 		CheckDestroy:             testAccCheckSurveyDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: testAccSurveyTargetingFilters(rName, 50),
+				Config: testAccSurveyTargetingFilters(rName, testAccRolloutFilters(50)),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_id"),
 					resource.TestCheckResourceAttrSet(testSurveyResourceName, "targeting_flag_json"),
@@ -320,8 +320,12 @@ func TestSurvey_TargetingFilters(t *testing.T) {
 				),
 			},
 			{
-				Config: testAccSurveyTargetingFilters(rName, 25),
+				Config: testAccSurveyTargetingFilters(rName, testAccRolloutFilters(25)),
 				Check:  checkRollout(25),
+			},
+			{
+				Config: testAccSurveyTargetingFilters(rName, "{}"),
+				Check:  resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_json"),
 			},
 			{
 				Config: testAccSurveyBasic(rName),
@@ -350,7 +354,11 @@ func testAccCheckSurvey(check func(httpclient.Survey) error) resource.TestCheckF
 	}
 }
 
-func testAccSurveyTargetingFilters(name string, rollout int) string {
+func testAccRolloutFilters(rollout int) string {
+	return fmt.Sprintf("{ groups = [{ properties = [], rollout_percentage = %d }] }", rollout)
+}
+
+func testAccSurveyTargetingFilters(name, filters string) string {
 	return fmt.Sprintf(`
 provider "posthog" {}
 
@@ -363,11 +371,9 @@ resource "posthog_survey" "test" {
       question = "How satisfied are you?"
     }
   ])
-  targeting_flag_filters_json = jsonencode({
-    groups = [{ properties = [], rollout_percentage = %d }]
-  })
+  targeting_flag_filters_json = jsonencode(%s)
 }
-`, name, rollout)
+`, name, filters)
 }
 
 func testAccSurveyBasic(name string) string {

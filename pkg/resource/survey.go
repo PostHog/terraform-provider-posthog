@@ -132,7 +132,7 @@ func (o SurveyOps) Schema() schema.Schema {
 			},
 			"targeting_flag_filters_json": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "JSON object describing targeting flag filters. PostHog creates a feature flag from them; its ID is in `targeting_flag_json`, and `targeting_flag_id` stays unset. Removing this attribute deletes that flag. This input is write-only in the PostHog API and is preserved from Terraform state when configured.",
+				MarkdownDescription: "JSON object describing targeting flag filters. PostHog creates a feature flag from them; its ID is in `targeting_flag_json`, and `targeting_flag_id` stays unset. Removing this attribute, or setting it to `jsonencode({})`, deletes that flag unless you set `targeting_flag_id` instead. This input is write-only in the PostHog API and is preserved from Terraform state when configured.",
 			},
 			"questions_json": schema.StringAttribute{
 				CustomType:          core.NormalizedJSONType{},
@@ -150,7 +150,7 @@ func (o SurveyOps) Schema() schema.Schema {
 				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "JSON object describing survey appearance settings. If unset, the survey keeps the appearance it has in PostHog, which adds a default thank-you message to new surveys. Removing this attribute keeps the current appearance; set it to `jsonencode({})` to clear it.",
+				MarkdownDescription: "JSON object describing survey appearance settings. If unset, the survey keeps the appearance it has in PostHog, which adds a default thank-you message to new surveys. Removing this attribute keeps the current appearance; changing it to `jsonencode({})` on an existing survey clears it.",
 			},
 			"start_date": schema.StringAttribute{
 				Optional:            true,
@@ -381,26 +381,38 @@ func applySurveyBooleanFields(plan SurveyTFModel, req *httpclient.SurveyRequest)
 // applySurveyTargeting sends the configured targeting filters, or removes the targeting
 // flag when the config no longer sets targeting_flag_id or targeting_flag_filters_json.
 func applySurveyTargeting(plan, state SurveyTFModel, req *httpclient.SurveyRequest) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	if core.IsKnown(plan.TargetingFlagFiltersJSON) {
-		// PostHog applies filters to the flag the survey already targets, so dropping
-		// targeting_flag_id in favor of filters would rewrite a flag managed elsewhere.
-		if plan.TargetingFlagID.IsNull() && core.IsKnown(state.TargetingFlagID) && !isSurveyOwnedFlag(state.TargetingFlagJSON) {
-			diags.AddError("Cannot replace targeting_flag_id with targeting_flag_filters_json",
-				fmt.Sprintf("PostHog would overwrite the filters of feature flag %d, which this survey targets but does not own. "+
-					"Keep targeting_flag_id and change the filters on that feature flag instead.", state.TargetingFlagID.ValueInt64()))
-			return diags
-		}
-		req.TargetingFlagFilters, diags = parseJSONAttribute(plan.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
+	filters, diags := parseJSONAttribute(plan.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
+	if diags.HasError() {
 		return diags
 	}
 
-	if plan.TargetingFlagID.IsNull() && (core.IsKnown(state.TargetingFlagID) || core.IsKnown(state.TargetingFlagFiltersJSON)) {
+	if hasTargetingFilters(plan) {
+		// PostHog applies filters to the flag the survey already targets, before it changes
+		// targeting_flag_id. Unless the config keeps that flag, they would rewrite a flag
+		// managed elsewhere.
+		if core.IsKnown(state.TargetingFlagID) && !plan.TargetingFlagID.Equal(state.TargetingFlagID) && !isSurveyOwnedFlag(state.TargetingFlagJSON) {
+			diags.AddError("Cannot apply targeting_flag_filters_json to another feature flag",
+				fmt.Sprintf("PostHog would overwrite the filters of feature flag %d. The survey targets that flag, but its key does not start with %q, "+
+					"so it may be used elsewhere. Remove targeting_flag_filters_json, set targeting_flag_id to the flag the survey should target, "+
+					"and change the filters on that feature flag instead.", state.TargetingFlagID.ValueInt64(), surveyTargetingFlagKeyPrefix))
+			return diags
+		}
+		req.TargetingFlagFilters = filters
+		return diags
+	}
+
+	if plan.TargetingFlagID.IsNull() && (core.IsKnown(state.TargetingFlagID) || hasTargetingFilters(state)) {
 		removeTargetingFlag := true
 		req.RemoveTargetingFlag = &removeTargetingFlag
 	}
 	return diags
+}
+
+// hasTargetingFilters reports whether targeting_flag_filters_json makes PostHog create or
+// change a targeting flag. PostHog ignores empty filters, so they count as not set.
+func hasTargetingFilters(model SurveyTFModel) bool {
+	return core.IsKnown(model.TargetingFlagFiltersJSON) &&
+		!isEmptyJSONObjectOrNull(json.RawMessage(model.TargetingFlagFiltersJSON.ValueString()))
 }
 
 // isSurveyOwnedFlag reports whether PostHog created the targeting flag for a survey.
@@ -437,8 +449,10 @@ func mapSurveyCoreFields(resp httpclient.Survey, model *SurveyTFModel) {
 func mapSurveyRelationshipFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.LinkedFlagID = int64ValueFromMapOrNull(resp.LinkedFlag)
 	// Filters make PostHog create the targeting flag, so the config has no ID for it and
-	// state must not either. The flag is still in targeting_flag_json.
-	if !core.IsKnown(model.TargetingFlagFiltersJSON) || !model.TargetingFlagID.IsNull() {
+	// state must not either. The flag is still in targeting_flag_json. Any other flag was
+	// linked in PostHog, so its ID must show up as a change in the plan.
+	createdFromFilters := hasTargetingFilters(*model) && isSurveyOwnedFlag(jsonStringValue(resp.TargetingFlag))
+	if !createdFromFilters || !model.TargetingFlagID.IsNull() {
 		model.TargetingFlagID = int64ValueFromMapOrNull(resp.TargetingFlag)
 	}
 
@@ -475,10 +489,9 @@ func mapSurveyTargetingFilters(resp httpclient.Survey, model *SurveyTFModel) {
 		return
 	}
 
-	// Filters always leave a targeting flag in PostHog, except empty ones, which PostHog
-	// ignores. Without a flag the survey targets everyone, so let the plan restore them.
-	filters := json.RawMessage(model.TargetingFlagFiltersJSON.ValueString())
-	if len(resp.TargetingFlag) == 0 && !isEmptyJSONObjectOrNull(filters) {
+	// Filters always leave a targeting flag in PostHog. Without a flag the survey targets
+	// everyone, so let the plan restore them.
+	if len(resp.TargetingFlag) == 0 && hasTargetingFilters(*model) {
 		model.TargetingFlagFiltersJSON = types.StringNull()
 	}
 }

@@ -222,7 +222,8 @@ func TestSurveyBuildRequest_Targeting(t *testing.T) {
 	filters := map[string]any{"groups": []any{map[string]any{"properties": []any{}, "rollout_percentage": float64(50)}}}
 	surveyFlag := types.StringValue(`{"id":11,"key":"survey-targeting-afc3bbeb1f"}`)
 	userFlag := types.StringValue(`{"id":11,"key":"beta-users"}`)
-	none, id, configured := types.Int64Null(), types.Int64Value(11), types.StringValue(filtersJSON)
+	none, id, otherID := types.Int64Null(), types.Int64Value(11), types.Int64Value(12)
+	configured, empty := types.StringValue(filtersJSON), types.StringValue(`{ }`)
 
 	tests := map[string]struct {
 		planID       types.Int64
@@ -243,7 +244,15 @@ func TestSurveyBuildRequest_Targeting(t *testing.T) {
 		"flag removed":                    {none, types.StringNull(), id, types.StringNull(), userFlag, nil, true, ""},
 		"flag and filters":                {id, configured, id, configured, userFlag, filters, false, ""},
 		"filters removed, flag kept":      {id, types.StringNull(), id, configured, userFlag, nil, false, ""},
+		"filters emptied":                 {none, empty, none, configured, surveyFlag, nil, true, ""},
+		"empty filters added":             {none, empty, none, types.StringNull(), types.StringNull(), nil, false, ""},
+		"empty filters with a flag":       {id, empty, id, empty, userFlag, nil, false, ""},
+		"flag replaced with another flag": {otherID, types.StringNull(), id, types.StringNull(), userFlag, nil, false, ""},
+		"another flag and empty filters":  {otherID, empty, id, empty, userFlag, nil, false, ""},
+		"empty filters, flag added":       {none, empty, id, empty, surveyFlag, nil, true, ""},
 		"flag replaced with filters":      {none, configured, id, types.StringNull(), userFlag, nil, false, "feature flag 11"},
+		"another flag and filters":        {otherID, configured, id, types.StringNull(), userFlag, nil, false, "feature flag 11"},
+		"filters are not JSON":            {none, types.StringValue(""), none, configured, surveyFlag, nil, false, "JSON"},
 	}
 
 	for name, tt := range tests {
@@ -268,6 +277,7 @@ func TestSurveyBuildRequest_Targeting(t *testing.T) {
 
 func TestSurveyMapResponseToModel_Targeting(t *testing.T) {
 	flag := map[string]any{"id": float64(11), "key": "survey-targeting-afc3bbeb1f"}
+	userFlag := map[string]any{"id": float64(11), "key": "beta-users"}
 	none, id := types.Int64Null(), types.Int64Value(11)
 	noFilters, configured, empty := types.StringNull(), types.StringValue(`{"groups":[]}`), types.StringValue(`{ }`)
 
@@ -284,7 +294,9 @@ func TestSurveyMapResponseToModel_Targeting(t *testing.T) {
 		"filters":                           {none, configured, flag, none, configured},
 		"filters with a configured flag":    {id, configured, flag, id, configured},
 		"filters, flag gone in PostHog":     {none, configured, nil, none, noFilters},
+		"filters, flag swapped in PostHog":  {none, configured, userFlag, id, configured},
 		"empty filters, which make no flag": {none, empty, nil, none, empty},
+		"empty filters, flag added":         {none, empty, flag, id, empty},
 	}
 
 	for name, tt := range tests {
@@ -591,8 +603,9 @@ func TestSurveyHelperFallbacks(t *testing.T) {
 	assert.Equal(t, int64(7), int64ValueFromMapOrNull(map[string]interface{}{"id": 7}).ValueInt64())
 }
 
-// TestSurveyClearNullableFields verifies that removing a nullable attribute from config sends an explicit JSON null to the API, which PostHog
-// interprets as "clear this column." See SurveyRequest tag comments for details.
+// TestSurveyClearNullableFields verifies that removing a nullable attribute from config
+// sends an explicit JSON null to the API, which PostHog interprets as "clear this column."
+// See SurveyRequest tag comments for details.
 func TestSurveyClearNullableFields(t *testing.T) {
 	ops := SurveyOps{}
 	plan := SurveyTFModel{
