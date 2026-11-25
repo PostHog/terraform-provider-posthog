@@ -34,12 +34,12 @@ func NewInsightVariable() resource.Resource {
 type InsightVariableResourceTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Name             types.String `tfsdk:"name"`
-	Type             types.String `tfsdk:"type"`
-	CodeName         types.String `tfsdk:"code_name"`
-	DefaultValueJSON types.String `tfsdk:"default_value_json"`
-	ValuesJSON       types.String `tfsdk:"values_json"`
-	CreatedAt        types.String `tfsdk:"created_at"`
+	Name             types.String        `tfsdk:"name"`
+	Type             types.String        `tfsdk:"type"`
+	CodeName         types.String        `tfsdk:"code_name"`
+	DefaultValueJSON core.NormalizedJSON `tfsdk:"default_value_json"`
+	ValuesJSON       core.NormalizedJSON `tfsdk:"values_json"`
+	CreatedAt        types.String        `tfsdk:"created_at"`
 }
 
 type InsightVariableOps struct{}
@@ -86,13 +86,15 @@ func (o InsightVariableOps) Schema() schema.Schema {
 				},
 			},
 			"default_value_json": schema.StringAttribute{
-				Optional: true,
+				Optional:   true,
+				CustomType: core.NormalizedJSONType{},
 				MarkdownDescription: "JSON-encoded default value used when a query references the variable and no value is supplied. " +
 					"The value is a bare JSON scalar for most types, so wrap it: `jsonencode(\"prod\")`, `jsonencode(30)`, `jsonencode(true)`. " +
 					"For `List` variables PostHog stores the default as a string, so encode it as one.",
 			},
 			"values_json": schema.StringAttribute{
-				Optional: true,
+				Optional:   true,
+				CustomType: core.NormalizedJSONType{},
 				MarkdownDescription: "JSON-encoded array of allowed values, for `List` variables only. " +
 					"PostHog stores every entry as a string, so encode them as strings: `jsonencode([\"1\", \"2\"])` rather than `jsonencode([1, 2])`. " +
 					"Otherwise the value PostHog returns will not match your configuration. Leave unset for other variable types.",
@@ -118,11 +120,11 @@ func (o InsightVariableOps) BuildCreateRequest(ctx context.Context, model Insigh
 		Type: &variableType,
 	}
 
-	defaultValue, d := util.ParseJSONStringRaw("default_value_json", model.DefaultValueJSON)
+	defaultValue, d := util.ParseJSONStringRaw("default_value_json", model.DefaultValueJSON.StringValue)
 	diags.Append(d...)
 	req.DefaultValue = defaultValue
 
-	values, d := util.ParseJSONStringRaw("values_json", model.ValuesJSON)
+	values, d := util.ParseJSONStringRaw("values_json", model.ValuesJSON.StringValue)
 	diags.Append(d...)
 	req.Values = values
 
@@ -199,25 +201,25 @@ func (o InsightVariableOps) Delete(ctx context.Context, client httpclient.Postho
 // PostHog represents an unset value inconsistently: null for most variable
 // types, and "" (default) or [] (values) for List variables. All of those read
 // back as unset unless the configuration explicitly asked for that value.
-func jsonValueToState(raw *json.RawMessage, config types.String) (types.String, error) {
+func jsonValueToState(raw *json.RawMessage, config core.NormalizedJSON) (core.NormalizedJSON, error) {
 	if raw == nil || len(*raw) == 0 {
-		return types.StringNull(), nil
+		return core.NewNormalizedJSONNull(), nil
 	}
 
 	var decoded interface{}
 	if err := json.Unmarshal(*raw, &decoded); err != nil {
-		return types.StringNull(), fmt.Errorf("failed to parse JSON returned by PostHog: %w", err)
+		return core.NewNormalizedJSONNull(), fmt.Errorf("failed to parse JSON returned by PostHog: %w", err)
 	}
 
 	if config.IsNull() && isUnsetJSONValue(decoded) {
-		return types.StringNull(), nil
+		return core.NewNormalizedJSONNull(), nil
 	}
 
 	canonical, err := marshalJSON(decoded)
 	if err != nil {
-		return types.StringNull(), err
+		return core.NewNormalizedJSONNull(), err
 	}
-	return types.StringValue(canonical), nil
+	return core.NewNormalizedJSONValue(canonical), nil
 }
 
 // isUnsetJSONValue reports whether a decoded JSON value is one of the shapes

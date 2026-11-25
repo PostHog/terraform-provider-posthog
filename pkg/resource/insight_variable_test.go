@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
+	"github.com/posthog/terraform-provider/pkg/resource/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,56 +23,56 @@ func rawJSON(s string) *json.RawMessage {
 func TestJSONValueToState(t *testing.T) {
 	tests := map[string]struct {
 		raw      *json.RawMessage
-		config   types.String
-		expected types.String
+		config   core.NormalizedJSON
+		expected core.NormalizedJSON
 	}{
 		"absent value is null": {
 			raw:      nil,
-			config:   types.StringNull(),
-			expected: types.StringNull(),
+			config:   core.NewNormalizedJSONNull(),
+			expected: core.NewNormalizedJSONNull(),
 		},
 		"scalar string round-trips": {
 			raw:      rawJSON(`"prod"`),
-			config:   types.StringValue(`"prod"`),
-			expected: types.StringValue(`"prod"`),
+			config:   core.NewNormalizedJSONValue(`"prod"`),
+			expected: core.NewNormalizedJSONValue(`"prod"`),
 		},
 		"number round-trips": {
 			raw:      rawJSON(`30`),
-			config:   types.StringValue(`30`),
-			expected: types.StringValue(`30`),
+			config:   core.NewNormalizedJSONValue(`30`),
+			expected: core.NewNormalizedJSONValue(`30`),
 		},
 		"whitespace is canonicalized away": {
 			raw:      rawJSON(`[ "a",  "b" ]`),
-			config:   types.StringValue(`["a","b"]`),
-			expected: types.StringValue(`["a","b"]`),
+			config:   core.NewNormalizedJSONValue(`["a","b"]`),
+			expected: core.NewNormalizedJSONValue(`["a","b"]`),
 		},
 		// PostHog writes back "" for an unset List default and [] for unset
 		// List values. Without this, an unconfigured attribute would come back
 		// non-null and Terraform would report provider inconsistency.
 		"empty string is unset when not configured": {
 			raw:      rawJSON(`""`),
-			config:   types.StringNull(),
-			expected: types.StringNull(),
+			config:   core.NewNormalizedJSONNull(),
+			expected: core.NewNormalizedJSONNull(),
 		},
 		"empty array is unset when not configured": {
 			raw:      rawJSON(`[]`),
-			config:   types.StringNull(),
-			expected: types.StringNull(),
+			config:   core.NewNormalizedJSONNull(),
+			expected: core.NewNormalizedJSONNull(),
 		},
 		"null is unset when not configured": {
 			raw:      rawJSON(`null`),
-			config:   types.StringNull(),
-			expected: types.StringNull(),
+			config:   core.NewNormalizedJSONNull(),
+			expected: core.NewNormalizedJSONNull(),
 		},
 		"explicitly configured empty string is preserved": {
 			raw:      rawJSON(`""`),
-			config:   types.StringValue(`""`),
-			expected: types.StringValue(`""`),
+			config:   core.NewNormalizedJSONValue(`""`),
+			expected: core.NewNormalizedJSONValue(`""`),
 		},
 		"explicitly configured empty array is preserved": {
 			raw:      rawJSON(`[]`),
-			config:   types.StringValue(`[]`),
-			expected: types.StringValue(`[]`),
+			config:   core.NewNormalizedJSONValue(`[]`),
+			expected: core.NewNormalizedJSONValue(`[]`),
 		},
 	}
 
@@ -82,7 +86,7 @@ func TestJSONValueToState(t *testing.T) {
 }
 
 func TestJSONValueToState_InvalidJSON(t *testing.T) {
-	_, err := jsonValueToState(rawJSON(`{`), types.StringNull())
+	_, err := jsonValueToState(rawJSON(`{`), core.NewNormalizedJSONNull())
 	assert.Error(t, err)
 }
 
@@ -145,7 +149,7 @@ func TestInsightVariableBuildCreateRequest(t *testing.T) {
 	model := InsightVariableResourceTFModel{
 		Name:             types.StringValue("Lookup"),
 		Type:             types.StringValue("String"),
-		DefaultValueJSON: types.StringValue(`"prod"`),
+		DefaultValueJSON: core.NewNormalizedJSONValue(`"prod"`),
 	}
 
 	req, diags := InsightVariableOps{}.BuildCreateRequest(context.Background(), model)
@@ -168,8 +172,8 @@ func TestInsightVariableBuildUpdateRequest_ClearsRemovedValues(t *testing.T) {
 	state := InsightVariableResourceTFModel{
 		Name:             types.StringValue("Lookup"),
 		Type:             types.StringValue("List"),
-		DefaultValueJSON: types.StringValue(`"a"`),
-		ValuesJSON:       types.StringValue(`["a","b"]`),
+		DefaultValueJSON: core.NewNormalizedJSONValue(`"a"`),
+		ValuesJSON:       core.NewNormalizedJSONValue(`["a","b"]`),
 	}
 
 	req, diags := InsightVariableOps{}.BuildUpdateRequest(context.Background(), plan, state)
@@ -185,7 +189,7 @@ func TestInsightVariableBuildUpdateRequest_KeepsUnchangedValues(t *testing.T) {
 	model := InsightVariableResourceTFModel{
 		Name:       types.StringValue("Lookup"),
 		Type:       types.StringValue("List"),
-		ValuesJSON: types.StringValue(`["a","b"]`),
+		ValuesJSON: core.NewNormalizedJSONValue(`["a","b"]`),
 	}
 
 	req, diags := InsightVariableOps{}.BuildUpdateRequest(context.Background(), model, model)
@@ -202,7 +206,7 @@ func TestInsightVariableMapResponseToModel(t *testing.T) {
 	createdAt := "2026-07-29T15:58:44.275733Z"
 
 	model := InsightVariableResourceTFModel{
-		DefaultValueJSON: types.StringValue(`"prod"`),
+		DefaultValueJSON: core.NewNormalizedJSONValue(`"prod"`),
 	}
 
 	diags := InsightVariableOps{}.MapResponseToModel(context.Background(), httpclient.InsightVariable{
@@ -220,6 +224,51 @@ func TestInsightVariableMapResponseToModel(t *testing.T) {
 	assert.Equal(t, types.StringValue("String"), model.Type)
 	assert.Equal(t, types.StringValue("lookup"), model.CodeName)
 	assert.Equal(t, types.StringValue(createdAt), model.CreatedAt)
-	assert.Equal(t, types.StringValue(`"prod"`), model.DefaultValueJSON)
-	assert.Equal(t, types.StringNull(), model.ValuesJSON)
+	assert.Equal(t, core.NewNormalizedJSONValue(`"prod"`), model.DefaultValueJSON)
+	assert.Equal(t, core.NewNormalizedJSONNull(), model.ValuesJSON)
+}
+
+func TestInsightVariableJSONSemanticEquality(t *testing.T) {
+	ctx := context.Background()
+	ops := InsightVariableOps{}
+	tests := []struct {
+		name      string
+		attribute string
+		planned   string
+		response  string
+		equal     bool
+	}{
+		{"list whitespace", "values_json", `["us", "eu"]`, `["us","eu"]`, true},
+		{"changed list item", "values_json", `["us", "eu"]`, `["us","apac"]`, false},
+		{"reordered list", "values_json", `["us", "eu"]`, `["eu","us"]`, false},
+		{"default number formatting", "default_value_json", `2.0`, `2`, true},
+		{"changed default number", "default_value_json", `2.0`, `3`, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			valueType := ops.Schema().Attributes[tc.attribute].GetType()
+			planned, err := valueType.ValueFromTerraform(ctx, tftypes.NewValue(tftypes.String, tc.planned))
+			require.NoError(t, err)
+
+			var model InsightVariableResourceTFModel
+			response := httpclient.InsightVariable{Values: rawJSON(tc.response)}
+			if tc.attribute == "default_value_json" {
+				response = httpclient.InsightVariable{DefaultValue: rawJSON(tc.response)}
+			}
+			require.False(t, ops.MapResponseToModel(ctx, response, &model).HasError())
+
+			var actual basetypes.StringValuable = model.ValuesJSON
+			if tc.attribute == "default_value_json" {
+				actual = model.DefaultValueJSON
+			}
+			equal := planned.Equal(actual)
+			if comparable, ok := planned.(basetypes.StringValuableWithSemanticEquals); !equal && ok {
+				var diags diag.Diagnostics
+				equal, diags = comparable.StringSemanticEquals(ctx, actual)
+				require.False(t, diags.HasError(), "%v", diags)
+			}
+			assert.Equal(t, tc.equal, equal)
+		})
+	}
 }
