@@ -35,38 +35,38 @@ func NewSurvey() resource.Resource {
 type SurveyTFModel struct {
 	core.BaseStringIdentifiable
 	core.BaseProjectID
-	Name                         types.String `tfsdk:"name"`
-	Description                  types.String `tfsdk:"description"`
-	Type                         types.String `tfsdk:"type"`
-	Schedule                     types.String `tfsdk:"schedule"`
-	LinkedFlagID                 types.Int64  `tfsdk:"linked_flag_id"`
-	LinkedInsightID              types.Int64  `tfsdk:"linked_insight_id"`
-	TargetingFlagID              types.Int64  `tfsdk:"targeting_flag_id"`
-	TargetingFlagFiltersJSON     types.String `tfsdk:"targeting_flag_filters_json"`
-	QuestionsJSON                types.String `tfsdk:"questions_json"`
-	ConditionsJSON               types.String `tfsdk:"conditions_json"`
-	AppearanceJSON               types.String `tfsdk:"appearance_json"`
-	StartDate                    types.String `tfsdk:"start_date"`
-	EndDate                      types.String `tfsdk:"end_date"`
-	Archived                     types.Bool   `tfsdk:"archived"`
-	ResponsesLimit               types.Int64  `tfsdk:"responses_limit"`
-	IterationCount               types.Int64  `tfsdk:"iteration_count"`
-	IterationFrequencyDays       types.Int64  `tfsdk:"iteration_frequency_days"`
-	ResponseSamplingStartDate    types.String `tfsdk:"response_sampling_start_date"`
-	ResponseSamplingIntervalType types.String `tfsdk:"response_sampling_interval_type"`
-	ResponseSamplingInterval     types.Int64  `tfsdk:"response_sampling_interval"`
-	ResponseSamplingLimit        types.Int64  `tfsdk:"response_sampling_limit"`
-	ResponseSamplingDailyLimits  types.String `tfsdk:"response_sampling_daily_limits_json"`
-	EnablePartialResponses       types.Bool   `tfsdk:"enable_partial_responses"`
-	EnableIframeEmbedding        types.Bool   `tfsdk:"enable_iframe_embedding"`
-	TranslationsJSON             types.String `tfsdk:"translations_json"`
-	CreateInFolder               types.String `tfsdk:"create_in_folder"`
-	FormContentJSON              types.String `tfsdk:"form_content_json"`
-	CreatedAt                    types.String `tfsdk:"created_at"`
-	CreatedByJSON                types.String `tfsdk:"created_by_json"`
-	LinkedFlagJSON               types.String `tfsdk:"linked_flag_json"`
-	TargetingFlagJSON            types.String `tfsdk:"targeting_flag_json"`
-	InternalTargetingFlagJSON    types.String `tfsdk:"internal_targeting_flag_json"`
+	Name                         types.String        `tfsdk:"name"`
+	Description                  types.String        `tfsdk:"description"`
+	Type                         types.String        `tfsdk:"type"`
+	Schedule                     types.String        `tfsdk:"schedule"`
+	LinkedFlagID                 types.Int64         `tfsdk:"linked_flag_id"`
+	LinkedInsightID              types.Int64         `tfsdk:"linked_insight_id"`
+	TargetingFlagID              types.Int64         `tfsdk:"targeting_flag_id"`
+	TargetingFlagFiltersJSON     types.String        `tfsdk:"targeting_flag_filters_json"`
+	QuestionsJSON                core.NormalizedJSON `tfsdk:"questions_json"`
+	ConditionsJSON               core.NormalizedJSON `tfsdk:"conditions_json"`
+	AppearanceJSON               core.NormalizedJSON `tfsdk:"appearance_json"`
+	StartDate                    types.String        `tfsdk:"start_date"`
+	EndDate                      types.String        `tfsdk:"end_date"`
+	Archived                     types.Bool          `tfsdk:"archived"`
+	ResponsesLimit               types.Int64         `tfsdk:"responses_limit"`
+	IterationCount               types.Int64         `tfsdk:"iteration_count"`
+	IterationFrequencyDays       types.Int64         `tfsdk:"iteration_frequency_days"`
+	ResponseSamplingStartDate    types.String        `tfsdk:"response_sampling_start_date"`
+	ResponseSamplingIntervalType types.String        `tfsdk:"response_sampling_interval_type"`
+	ResponseSamplingInterval     types.Int64         `tfsdk:"response_sampling_interval"`
+	ResponseSamplingLimit        types.Int64         `tfsdk:"response_sampling_limit"`
+	ResponseSamplingDailyLimits  core.NormalizedJSON `tfsdk:"response_sampling_daily_limits_json"`
+	EnablePartialResponses       types.Bool          `tfsdk:"enable_partial_responses"`
+	EnableIframeEmbedding        types.Bool          `tfsdk:"enable_iframe_embedding"`
+	TranslationsJSON             core.NormalizedJSON `tfsdk:"translations_json"`
+	CreateInFolder               types.String        `tfsdk:"create_in_folder"`
+	FormContentJSON              core.NormalizedJSON `tfsdk:"form_content_json"`
+	CreatedAt                    types.String        `tfsdk:"created_at"`
+	CreatedByJSON                types.String        `tfsdk:"created_by_json"`
+	LinkedFlagJSON               types.String        `tfsdk:"linked_flag_json"`
+	TargetingFlagJSON            types.String        `tfsdk:"targeting_flag_json"`
+	InternalTargetingFlagJSON    types.String        `tfsdk:"internal_targeting_flag_json"`
 }
 
 type SurveyOps struct{}
@@ -129,14 +129,17 @@ func (o SurveyOps) Schema() schema.Schema {
 				MarkdownDescription: "JSON object describing targeting flag filters. This input is write-only in the PostHog API and is preserved from Terraform state when configured.",
 			},
 			"questions_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Required:            true,
 				MarkdownDescription: "JSON array describing the survey questions.",
 			},
 			"conditions_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object describing survey display and targeting conditions.",
 			},
 			"appearance_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object describing survey appearance settings.",
 			},
@@ -189,6 +192,7 @@ func (o SurveyOps) Schema() schema.Schema {
 				MarkdownDescription: "Maximum responses allowed during each sampling interval.",
 			},
 			"response_sampling_daily_limits_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object describing daily response sampling limits.",
 			},
@@ -209,6 +213,7 @@ func (o SurveyOps) Schema() schema.Schema {
 				},
 			},
 			"translations_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object describing translated survey content.",
 			},
@@ -217,6 +222,7 @@ func (o SurveyOps) Schema() schema.Schema {
 				MarkdownDescription: "Folder identifier used only during survey creation.",
 			},
 			"form_content_json": schema.StringAttribute{
+				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
 				MarkdownDescription: "JSON object describing custom form content.",
 			},
@@ -300,7 +306,7 @@ func applySurveyRelationships(plan SurveyTFModel, req *httpclient.SurveyRequest)
 	req.Schedule = util.StringPtrFromValue(plan.Schedule)
 }
 
-func parseSurveyQuestions(attr types.String) ([]interface{}, diag.Diagnostics) {
+func parseSurveyQuestions(attr core.NormalizedJSON) ([]interface{}, diag.Diagnostics) {
 	if attr.IsNull() || attr.IsUnknown() {
 		return nil, nil
 	}
@@ -321,8 +327,8 @@ func appendSurveyJSONFields(plan, state SurveyTFModel, req *httpclient.SurveyReq
 	return diags
 }
 
-func assignJSONAttribute(attr types.String, name string, target *interface{}) diag.Diagnostics {
-	value, diags := parseJSONAttribute(attr, name)
+func assignJSONAttribute(attr core.NormalizedJSON, name string, target *interface{}) diag.Diagnostics {
+	value, diags := parseJSONAttribute(attr.StringValue, name)
 	if diags.HasError() {
 		return diags
 	}
@@ -422,18 +428,18 @@ func mapSurveyQuestionsField(resp httpclient.Survey, model *SurveyTFModel) {
 		return
 	}
 
-	normalized, err := normalizeSurveyQuestionsForState(resp.Questions, util.ValueStringOrEmpty(model.QuestionsJSON))
+	normalized, err := normalizeSurveyQuestionsForState(resp.Questions, model.QuestionsJSON.ValueString())
 	if err == nil {
-		model.QuestionsJSON = types.StringValue(normalized)
+		model.QuestionsJSON = core.NewNormalizedJSONValue(normalized)
 	}
 }
 
 func mapSurveyStructuredJSONFields(resp httpclient.Survey, model *SurveyTFModel) {
-	applyNormalizedJSONString(resp.Conditions, util.ValueStringOrEmpty(model.ConditionsJSON), &model.ConditionsJSON)
-	applyNormalizedJSONString(resp.Appearance, util.ValueStringOrEmpty(model.AppearanceJSON), &model.AppearanceJSON)
-	applyNormalizedJSONString(resp.ResponseSamplingDailyLimits, util.ValueStringOrEmpty(model.ResponseSamplingDailyLimits), &model.ResponseSamplingDailyLimits)
-	applyNormalizedJSONString(resp.Translations, util.ValueStringOrEmpty(model.TranslationsJSON), &model.TranslationsJSON)
-	applyNormalizedJSONString(resp.FormContent, util.ValueStringOrEmpty(model.FormContentJSON), &model.FormContentJSON)
+	applyNormalizedJSONString(resp.Conditions, model.ConditionsJSON.ValueString(), &model.ConditionsJSON)
+	applyNormalizedJSONString(resp.Appearance, model.AppearanceJSON.ValueString(), &model.AppearanceJSON)
+	applyNormalizedJSONString(resp.ResponseSamplingDailyLimits, model.ResponseSamplingDailyLimits.ValueString(), &model.ResponseSamplingDailyLimits)
+	applyNormalizedJSONString(resp.Translations, model.TranslationsJSON.ValueString(), &model.TranslationsJSON)
+	applyNormalizedJSONString(resp.FormContent, model.FormContentJSON.ValueString(), &model.FormContentJSON)
 }
 
 func preserveWriteOnlySurveyFields(model *SurveyTFModel) {
@@ -468,7 +474,7 @@ func mapSurveyComputedFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.InternalTargetingFlagJSON = jsonStringValue(resp.InternalTargetingFlag)
 }
 
-func applyNormalizedJSONString(apiData interface{}, current string, target *types.String) {
+func applyNormalizedJSONString(apiData interface{}, current string, target *core.NormalizedJSON) {
 	if normalized, ok := normalizedJSONString(apiData, current); ok {
 		*target = normalized
 	}
@@ -503,7 +509,7 @@ func parseJSONAttribute(attr types.String, name string) (interface{}, diag.Diagn
 	return parsed, diags
 }
 
-func parseJSONArrayAttribute(attr types.String, name string) ([]interface{}, diag.Diagnostics) {
+func parseJSONArrayAttribute(attr core.NormalizedJSON, name string) ([]interface{}, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if attr.IsNull() || attr.IsUnknown() {
 		diags.AddError("Missing "+name, fmt.Sprintf("%s is required", name))
@@ -526,19 +532,19 @@ func normalizeSurveyQuestionsForState(apiData interface{}, userJSON string) (str
 	return normalizeJSONForState(apiData, userJSON)
 }
 
-func normalizedJSONString(apiData interface{}, current string) (types.String, bool) {
+func normalizedJSONString(apiData interface{}, current string) (core.NormalizedJSON, bool) {
 	if apiData == nil {
-		return types.StringNull(), true
+		return core.NewNormalizedJSONNull(), true
 	}
 
 	normalized, err := normalizeJSONForState(apiData, current)
 	if err != nil {
-		return types.StringNull(), false
+		return core.NewNormalizedJSONNull(), false
 	}
 	if normalized == "" {
-		return types.StringNull(), true
+		return core.NewNormalizedJSONNull(), true
 	}
-	return types.StringValue(normalized), true
+	return core.NewNormalizedJSONValue(normalized), true
 }
 
 func jsonStringValue(value interface{}) types.String {

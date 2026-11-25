@@ -2,13 +2,16 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
@@ -103,6 +106,113 @@ func TestSurvey_Import(t *testing.T) {
 			},
 		},
 	})
+}
+
+// TestSurvey_JSONFormatting verifies that the JSON attributes are compared by content,
+// so JSON that is not formatted like jsonencode output applies and plans clean, while a
+// changed value still shows as a change.
+//
+// response_sampling_daily_limits_json is covered by unit tests only: PostHog computes it
+// from the sampling settings, and the feature flag it creates for them outlives the survey.
+func TestSurvey_JSONFormatting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-survey")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckSurveyDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSurveyJSONHeredocs(rName, "initial"),
+			},
+			{
+				Config:   testAccSurveyJSONHeredocs(rName, "initial"),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccSurveyJSONHeredocs(rName, "changed"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(testSurveyResourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: testAccCheckSurveyJSON("changed"),
+			},
+		},
+	})
+}
+
+// testAccCheckSurveyJSON checks the value that testAccSurveyJSONHeredocs puts in each
+// JSON attribute against what PostHog stores.
+func testAccCheckSurveyJSON(want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[testSurveyResourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", testSurveyResourceName)
+		}
+		client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+		survey, _, err := client.GetSurvey(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
+		if err != nil {
+			return err
+		}
+		for name, value := range map[string]any{
+			"questions":    survey.Questions,
+			"conditions":   survey.Conditions,
+			"appearance":   survey.Appearance,
+			"translations": survey.Translations,
+			"form_content": survey.FormContent,
+		} {
+			body, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(string(body), want) {
+				return fmt.Errorf("expected %s to contain %q, got %s", name, want, body)
+			}
+		}
+		return nil
+	}
+}
+
+func testAccSurveyJSONHeredocs(name, value string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_survey" "test" {
+  name = %[1]q
+  type = "popover"
+
+  questions_json = <<-EOT
+    [
+      {
+        "type": "rating",
+        "question": "%[2]s",
+        "scale": 10.0,
+        "id": "0190d0c5-0000-0000-0000-000000000004"
+      },
+      { "type": "open", "question": "Q&A" }
+    ]
+  EOT
+
+  conditions_json = <<-EOT
+    { "urlMatchType": "icontains", "url": "https://example.com/?a=1&b=%[2]s" }
+  EOT
+
+  appearance_json = <<-EOT
+    { "thankYouMessageHeader": "%[2]s", "backgroundColor": "#eeeded" }
+  EOT
+
+  translations_json = <<-EOT
+    { "fr": { "thankYouMessageHeader": "%[2]s", "name": "Bonjour" } }
+  EOT
+
+  form_content_json = <<-EOT
+    { "type": "doc", "content": [{ "type": "%[2]s" }] }
+  EOT
+}
+`, name, value)
 }
 
 func testAccSurveyBasic(name string) string {
