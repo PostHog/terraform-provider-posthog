@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -53,6 +54,93 @@ func TestSurveyResourceMetadataAndSchema(t *testing.T) {
 	linkedInsightAttr, ok := resourceSchema.Attributes["linked_insight_id"].(schema.Int64Attribute)
 	require.True(t, ok)
 	assert.Contains(t, linkedInsightAttr.MarkdownDescription, "write-only")
+}
+
+func TestSurveyJSON_ComparedByContent(t *testing.T) {
+	attributes := SurveyOps{}.Schema().Attributes
+	for _, name := range []string{
+		"questions_json",
+		"conditions_json",
+		"appearance_json",
+		"response_sampling_daily_limits_json",
+		"translations_json",
+		"form_content_json",
+	} {
+		assert.Equal(t, core.NormalizedJSONType{}, attributes[name].GetType(), name)
+	}
+}
+
+// conditions_json, appearance_json, response_sampling_daily_limits_json,
+// translations_json and form_content_json are all mapped the same way, so
+// conditions_json stands in for the five.
+func TestSurveyMapResponseToModel_OptionalJSON(t *testing.T) {
+	configured := core.NewNormalizedJSONValue("{\n  \"url\": \"https://example.com\"\n}\n")
+	tests := map[string]struct {
+		before core.NormalizedJSON
+		api    any
+		after  core.NormalizedJSON
+	}{
+		"unset":                      {core.NewNormalizedJSONNull(), nil, core.NewNormalizedJSONNull()},
+		"unset, value in PostHog":    {core.NewNormalizedJSONNull(), map[string]any{"url": "a"}, core.NewNormalizedJSONValue(`{"url":"a"}`)},
+		"gone in PostHog":            {configured, nil, core.NewNormalizedJSONNull()},
+		"changed in PostHog":         {configured, map[string]any{"url": "a"}, core.NewNormalizedJSONValue(`{"url":"a"}`)},
+		"field added by PostHog":     {configured, map[string]any{"url": "https://example.com", "actions": nil}, core.NewNormalizedJSONValue(`{"url":"https://example.com"}`)},
+		"field removed in PostHog":   {configured, map[string]any{}, core.NewNormalizedJSONValue(`{}`)},
+		"JSON string from PostHog":   {core.NewNormalizedJSONValue("\"[1]\"\n"), "[1]", core.NewNormalizedJSONValue(`"[1]"`)},
+		"JSON string on import":      {core.NewNormalizedJSONNull(), "[1]", core.NewNormalizedJSONValue(`"[1]"`)},
+		"different type from config": {configured, "[1]", core.NewNormalizedJSONValue(`"[1]"`)},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := SurveyTFModel{ConditionsJSON: tt.before}
+			diags := SurveyOps{}.MapResponseToModel(context.Background(), httpclient.Survey{Conditions: tt.api}, &model)
+			require.False(t, diags.HasError(), diags.Errors())
+			assert.Equal(t, tt.after, model.ConditionsJSON)
+		})
+	}
+}
+
+// State keeps the configured text only when it equals what PostHog returns, so every
+// attribute must map back to the same content however its JSON is formatted.
+func TestSurveyJSON_FormattedConfigRoundTrips(t *testing.T) {
+	formatted := func(compact string) core.NormalizedJSON {
+		var out bytes.Buffer
+		require.NoError(t, json.Indent(&out, []byte(compact), "", "  "))
+		return core.NewNormalizedJSONValue(out.String() + "\n")
+	}
+	plan := SurveyTFModel{
+		Name:                        types.StringValue(testSurveyName),
+		Type:                        types.StringValue(testSurveyType),
+		QuestionsJSON:               formatted(`[{"type":"open","question":"Q&A","id":"set-in-config"}]`),
+		ConditionsJSON:              formatted(`{"url":"https://example.com/?a=1&b=2","selector":"div > p"}`),
+		AppearanceJSON:              formatted(`{"thankYouMessageHeader":"<b>Thanks</b>","backgroundColor":"#eeeded"}`),
+		ResponseSamplingDailyLimits: formatted(`"[{\"daily_response_limit\": 10}]"`),
+		TranslationsJSON:            formatted(`{"fr":{"thankYouMessageHeader":"\u00e0 bient\u00f4t","name":"Bonjour"}}`),
+		FormContentJSON:             formatted(`{"type":"doc","content":[{"type":"paragraph","attrs":null}]}`),
+	}
+
+	req, diags := SurveyOps{}.BuildCreateRequest(context.Background(), plan)
+	require.False(t, diags.HasError(), diags.Errors())
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	state := plan
+	diags = SurveyOps{}.MapResponseToModel(context.Background(), decodeAPIResponse[httpclient.Survey](t, string(body)), &state)
+	require.False(t, diags.HasError(), diags.Errors())
+
+	for name, values := range map[string][2]core.NormalizedJSON{
+		"questions_json":                      {plan.QuestionsJSON, state.QuestionsJSON},
+		"conditions_json":                     {plan.ConditionsJSON, state.ConditionsJSON},
+		"appearance_json":                     {plan.AppearanceJSON, state.AppearanceJSON},
+		"response_sampling_daily_limits_json": {plan.ResponseSamplingDailyLimits, state.ResponseSamplingDailyLimits},
+		"translations_json":                   {plan.TranslationsJSON, state.TranslationsJSON},
+		"form_content_json":                   {plan.FormContentJSON, state.FormContentJSON},
+	} {
+		equal, diags := values[0].StringSemanticEquals(context.Background(), values[1])
+		require.False(t, diags.HasError(), diags.Errors())
+		assert.True(t, equal, "%s: config %s must equal state %s", name, values[0].ValueString(), values[1].ValueString())
+	}
 }
 
 // PostHog assigns an id to every question sent without one, so API responses
@@ -135,7 +223,7 @@ func TestSurveyBuildRequestPreservesWriteOnlyFilters(t *testing.T) {
 	plan := SurveyTFModel{
 		Name:          types.StringValue(testSurveyName),
 		Type:          types.StringValue(testSurveyType),
-		QuestionsJSON: types.StringValue(testSurveyQuestionJSON),
+		QuestionsJSON: core.NewNormalizedJSONValue(testSurveyQuestionJSON),
 	}
 	state := SurveyTFModel{
 		TargetingFlagFiltersJSON: types.StringValue(`{"groups":[{"properties":[{"key":"email","operator":"icontains","type":"person","value":"@example.com"}],"rollout_percentage":100}]}`),
@@ -175,9 +263,9 @@ func TestSurveyBuildRequestAllFields(t *testing.T) {
 		LinkedInsightID:              types.Int64Value(12),
 		TargetingFlagID:              types.Int64Value(13),
 		TargetingFlagFiltersJSON:     types.StringValue(`{"groups":[{"rollout_percentage":100}]}`),
-		QuestionsJSON:                types.StringValue(testSurveyQuestionJSON),
-		ConditionsJSON:               types.StringValue(`{"url":"https://example.com"}`),
-		AppearanceJSON:               types.StringValue(`{"border_color":"#000000"}`),
+		QuestionsJSON:                core.NewNormalizedJSONValue(testSurveyQuestionJSON),
+		ConditionsJSON:               core.NewNormalizedJSONValue(`{"url":"https://example.com"}`),
+		AppearanceJSON:               core.NewNormalizedJSONValue(`{"border_color":"#000000"}`),
 		StartDate:                    types.StringValue(testSurveyStartDate),
 		EndDate:                      types.StringValue(testSurveyEndDate),
 		Archived:                     types.BoolValue(true),
@@ -188,12 +276,12 @@ func TestSurveyBuildRequestAllFields(t *testing.T) {
 		ResponseSamplingIntervalType: types.StringValue("week"),
 		ResponseSamplingInterval:     types.Int64Value(2),
 		ResponseSamplingLimit:        types.Int64Value(20),
-		ResponseSamplingDailyLimits:  types.StringValue(`{"monday":5}`),
+		ResponseSamplingDailyLimits:  core.NewNormalizedJSONValue(`{"monday":5}`),
 		EnablePartialResponses:       types.BoolValue(true),
 		EnableIframeEmbedding:        types.BoolValue(true),
-		TranslationsJSON:             types.StringValue(`{"fr":{"name":"Bonjour"}}`),
+		TranslationsJSON:             core.NewNormalizedJSONValue(`{"fr":{"name":"Bonjour"}}`),
 		CreateInFolder:               types.StringValue("folder-123"),
-		FormContentJSON:              types.StringValue(`{"submitButtonText":"Send"}`),
+		FormContentJSON:              core.NewNormalizedJSONValue(`{"submitButtonText":"Send"}`),
 	}
 
 	req, diags := ops.BuildCreateRequest(context.Background(), plan)
@@ -233,7 +321,7 @@ func TestSurveyBuildRequestClearsDescriptionAndTargetingFlag(t *testing.T) {
 	plan := SurveyTFModel{
 		Name:          types.StringValue(testSurveyName),
 		Type:          types.StringValue(testSurveyType),
-		QuestionsJSON: types.StringValue(testSurveyQuestionJSON),
+		QuestionsJSON: core.NewNormalizedJSONValue(testSurveyQuestionJSON),
 	}
 	state := SurveyTFModel{
 		Description:              types.StringValue("previous"),
@@ -256,8 +344,8 @@ func TestSurveyBuildRequestRejectsInvalidJSON(t *testing.T) {
 	plan := SurveyTFModel{
 		Name:           types.StringValue(testSurveyName),
 		Type:           types.StringValue(testSurveyType),
-		QuestionsJSON:  types.StringValue(testSurveyQuestionJSON),
-		ConditionsJSON: types.StringValue(`{`),
+		QuestionsJSON:  core.NewNormalizedJSONValue(testSurveyQuestionJSON),
+		ConditionsJSON: core.NewNormalizedJSONValue(`{`),
 	}
 
 	_, diags := ops.BuildCreateRequest(context.Background(), plan)
@@ -267,12 +355,12 @@ func TestSurveyBuildRequestRejectsInvalidJSON(t *testing.T) {
 func TestSurveyMapResponseToModel(t *testing.T) {
 	ops := SurveyOps{}
 	model := SurveyTFModel{
-		QuestionsJSON:               types.StringValue(testSurveyQuestionJSON),
-		ConditionsJSON:              types.StringValue(`{"url":"https://example.com"}`),
-		AppearanceJSON:              types.StringValue(`{"border_color":"#000000"}`),
-		ResponseSamplingDailyLimits: types.StringValue(`{"monday":5}`),
-		TranslationsJSON:            types.StringValue(`{"fr":{"name":"Bonjour"}}`),
-		FormContentJSON:             types.StringValue(`{"submitButtonText":"Send"}`),
+		QuestionsJSON:               core.NewNormalizedJSONValue(testSurveyQuestionJSON),
+		ConditionsJSON:              core.NewNormalizedJSONValue(`{"url":"https://example.com"}`),
+		AppearanceJSON:              core.NewNormalizedJSONValue(`{"border_color":"#000000"}`),
+		ResponseSamplingDailyLimits: core.NewNormalizedJSONValue(`{"monday":5}`),
+		TranslationsJSON:            core.NewNormalizedJSONValue(`{"fr":{"name":"Bonjour"}}`),
+		FormContentJSON:             core.NewNormalizedJSONValue(`{"submitButtonText":"Send"}`),
 		LinkedInsightID:             types.Int64Unknown(),
 		TargetingFlagFiltersJSON:    types.StringUnknown(),
 	}
@@ -390,7 +478,7 @@ func TestSurveyCRUDWrapperMethods(t *testing.T) {
 }
 
 func TestSurveyHelperFallbacks(t *testing.T) {
-	questions, diags := parseSurveyQuestions(types.StringNull())
+	questions, diags := parseSurveyQuestions(core.NewNormalizedJSONNull())
 	require.False(t, diags.HasError())
 	assert.Nil(t, questions)
 
@@ -413,7 +501,7 @@ func TestSurveyClearNullableIntegerFields(t *testing.T) {
 	plan := SurveyTFModel{
 		Name:          types.StringValue(testSurveyName),
 		Type:          types.StringValue(testSurveyType),
-		QuestionsJSON: types.StringValue(testSurveyQuestionJSON),
+		QuestionsJSON: core.NewNormalizedJSONValue(testSurveyQuestionJSON),
 	}
 	state := SurveyTFModel{
 		LinkedFlagID:             types.Int64Value(11),

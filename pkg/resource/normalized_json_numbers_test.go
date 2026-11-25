@@ -177,3 +177,37 @@ func TestLogsAlertFilterGroupJSON_WholeNumberFloatMatchesAPIInteger(t *testing.T
 
 	assertStateMatchesConfig(t, model.FilterGroupJSON, configJSON)
 }
+
+// response_sampling_daily_limits_json is not covered: PostHog returns the limits as a
+// JSON string rather than as an object, so there is no number to compare.
+func TestSurveyJSON_WholeNumberFloatMatchesAPIInteger(t *testing.T) {
+	questionsConfig := `[{"question":"How likely are you to recommend us?","scale":10.0,"type":"rating"}]`
+	conditionsConfig := `{"seenSurveyWaitPeriodInDays":30.0}`
+	appearanceConfig := `{"surveyPopupDelaySeconds":5.0}`
+	translationsConfig := `{"fr":{"order":1.0}}`
+	formContentConfig := `{"content":[{"attrs":{"level":2.0},"type":"heading"}],"type":"doc"}`
+	model := SurveyTFModel{
+		QuestionsJSON:    core.NewNormalizedJSONValue(questionsConfig),
+		ConditionsJSON:   core.NewNormalizedJSONValue(conditionsConfig),
+		AppearanceJSON:   core.NewNormalizedJSONValue(appearanceConfig),
+		TranslationsJSON: core.NewNormalizedJSONValue(translationsConfig),
+		FormContentJSON:  core.NewNormalizedJSONValue(formContentConfig),
+	}
+	resp := decodeAPIResponse[httpclient.Survey](t, `{
+		"id": "0190d0c5-0000-0000-0000-000000000003",
+		"questions": [{"id": "assigned-by-posthog", "type": "rating", "question": "How likely are you to recommend us?", "scale": 10}],
+		"conditions": {"seenSurveyWaitPeriodInDays": 30, "actions": {"values": []}},
+		"appearance": {"surveyPopupDelaySeconds": 5},
+		"translations": {"fr": {"order": 1}},
+		"form_content": {"type": "doc", "content": [{"type": "heading", "attrs": {"level": 2}}]}
+	}`)
+
+	diags := SurveyOps{}.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+
+	t.Run("questions_json", func(t *testing.T) { assertStateMatchesConfig(t, model.QuestionsJSON, questionsConfig) })
+	t.Run("conditions_json", func(t *testing.T) { assertStateMatchesConfig(t, model.ConditionsJSON, conditionsConfig) })
+	t.Run("appearance_json", func(t *testing.T) { assertStateMatchesConfig(t, model.AppearanceJSON, appearanceConfig) })
+	t.Run("translations_json", func(t *testing.T) { assertStateMatchesConfig(t, model.TranslationsJSON, translationsConfig) })
+	t.Run("form_content_json", func(t *testing.T) { assertStateMatchesConfig(t, model.FormContentJSON, formContentConfig) })
+}
