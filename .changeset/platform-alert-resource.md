@@ -1,0 +1,5 @@
+---
+"terraform-provider-posthog": minor
+---
+
+**New Resource:** `posthog_platform_alert`: an alert on PostHog's shared alerts platform, one resource for every kind of alert, chosen by `source_kind`. `logs` is the first kind, with its filters and condition in a typed `logs` block. Every setting has the default PostHog stores, declared in the schema, so it shows in the plan and a UI edit reads as drift. The logs condition defaults to above 100 in 5 minutes, the defaults of `posthog_logs_alert`. Changing `source_kind` replaces the alert. Changing `grouping.keys` makes PostHog drop the existing groups without a resolve message. An existing `posthog_logs_alert` moves onto it with a `moved` block (Terraform 1.8 and later) and no destroy, once its project has begun moving logs alerts to the platform; the move stores the logs alert's id and the next refresh looks up the platform id. Manage each alert with one resource only, since the provider cannot detect two. The API is behind the `platform-alerts` feature flag, and a key needs `alert:write` and `logs:write`.
