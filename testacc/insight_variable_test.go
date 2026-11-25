@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
@@ -118,6 +119,39 @@ func TestInsightVariable_Update(t *testing.T) {
 					resource.TestCheckResourceAttr("posthog_insight_variable.test", "default_value_json", "30"),
 					resource.TestCheckResourceAttr("posthog_insight_variable.test", "code_name", strings.ToLower(strings.ReplaceAll(rName, "-", ""))),
 				),
+			},
+		},
+	})
+}
+
+// TestInsightVariable_JSONFormatting verifies that values_json and default_value_json
+// are compared by content, so JSON that is not formatted like jsonencode output applies
+// and plans clean, while a changed value still shows as a change.
+func TestInsightVariable_JSONFormatting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckInsightVariableDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInsightVariableFormattedJSON(rName, "eu", "2.0"),
+			},
+			{
+				Config:   testAccInsightVariableFormattedJSON(rName, "eu", "2.0"),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccInsightVariableFormattedJSON(rName, "apac", "3.0"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("posthog_insight_variable.list", plancheck.ResourceActionUpdate),
+						plancheck.ExpectResourceAction("posthog_insight_variable.number", plancheck.ResourceActionUpdate),
+					},
+				},
 			},
 		},
 	})
@@ -247,6 +281,30 @@ resource "posthog_insight_variable" "test" {
   default_value_json = jsonencode("prod")
 }
 `, name)
+}
+
+func testAccInsightVariableFormattedJSON(name, region, number string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight_variable" "list" {
+  name = %[1]q
+  type = "List"
+
+  values_json = <<-EOT
+    [
+      "us",
+      %[3]q
+    ]
+  EOT
+}
+
+resource "posthog_insight_variable" "number" {
+  name               = %[2]q
+  type               = "Number"
+  default_value_json = %[4]q
+}
+`, name+"-list", name+"-number", region, number)
 }
 
 func testAccInsightVariableBooleanAndDate(name string) string {
