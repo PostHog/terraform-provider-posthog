@@ -147,16 +147,7 @@ func TestSurvey_JSONFormatting(t *testing.T) {
 // testAccCheckSurveyJSON checks the value that testAccSurveyJSONHeredocs puts in each
 // JSON attribute against what PostHog stores.
 func testAccCheckSurveyJSON(want string) resource.TestCheckFunc {
-	return func(s *terraform.State) error {
-		rs, ok := s.RootModule().Resources[testSurveyResourceName]
-		if !ok {
-			return fmt.Errorf("resource not found: %s", testSurveyResourceName)
-		}
-		client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
-		survey, _, err := client.GetSurvey(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
-		if err != nil {
-			return err
-		}
+	return testAccCheckSurvey(func(survey httpclient.Survey) error {
 		for name, value := range map[string]any{
 			"questions":    survey.Questions,
 			"conditions":   survey.Conditions,
@@ -173,7 +164,7 @@ func testAccCheckSurveyJSON(want string) resource.TestCheckFunc {
 			}
 		}
 		return nil
-	}
+	})
 }
 
 func testAccSurveyJSONHeredocs(name, value string) string {
@@ -213,6 +204,176 @@ resource "posthog_survey" "test" {
   EOT
 }
 `, name, value)
+}
+
+// TestSurvey_RemoveJSON verifies that removing an optional JSON attribute clears it in
+// PostHog, while removing appearance_json keeps the appearance.
+func TestSurvey_RemoveJSON(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-survey")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckSurveyDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSurveyJSONHeredocs(rName, "initial"),
+				Check:  testAccCheckSurveyJSON("initial"),
+			},
+			{
+				Config: testAccSurveyBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "conditions_json"),
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "translations_json"),
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "form_content_json"),
+					testAccCheckSurvey(func(survey httpclient.Survey) error {
+						if survey.Conditions != nil || survey.Translations != nil || survey.FormContent != nil {
+							return fmt.Errorf("expected cleared JSON, got conditions %v, translations %v, form_content %v",
+								survey.Conditions, survey.Translations, survey.FormContent)
+						}
+						if appearance, ok := survey.Appearance.(map[string]any); !ok || appearance["thankYouMessageHeader"] != "initial" {
+							return fmt.Errorf("expected the appearance to be kept, got %v", survey.Appearance)
+						}
+						return nil
+					}),
+				),
+			},
+		},
+	})
+}
+
+// TestSurvey_UnsetAppearanceKeepsPostHogEdits verifies that updating another attribute
+// leaves an appearance that was edited in PostHog alone.
+func TestSurvey_UnsetAppearanceKeepsPostHogEdits(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-survey")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckSurveyDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSurveyBasic(rName),
+				Check: func(s *terraform.State) error {
+					client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+					_, _, err := client.UpdateSurvey(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"),
+						s.RootModule().Resources[testSurveyResourceName].Primary.ID,
+						httpclient.SurveyRequest{
+							Name:       rName,
+							Type:       "popover",
+							Questions:  []any{map[string]any{"type": "open", "question": "How satisfied are you?"}},
+							Appearance: map[string]any{"backgroundColor": "#000000"},
+						})
+					return err
+				},
+			},
+			{
+				Config: testAccSurveyUpdated(rName),
+				Check: testAccCheckSurvey(func(survey httpclient.Survey) error {
+					if appearance, ok := survey.Appearance.(map[string]any); !ok || appearance["backgroundColor"] != "#000000" {
+						return fmt.Errorf("expected the edited appearance to be kept, got %v", survey.Appearance)
+					}
+					return nil
+				}),
+			},
+		},
+	})
+}
+
+// TestSurvey_TargetingFilters verifies that the feature flag PostHog creates from
+// targeting_flag_filters_json follows the filters and is removed with them.
+func TestSurvey_TargetingFilters(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-survey")
+	var flagID any
+	checkRollout := func(want float64) resource.TestCheckFunc {
+		return testAccCheckSurvey(func(survey httpclient.Survey) error {
+			filters, _ := survey.TargetingFlag["filters"].(map[string]any)
+			groups, _ := filters["groups"].([]any)
+			if len(groups) != 1 || groups[0].(map[string]any)["rollout_percentage"] != want {
+				return fmt.Errorf("expected one group at %v%%, got %v", want, survey.TargetingFlag)
+			}
+			if flagID != nil && flagID != survey.TargetingFlag["id"] {
+				return fmt.Errorf("expected flag %v to be updated, got flag %v", flagID, survey.TargetingFlag["id"])
+			}
+			flagID = survey.TargetingFlag["id"]
+			return nil
+		})
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckSurveyDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccSurveyTargetingFilters(rName, testAccRolloutFilters(50)),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_id"),
+					resource.TestCheckResourceAttrSet(testSurveyResourceName, "targeting_flag_json"),
+					checkRollout(50),
+				),
+			},
+			{
+				Config: testAccSurveyTargetingFilters(rName, testAccRolloutFilters(25)),
+				Check:  checkRollout(25),
+			},
+			{
+				Config: testAccSurveyTargetingFilters(rName, "{}"),
+				Check:  resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_json"),
+			},
+			{
+				Config: testAccSurveyBasic(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_filters_json"),
+					resource.TestCheckNoResourceAttr(testSurveyResourceName, "targeting_flag_json"),
+				),
+			},
+		},
+	})
+}
+
+// testAccCheckSurvey runs check against the survey PostHog stores.
+func testAccCheckSurvey(check func(httpclient.Survey) error) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[testSurveyResourceName]
+		if !ok {
+			return fmt.Errorf("resource not found: %s", testSurveyResourceName)
+		}
+		client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+		survey, _, err := client.GetSurvey(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
+		if err != nil {
+			return err
+		}
+		return check(survey)
+	}
+}
+
+func testAccRolloutFilters(rollout int) string {
+	return fmt.Sprintf("{ groups = [{ properties = [], rollout_percentage = %d }] }", rollout)
+}
+
+func testAccSurveyTargetingFilters(name, filters string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_survey" "test" {
+  name = %q
+  type = "popover"
+  questions_json = jsonencode([
+    {
+      type     = "open"
+      question = "How satisfied are you?"
+    }
+  ])
+  targeting_flag_filters_json = jsonencode(%s)
+}
+`, name, filters)
 }
 
 func testAccSurveyBasic(name string) string {

@@ -69,7 +69,7 @@ resource "posthog_survey" "feature_feedback" {
 
 ### Optional
 
-- `appearance_json` (String) JSON object describing survey appearance settings.
+- `appearance_json` (String) JSON object describing survey appearance settings. If unset, the survey keeps the appearance it has in PostHog, which adds a default thank-you message to new surveys. Removing this attribute keeps the current appearance; changing it to `jsonencode({})` on an existing survey clears it.
 - `archived` (Boolean) Whether the survey is archived.
 - `conditions_json` (String) JSON object describing survey display and targeting conditions.
 - `create_in_folder` (String) Folder identifier used only during survey creation.
@@ -83,7 +83,7 @@ resource "posthog_survey" "feature_feedback" {
 - `linked_flag_id` (Number) Feature flag ID linked to the survey. Remove this attribute to unlink the flag from the survey.
 - `linked_insight_id` (Number) Insight ID linked to the survey. This field is write-only in the PostHog API and is preserved from Terraform state when configured.
 - `project_id` (String) Project ID (environment) for this resource. Overrides the provider-level project_id.
-- `response_sampling_daily_limits_json` (String) JSON object describing daily response sampling limits.
+- `response_sampling_daily_limits_json` (String) Daily response sampling limits, which PostHog calculates from the other `response_sampling_*` attributes as a JSON string. Leave this unset: PostHog ignores any other value, so the apply fails.
 - `response_sampling_interval` (Number) Response sampling interval value.
 - `response_sampling_interval_type` (String) Response sampling interval type. Supported values are `day`, `week`, and `month`.
 - `response_sampling_limit` (Number) Maximum responses allowed during each sampling interval.
@@ -91,7 +91,7 @@ resource "posthog_survey" "feature_feedback" {
 - `responses_limit` (Number) Maximum number of responses allowed for the survey.
 - `schedule` (String) Survey schedule. Supported values are `once`, `recurring`, and `always`.
 - `start_date` (String) RFC3339 start date for the survey.
-- `targeting_flag_filters_json` (String) JSON object describing targeting flag filters. This input is write-only in the PostHog API and is preserved from Terraform state when configured.
+- `targeting_flag_filters_json` (String) JSON object describing targeting flag filters. PostHog creates a feature flag from them; its ID is in `targeting_flag_json`, and `targeting_flag_id` stays unset. Removing this attribute, or setting it to `jsonencode({})`, deletes that flag unless you set `targeting_flag_id` instead. This input is write-only in the PostHog API and is preserved from Terraform state when configured.
 - `targeting_flag_id` (Number) Existing targeting feature flag ID to use for this survey. Remove this attribute to detach the targeting flag.
 - `translations_json` (String) JSON object describing translated survey content.
 
