@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/posthog/terraform-provider/pkg/httpclient"
 )
@@ -206,6 +207,58 @@ func TestAction_ClearTagsAndSteps(t *testing.T) {
 	})
 }
 
+// TestAction_StepsJSONFormatting verifies that steps_json is compared by content, so
+// JSON that is not formatted like jsonencode output applies and plans clean, while a
+// changed step still shows as a change.
+func TestAction_StepsJSONFormatting(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := acctest.RandomWithPrefix("tf-acc-test")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckActionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccActionStepsJSONHeredoc(rName, "https://example.com/"),
+			},
+			{
+				Config:   testAccActionStepsJSONHeredoc(rName, "https://example.com/"),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccActionStepsJSONHeredoc(rName, "https://example.com/changed"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("posthog_action.test", plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: testAccCheckActionStepURL("https://example.com/changed"),
+			},
+		},
+	})
+}
+
+// testAccCheckActionStepURL checks the URL of the action's first step in PostHog.
+func testAccCheckActionStepURL(want string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources["posthog_action.test"]
+		if !ok {
+			return fmt.Errorf("resource not found: posthog_action.test")
+		}
+		client := httpclient.NewDefaultClient(os.Getenv("POSTHOG_HOST"), os.Getenv("POSTHOG_API_KEY"), "test")
+		action, _, err := client.GetAction(context.Background(), os.Getenv("POSTHOG_PROJECT_ID"), rs.Primary.ID)
+		if err != nil {
+			return err
+		}
+		if len(action.Steps) != 1 || action.Steps[0]["url"] != want {
+			return fmt.Errorf("expected one step with url %q, got %v", want, action.Steps)
+		}
+		return nil
+	}
+}
+
 func TestAction_Import(t *testing.T) {
 	skipIfNotAcceptance(t)
 
@@ -269,6 +322,26 @@ resource "posthog_action" "test" {
   ])
 }
 `, name)
+}
+
+func testAccActionStepsJSONHeredoc(name, url string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_action" "test" {
+  name = %q
+
+  steps_json = <<-EOT
+    [
+      {
+        "url_matching": "exact",
+        "url": %q,
+        "event": "$pageview"
+      }
+    ]
+  EOT
+}
+`, name, url)
 }
 
 func testAccActionUpdated(name string) string {
