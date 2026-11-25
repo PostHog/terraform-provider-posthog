@@ -81,9 +81,12 @@ func (o HogFunctionOps) Schema() schema.Schema {
 				Optional:            true,
 				MarkdownDescription: "Name of the Hog function.",
 			},
+			// No UseStateForUnknown: an update that leaves description out must not
+			// send back a stale one and overwrite an edit made in PostHog.
 			"description": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Description of the Hog function.",
+				Computed:            true,
+				MarkdownDescription: "Description of the Hog function. When omitted, the function keeps the description it has in PostHog; a new function created from a template gets the template's. Set it to an empty string to clear it. To clear a template's description, first create the function without `description`: creating it with an empty string fails, because PostHog fills in the template's.",
 			},
 			"enabled": schema.BoolAttribute{
 				Optional:            true,
@@ -283,15 +286,8 @@ func (o HogFunctionOps) BuildCreateRequest(ctx context.Context, model HogFunctio
 	return req, diags
 }
 
-func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, state HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
-	req, diags := o.BuildCreateRequest(ctx, plan)
-
-	// Clear description if removed from config
-	if core.ShouldClearString(plan.Description, state.Description) {
-		req.Description = util.StringPtr("")
-	}
-
-	return req, diags
+func (o HogFunctionOps) BuildUpdateRequest(ctx context.Context, plan, _ HogFunctionResourceTFModel) (httpclient.HogFunctionRequest, diag.Diagnostics) {
+	return o.BuildCreateRequest(ctx, plan)
 }
 
 func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.HogFunction, model *HogFunctionResourceTFModel) diag.Diagnostics {
@@ -306,7 +302,12 @@ func (o HogFunctionOps) MapResponseToModel(ctx context.Context, resp httpclient.
 	}
 
 	model.Name = core.PtrToStringNullIfEmptyTrimmed(resp.Name)
-	model.Description = core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	serverDescription := core.PtrToStringNullIfEmptyTrimmed(resp.Description)
+	// A blank server description reads as null, which would not match a configured "".
+	keepEmpty := serverDescription.IsNull() && model.Description.Equal(types.StringValue(""))
+	if !keepEmpty {
+		model.Description = serverDescription
+	}
 	model.Enabled = core.PtrToBool(resp.Enabled)
 	model.IconURL = core.PtrToStringNullIfEmptyTrimmed(resp.IconURL)
 
