@@ -41,6 +41,18 @@ func assertStateMatchesConfig(t *testing.T, state core.NormalizedJSON, configJSO
 	assert.True(t, equal, "config %s must equal state %s", configJSON, state.ValueString())
 }
 
+func TestActionSteps_WholeNumberFloatMatchesAPIInteger(t *testing.T) {
+	configJSON := `[{"event":"purchase","properties":[{"key":"amount","operator":"gt","type":"event","value":10.0}]}]`
+	model := ActionTFModel{StepsJSON: core.NewNormalizedJSONValue(configJSON)}
+	resp := decodeAPIResponse[httpclient.Action](t,
+		`{"id":1,"steps":[{"event":"purchase","url":null,"properties":[{"key":"amount","operator":"gt","type":"event","value":10}]}]}`)
+
+	diags := ActionOps{}.MapResponseToModel(context.Background(), resp, &model)
+	require.False(t, diags.HasError(), diags.Errors())
+
+	assertStateMatchesConfig(t, model.StepsJSON, configJSON)
+}
+
 func TestCohortFilters_WholeNumberFloatMatchesAPIInteger(t *testing.T) {
 	configJSON := `{"properties":{"type":"AND","values":[{"key":"$session_duration","operator":"gt","type":"person","value":60.0}]}}`
 	model := CohortTFModel{Filters: core.NewNormalizedJSONValue(configJSON)}

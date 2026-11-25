@@ -29,14 +29,14 @@ func NewAction() resource.Resource {
 type ActionTFModel struct {
 	core.BaseInt64Identifiable
 	core.BaseProjectID
-	Name               types.String `tfsdk:"name"`
-	Description        types.String `tfsdk:"description"`
-	Tags               types.Set    `tfsdk:"tags"`
-	PostToSlack        types.Bool   `tfsdk:"post_to_slack"`
-	SlackMessageFormat types.String `tfsdk:"slack_message_format"`
-	StepsJSON          types.String `tfsdk:"steps_json"`
-	CreatedAt          types.String `tfsdk:"created_at"`
-	Deleted            types.Bool   `tfsdk:"deleted"`
+	Name               types.String        `tfsdk:"name"`
+	Description        types.String        `tfsdk:"description"`
+	Tags               types.Set           `tfsdk:"tags"`
+	PostToSlack        types.Bool          `tfsdk:"post_to_slack"`
+	SlackMessageFormat types.String        `tfsdk:"slack_message_format"`
+	StepsJSON          core.NormalizedJSON `tfsdk:"steps_json"`
+	CreatedAt          types.String        `tfsdk:"created_at"`
+	Deleted            types.Bool          `tfsdk:"deleted"`
 }
 
 type ActionOps struct{}
@@ -91,8 +91,9 @@ func (o ActionOps) Schema() schema.Schema {
 				},
 			},
 			"steps_json": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
+				CustomType: core.NormalizedJSONType{},
+				Optional:   true,
+				Computed:   true,
 				MarkdownDescription: "JSON-encoded array of action step objects. " +
 					"See the [ActionStep schema](https://posthog.com/docs/api/actions) for available fields.",
 				PlanModifiers: []planmodifier.String{
@@ -219,11 +220,11 @@ func (o ActionOps) MapResponseToModel(ctx context.Context, resp httpclient.Actio
 			diags.AddError("Failed to normalize steps", err.Error())
 			return diags
 		}
-		model.StepsJSON = types.StringValue(normalized)
+		model.StepsJSON = core.NewNormalizedJSONValue(normalized)
 	} else if !model.StepsJSON.IsNull() {
-		model.StepsJSON = types.StringValue("[]")
+		model.StepsJSON = core.NewNormalizedJSONValue("[]")
 	} else {
-		model.StepsJSON = types.StringNull()
+		model.StepsJSON = core.NewNormalizedJSONNull()
 	}
 
 	tagsSet, d := core.TagsToSetPreserveEmpty(ctx, resp.Tags, model.Tags)
