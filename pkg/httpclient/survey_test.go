@@ -83,9 +83,9 @@ func TestSurveyCRUDRequests(t *testing.T) {
 	// targeting_flag_id is not nullable upstream; absent values must stay omitted.
 	_, hasTargetingFlagID := createBody["targeting_flag_id"]
 	assert.False(t, hasTargetingFlagID)
-	// Nullable integer fields must be present (as JSON null) so PostHog actually
+	// Nullable fields must be present (as JSON null) so PostHog actually
 	// clears them on update; see SurveyRequest tag comments for rationale.
-	for _, key := range SurveyNullableIntegerJSONFields {
+	for _, key := range SurveyNullableJSONFields {
 		raw, present := createBody[key]
 		assert.True(t, present, "%s should be present in the create body", key)
 		assert.Nil(t, raw, "%s should serialize as JSON null when unset", key)

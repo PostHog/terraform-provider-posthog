@@ -217,39 +217,137 @@ func TestNormalizeSurveyQuestionsForState(t *testing.T) {
 	}
 }
 
-func TestSurveyBuildRequestPreservesWriteOnlyFilters(t *testing.T) {
-	ops := SurveyOps{}
+func TestSurveyBuildRequest_Targeting(t *testing.T) {
+	const filtersJSON = `{"groups":[{"properties":[],"rollout_percentage":50}]}`
+	filters := map[string]any{"groups": []any{map[string]any{"properties": []any{}, "rollout_percentage": float64(50)}}}
+	surveyFlag := types.StringValue(`{"id":11,"key":"survey-targeting-afc3bbeb1f"}`)
+	userFlag := types.StringValue(`{"id":11,"key":"beta-users"}`)
+	none, id, configured := types.Int64Null(), types.Int64Value(11), types.StringValue(filtersJSON)
 
-	plan := SurveyTFModel{
-		Name:          types.StringValue(testSurveyName),
-		Type:          types.StringValue(testSurveyType),
-		QuestionsJSON: core.NewNormalizedJSONValue(testSurveyQuestionJSON),
-	}
-	state := SurveyTFModel{
-		TargetingFlagFiltersJSON: types.StringValue(`{"groups":[{"properties":[{"key":"email","operator":"icontains","type":"person","value":"@example.com"}],"rollout_percentage":100}]}`),
+	tests := map[string]struct {
+		planID       types.Int64
+		planFilters  types.String
+		stateID      types.Int64
+		stateFilters types.String
+		stateFlag    types.String
+		wantFilters  any
+		wantRemove   bool
+		wantError    string
+	}{
+		"never set":                       {none, types.StringNull(), none, types.StringNull(), types.StringNull(), nil, false, ""},
+		"filters added":                   {none, configured, none, types.StringNull(), types.StringNull(), filters, false, ""},
+		"filters kept":                    {none, configured, none, configured, surveyFlag, filters, false, ""},
+		"filters removed":                 {none, types.StringNull(), none, configured, surveyFlag, nil, true, ""},
+		"filters added after import":      {none, configured, id, types.StringNull(), surveyFlag, filters, false, ""},
+		"state written by an old version": {none, configured, id, configured, surveyFlag, filters, false, ""},
+		"flag removed":                    {none, types.StringNull(), id, types.StringNull(), userFlag, nil, true, ""},
+		"flag and filters":                {id, configured, id, configured, userFlag, filters, false, ""},
+		"filters removed, flag kept":      {id, types.StringNull(), id, configured, userFlag, nil, false, ""},
+		"flag replaced with filters":      {none, configured, id, types.StringNull(), userFlag, nil, false, "feature flag 11"},
 	}
 
-	req, diags := ops.buildRequest(context.Background(), plan, state)
-	require.False(t, diags.HasError())
-	require.NotNil(t, req.TargetingFlagFilters)
-	assert.Equal(t,
-		map[string]interface{}{
-			"groups": []interface{}{
-				map[string]interface{}{
-					"properties": []interface{}{
-						map[string]interface{}{
-							"key":      "email",
-							"operator": "icontains",
-							"type":     "person",
-							"value":    "@example.com",
-						},
-					},
-					"rollout_percentage": float64(100),
-				},
-			},
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			questions := core.NewNormalizedJSONValue(testSurveyQuestionJSON)
+			plan := SurveyTFModel{QuestionsJSON: questions, TargetingFlagID: tt.planID, TargetingFlagFiltersJSON: tt.planFilters}
+			state := SurveyTFModel{QuestionsJSON: questions, TargetingFlagID: tt.stateID, TargetingFlagFiltersJSON: tt.stateFilters, TargetingFlagJSON: tt.stateFlag}
+
+			req, diags := SurveyOps{}.BuildUpdateRequest(context.Background(), plan, state)
+
+			if tt.wantError != "" {
+				require.True(t, diags.HasError())
+				assert.Contains(t, diags.Errors()[0].Detail(), tt.wantError)
+			} else {
+				require.False(t, diags.HasError(), diags.Errors())
+			}
+			assert.Equal(t, tt.wantFilters, req.TargetingFlagFilters)
+			assert.Equal(t, tt.wantRemove, req.RemoveTargetingFlag != nil)
+		})
+	}
+}
+
+func TestSurveyMapResponseToModel_Targeting(t *testing.T) {
+	flag := map[string]any{"id": float64(11), "key": "survey-targeting-afc3bbeb1f"}
+	none, id := types.Int64Null(), types.Int64Value(11)
+	noFilters, configured, empty := types.StringNull(), types.StringValue(`{"groups":[]}`), types.StringValue(`{ }`)
+
+	tests := map[string]struct {
+		beforeID      types.Int64
+		beforeFilters types.String
+		flag          map[string]any
+		afterID       types.Int64
+		afterFilters  types.String
+	}{
+		"import or flag added in PostHog":   {none, noFilters, flag, id, noFilters},
+		"configured flag":                   {id, noFilters, flag, id, noFilters},
+		"configured flag gone in PostHog":   {id, noFilters, nil, none, noFilters},
+		"filters":                           {none, configured, flag, none, configured},
+		"filters with a configured flag":    {id, configured, flag, id, configured},
+		"filters, flag gone in PostHog":     {none, configured, nil, none, noFilters},
+		"empty filters, which make no flag": {none, empty, nil, none, empty},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := SurveyTFModel{TargetingFlagID: tt.beforeID, TargetingFlagFiltersJSON: tt.beforeFilters}
+			diags := SurveyOps{}.MapResponseToModel(context.Background(), httpclient.Survey{TargetingFlag: tt.flag}, &model)
+			require.False(t, diags.HasError(), diags.Errors())
+			assert.Equal(t, tt.afterID, model.TargetingFlagID)
+			assert.Equal(t, tt.afterFilters, model.TargetingFlagFiltersJSON)
+		})
+	}
+}
+
+// PostHog keeps the old value of a field the update leaves out, so removing an attribute
+// from the config must send null. appearance_json and response_sampling_daily_limits_json
+// are computed, so an update plans them as unknown while they are unset and sends nothing.
+func TestSurveyBuildUpdateRequest_RemovedJSON(t *testing.T) {
+	value := core.NewNormalizedJSONValue(`{"a":1}`)
+	questions := core.NewNormalizedJSONValue(testSurveyQuestionJSON)
+	requestBody := func(plan, state SurveyTFModel) map[string]any {
+		plan.QuestionsJSON, state.QuestionsJSON = questions, questions
+		req, diags := SurveyOps{}.BuildUpdateRequest(context.Background(), plan, state)
+		require.False(t, diags.HasError(), diags.Errors())
+		data, err := json.Marshal(req)
+		require.NoError(t, err)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(data, &body))
+		return body
+	}
+
+	removed := requestBody(
+		SurveyTFModel{
+			AppearanceJSON:              core.NewNormalizedJSONUnknown(),
+			ResponseSamplingDailyLimits: core.NewNormalizedJSONUnknown(),
 		},
-		req.TargetingFlagFilters,
+		SurveyTFModel{
+			ConditionsJSON:              value,
+			TranslationsJSON:            value,
+			FormContentJSON:             value,
+			AppearanceJSON:              value,
+			ResponseSamplingDailyLimits: value,
+		},
 	)
+	for _, key := range []string{"conditions", "translations", "form_content"} {
+		got, present := removed[key]
+		assert.True(t, present, key)
+		assert.Nil(t, got, key)
+	}
+	assert.NotContains(t, removed, "appearance")
+	assert.NotContains(t, removed, "response_sampling_daily_limits")
+
+	neverSet := requestBody(SurveyTFModel{}, SurveyTFModel{})
+	for _, key := range []string{"conditions", "translations", "form_content", "appearance", "response_sampling_daily_limits"} {
+		assert.NotContains(t, neverSet, key)
+	}
+}
+
+func TestSurveySchema_ComputedByPostHog(t *testing.T) {
+	attributes := SurveyOps{}.Schema().Attributes
+	for _, name := range []string{"appearance_json", "response_sampling_daily_limits_json"} {
+		assert.True(t, attributes[name].IsOptional(), name)
+		assert.True(t, attributes[name].IsComputed(), name)
+	}
 }
 
 func TestSurveyBuildRequestAllFields(t *testing.T) {
@@ -493,10 +591,9 @@ func TestSurveyHelperFallbacks(t *testing.T) {
 	assert.Equal(t, int64(7), int64ValueFromMapOrNull(map[string]interface{}{"id": 7}).ValueInt64())
 }
 
-// TestSurveyClearNullableIntegerFields verifies that removing a nullable integer
-// attribute from config sends an explicit JSON null to the API, which PostHog
+// TestSurveyClearNullableFields verifies that removing a nullable attribute from config sends an explicit JSON null to the API, which PostHog
 // interprets as "clear this column." See SurveyRequest tag comments for details.
-func TestSurveyClearNullableIntegerFields(t *testing.T) {
+func TestSurveyClearNullableFields(t *testing.T) {
 	ops := SurveyOps{}
 	plan := SurveyTFModel{
 		Name:          types.StringValue(testSurveyName),
@@ -504,13 +601,14 @@ func TestSurveyClearNullableIntegerFields(t *testing.T) {
 		QuestionsJSON: core.NewNormalizedJSONValue(testSurveyQuestionJSON),
 	}
 	state := SurveyTFModel{
-		LinkedFlagID:             types.Int64Value(11),
-		LinkedInsightID:          types.Int64Value(12),
-		ResponsesLimit:           types.Int64Value(100),
-		IterationCount:           types.Int64Value(3),
-		IterationFrequencyDays:   types.Int64Value(7),
-		ResponseSamplingInterval: types.Int64Value(2),
-		ResponseSamplingLimit:    types.Int64Value(50),
+		LinkedFlagID:              types.Int64Value(11),
+		LinkedInsightID:           types.Int64Value(12),
+		ResponsesLimit:            types.Int64Value(100),
+		IterationCount:            types.Int64Value(3),
+		IterationFrequencyDays:    types.Int64Value(7),
+		ResponseSamplingStartDate: types.StringValue(testSurveySamplingStartDate),
+		ResponseSamplingInterval:  types.Int64Value(2),
+		ResponseSamplingLimit:     types.Int64Value(50),
 	}
 
 	req, diags := ops.BuildUpdateRequest(context.Background(), plan, state)
@@ -522,10 +620,10 @@ func TestSurveyClearNullableIntegerFields(t *testing.T) {
 	var decoded map[string]interface{}
 	require.NoError(t, json.Unmarshal(body, &decoded))
 
-	// All seven nullable integer fields must be present with a JSON null value
+	// All of these fields must be present with a JSON null value
 	// so the server actually clears them; an omitted field would leave the
 	// existing value untouched.
-	for _, key := range httpclient.SurveyNullableIntegerJSONFields {
+	for _, key := range httpclient.SurveyNullableJSONFields {
 		raw, present := decoded[key]
 		assert.True(t, present, "%s must be present in the request body", key)
 		assert.Nil(t, raw, "%s must serialize as JSON null to clear", key)

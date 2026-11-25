@@ -44,15 +44,16 @@ type Survey struct {
 	FormContent                  interface{}            `json:"form_content,omitempty"`
 }
 
-// SurveyNullableIntegerJSONFields lists the JSON keys whose Go fields drop
+// SurveyNullableJSONFields lists the JSON keys whose Go fields drop
 // `omitempty` per the SurveyRequest comment below. Both the resource and
 // httpclient test packages reference this slice so the list lives in one place.
-var SurveyNullableIntegerJSONFields = []string{
+var SurveyNullableJSONFields = []string{
 	"linked_flag_id",
 	"linked_insight_id",
 	"responses_limit",
 	"iteration_count",
 	"iteration_frequency_days",
+	"response_sampling_start_date",
 	"response_sampling_interval",
 	"response_sampling_limit",
 }
@@ -60,12 +61,15 @@ var SurveyNullableIntegerJSONFields = []string{
 // SurveyRequest is the wire format for POST/PUT to the surveys endpoint.
 //
 // Fields marked nullable in the upstream OpenAPI schema (the keys in
-// SurveyNullableIntegerJSONFields above) deliberately omit `,omitempty` so that
+// SurveyNullableJSONFields above) deliberately omit `,omitempty` so that
 // a nil pointer serialises as JSON `null`. PostHog interprets `null` as "clear
 // this column", which is the semantic users expect when they remove the
 // attribute from their Terraform config. Fields that are not nullable upstream
 // (targeting_flag_id, archived) keep `,omitempty` so an absent value is omitted
 // rather than rejected.
+//
+// The JSON fields (conditions, appearance and so on) are omitted when nil, which leaves
+// the value in PostHog alone. Set util.JSONNull() to clear one.
 type SurveyRequest struct {
 	Name                         string        `json:"name"`
 	Description                  *string       `json:"description,omitempty"`
@@ -85,7 +89,7 @@ type SurveyRequest struct {
 	ResponsesLimit               *int64        `json:"responses_limit"`
 	IterationCount               *int64        `json:"iteration_count"`
 	IterationFrequencyDays       *int64        `json:"iteration_frequency_days"`
-	ResponseSamplingStartDate    *string       `json:"response_sampling_start_date,omitempty"`
+	ResponseSamplingStartDate    *string       `json:"response_sampling_start_date"`
 	ResponseSamplingIntervalType *string       `json:"response_sampling_interval_type,omitempty"`
 	ResponseSamplingInterval     *int64        `json:"response_sampling_interval"`
 	ResponseSamplingLimit        *int64        `json:"response_sampling_limit"`

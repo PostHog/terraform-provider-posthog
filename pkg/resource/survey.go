@@ -18,6 +18,10 @@ import (
 	"github.com/posthog/terraform-provider/pkg/util"
 )
 
+// surveyTargetingFlagKeyPrefix starts the key of every feature flag PostHog creates from
+// targeting_flag_filters.
+const surveyTargetingFlagKeyPrefix = "survey-targeting-"
+
 // surveyQuestionServerFields are fields the API generates per-question
 // that should be stripped during import, when there is no configured JSON.
 // Configured IDs must be preserved during normal reads and writes.
@@ -112,6 +116,8 @@ func (o SurveyOps) Schema() schema.Schema {
 			// a default for these, and Computed + UseStateForUnknown would carry the prior
 			// value into plan when config drops the attribute — making the unlink path
 			// (linked_flag_id: null) and the remove_targeting_flag clear path unreachable.
+			// targeting_flag_id stays null while targeting_flag_filters_json is set, although
+			// PostHog then creates a targeting flag: see mapSurveyRelationshipFields.
 			"linked_flag_id": schema.Int64Attribute{
 				Optional:            true,
 				MarkdownDescription: "Feature flag ID linked to the survey. Remove this attribute to unlink the flag from the survey.",
@@ -126,7 +132,7 @@ func (o SurveyOps) Schema() schema.Schema {
 			},
 			"targeting_flag_filters_json": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "JSON object describing targeting flag filters. This input is write-only in the PostHog API and is preserved from Terraform state when configured.",
+				MarkdownDescription: "JSON object describing targeting flag filters. PostHog creates a feature flag from them; its ID is in `targeting_flag_json`, and `targeting_flag_id` stays unset. Removing this attribute deletes that flag. This input is write-only in the PostHog API and is preserved from Terraform state when configured.",
 			},
 			"questions_json": schema.StringAttribute{
 				CustomType:          core.NormalizedJSONType{},
@@ -138,10 +144,13 @@ func (o SurveyOps) Schema() schema.Schema {
 				Optional:            true,
 				MarkdownDescription: "JSON object describing survey display and targeting conditions.",
 			},
+			// No UseStateForUnknown: an unset appearance must be unknown on updates so it is not
+			// sent. State may hold only some of its fields, so sending it would drop the others.
 			"appearance_json": schema.StringAttribute{
 				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
-				MarkdownDescription: "JSON object describing survey appearance settings.",
+				Computed:            true,
+				MarkdownDescription: "JSON object describing survey appearance settings. If unset, the survey keeps the appearance it has in PostHog, which adds a default thank-you message to new surveys. Removing this attribute keeps the current appearance; set it to `jsonencode({})` to clear it.",
 			},
 			"start_date": schema.StringAttribute{
 				Optional:            true,
@@ -194,7 +203,8 @@ func (o SurveyOps) Schema() schema.Schema {
 			"response_sampling_daily_limits_json": schema.StringAttribute{
 				CustomType:          core.NormalizedJSONType{},
 				Optional:            true,
-				MarkdownDescription: "JSON object describing daily response sampling limits.",
+				Computed:            true,
+				MarkdownDescription: "Daily response sampling limits, which PostHog calculates from the other `response_sampling_*` attributes as a JSON string. Leave this unset: PostHog ignores any other value, so the apply fails.",
 			},
 			"enable_partial_responses": schema.BoolAttribute{
 				Optional:            true,
@@ -282,7 +292,7 @@ func (o SurveyOps) buildRequest(ctx context.Context, plan, state SurveyTFModel) 
 	applySurveyTimingFields(plan, &req)
 	applySurveySamplingFields(plan, &req)
 	applySurveyBooleanFields(plan, &req)
-	applySurveyTargetingClear(plan, state, &req)
+	diags.Append(applySurveyTargeting(plan, state, &req)...)
 
 	return req, diags
 }
@@ -317,12 +327,11 @@ func parseSurveyQuestions(attr core.NormalizedJSON) ([]interface{}, diag.Diagnos
 func appendSurveyJSONFields(plan, state SurveyTFModel, req *httpclient.SurveyRequest) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	diags.Append(assignJSONAttribute(plan.ConditionsJSON, "conditions_json", &req.Conditions)...)
+	diags.Append(assignClearableJSONAttribute(plan.ConditionsJSON, state.ConditionsJSON, "conditions_json", &req.Conditions)...)
 	diags.Append(assignJSONAttribute(plan.AppearanceJSON, "appearance_json", &req.Appearance)...)
 	diags.Append(assignJSONAttribute(plan.ResponseSamplingDailyLimits, "response_sampling_daily_limits_json", &req.ResponseSamplingDailyLimits)...)
-	diags.Append(assignJSONAttribute(plan.TranslationsJSON, "translations_json", &req.Translations)...)
-	diags.Append(assignJSONAttribute(plan.FormContentJSON, "form_content_json", &req.FormContent)...)
-	diags.Append(assignSurveyTargetingFilters(plan, state, req)...)
+	diags.Append(assignClearableJSONAttribute(plan.TranslationsJSON, state.TranslationsJSON, "translations_json", &req.Translations)...)
+	diags.Append(assignClearableJSONAttribute(plan.FormContentJSON, state.FormContentJSON, "form_content_json", &req.FormContent)...)
 
 	return diags
 }
@@ -337,27 +346,14 @@ func assignJSONAttribute(attr core.NormalizedJSON, name string, target *interfac
 	return nil
 }
 
-func assignSurveyTargetingFilters(plan, state SurveyTFModel, req *httpclient.SurveyRequest) diag.Diagnostics {
-	if core.IsKnown(plan.TargetingFlagFiltersJSON) {
-		value, diags := parseJSONAttribute(plan.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
-		if diags.HasError() {
-			return diags
-		}
-		req.TargetingFlagFilters = value
+// assignClearableJSONAttribute sends null when the attribute was removed from the config.
+// Leaving it out of the request would keep the old value in PostHog.
+func assignClearableJSONAttribute(plan, state core.NormalizedJSON, name string, target *interface{}) diag.Diagnostics {
+	if plan.IsNull() && core.IsKnown(state) {
+		*target = util.JSONNull()
 		return nil
 	}
-
-	if core.IsKnown(state.TargetingFlagFiltersJSON) {
-		// Preserve the write-only value across normal updates when PostHog does not
-		// expose the original filters back to the provider.
-		value, diags := parseJSONAttribute(state.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
-		if diags.HasError() {
-			return diags
-		}
-		req.TargetingFlagFilters = value
-	}
-
-	return nil
+	return assignJSONAttribute(plan, name, target)
 }
 
 func applySurveyTimingFields(plan SurveyTFModel, req *httpclient.SurveyRequest) {
@@ -382,16 +378,40 @@ func applySurveyBooleanFields(plan SurveyTFModel, req *httpclient.SurveyRequest)
 	req.CreateInFolder = util.StringPtrFromValue(plan.CreateInFolder)
 }
 
-func applySurveyTargetingClear(plan, state SurveyTFModel, req *httpclient.SurveyRequest) {
-	if !plan.TargetingFlagID.IsNull() || state.TargetingFlagID.IsNull() || state.TargetingFlagID.IsUnknown() {
-		return
+// applySurveyTargeting sends the configured targeting filters, or removes the targeting
+// flag when the config no longer sets targeting_flag_id or targeting_flag_filters_json.
+func applySurveyTargeting(plan, state SurveyTFModel, req *httpclient.SurveyRequest) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	if core.IsKnown(plan.TargetingFlagFiltersJSON) {
+		// PostHog applies filters to the flag the survey already targets, so dropping
+		// targeting_flag_id in favor of filters would rewrite a flag managed elsewhere.
+		if plan.TargetingFlagID.IsNull() && core.IsKnown(state.TargetingFlagID) && !isSurveyOwnedFlag(state.TargetingFlagJSON) {
+			diags.AddError("Cannot replace targeting_flag_id with targeting_flag_filters_json",
+				fmt.Sprintf("PostHog would overwrite the filters of feature flag %d, which this survey targets but does not own. "+
+					"Keep targeting_flag_id and change the filters on that feature flag instead.", state.TargetingFlagID.ValueInt64()))
+			return diags
+		}
+		req.TargetingFlagFilters, diags = parseJSONAttribute(plan.TargetingFlagFiltersJSON, "targeting_flag_filters_json")
+		return diags
 	}
 
-	// Explicitly clear an existing external targeting flag when the config removes it.
-	removeTargetingFlag := true
-	req.RemoveTargetingFlag = &removeTargetingFlag
-	req.TargetingFlagID = nil
-	req.TargetingFlagFilters = nil
+	if plan.TargetingFlagID.IsNull() && (core.IsKnown(state.TargetingFlagID) || core.IsKnown(state.TargetingFlagFiltersJSON)) {
+		removeTargetingFlag := true
+		req.RemoveTargetingFlag = &removeTargetingFlag
+	}
+	return diags
+}
+
+// isSurveyOwnedFlag reports whether PostHog created the targeting flag for a survey.
+func isSurveyOwnedFlag(targetingFlagJSON types.String) bool {
+	var flag struct {
+		Key string `json:"key"`
+	}
+	if json.Unmarshal([]byte(targetingFlagJSON.ValueString()), &flag) != nil {
+		return false
+	}
+	return strings.HasPrefix(flag.Key, surveyTargetingFlagKeyPrefix)
 }
 
 func (o SurveyOps) MapResponseToModel(_ context.Context, resp httpclient.Survey, model *SurveyTFModel) diag.Diagnostics {
@@ -400,7 +420,7 @@ func (o SurveyOps) MapResponseToModel(_ context.Context, resp httpclient.Survey,
 	mapSurveyRelationshipFields(resp, model)
 	mapSurveyQuestionsField(resp, model)
 	mapSurveyStructuredJSONFields(resp, model)
-	preserveWriteOnlySurveyFields(model)
+	mapSurveyTargetingFilters(resp, model)
 	mapSurveyScheduleFields(resp, model)
 	mapSurveyComputedFields(resp, model)
 
@@ -416,7 +436,11 @@ func mapSurveyCoreFields(resp httpclient.Survey, model *SurveyTFModel) {
 
 func mapSurveyRelationshipFields(resp httpclient.Survey, model *SurveyTFModel) {
 	model.LinkedFlagID = int64ValueFromMapOrNull(resp.LinkedFlag)
-	model.TargetingFlagID = int64ValueFromMapOrNull(resp.TargetingFlag)
+	// Filters make PostHog create the targeting flag, so the config has no ID for it and
+	// state must not either. The flag is still in targeting_flag_json.
+	if !core.IsKnown(model.TargetingFlagFiltersJSON) || !model.TargetingFlagID.IsNull() {
+		model.TargetingFlagID = int64ValueFromMapOrNull(resp.TargetingFlag)
+	}
 
 	if model.LinkedInsightID.IsUnknown() {
 		model.LinkedInsightID = types.Int64Null()
@@ -442,11 +466,19 @@ func mapSurveyStructuredJSONFields(resp httpclient.Survey, model *SurveyTFModel)
 	applyNormalizedJSONString(resp.FormContent, model.FormContentJSON.ValueString(), &model.FormContentJSON)
 }
 
-func preserveWriteOnlySurveyFields(model *SurveyTFModel) {
+func mapSurveyTargetingFilters(resp httpclient.Survey, model *SurveyTFModel) {
 	// targeting_flag_filters is write-only. Preserve the configured value during
 	// ordinary refreshes instead of trying to reconstruct it from augmented API
 	// state. Imported resources keep this attribute null.
 	if model.TargetingFlagFiltersJSON.IsUnknown() {
+		model.TargetingFlagFiltersJSON = types.StringNull()
+		return
+	}
+
+	// Filters always leave a targeting flag in PostHog, except empty ones, which PostHog
+	// ignores. Without a flag the survey targets everyone, so let the plan restore them.
+	filters := json.RawMessage(model.TargetingFlagFiltersJSON.ValueString())
+	if len(resp.TargetingFlag) == 0 && !isEmptyJSONObjectOrNull(filters) {
 		model.TargetingFlagFiltersJSON = types.StringNull()
 	}
 }
