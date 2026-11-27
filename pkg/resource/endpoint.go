@@ -96,8 +96,8 @@ func (o EndpointOps) Schema() schema.Schema {
 				Required:   true,
 				CustomType: core.NormalizedJSONType{},
 				MarkdownDescription: "JSON-encoded query the endpoint runs, for example a `HogQLQuery` or a `TrendsQuery`. " +
-					"Changing it creates a new version in place. A HogQL query references a SQL variable as `{variables.code_name}`; " +
-					"declare it under `variables`, keyed by the `posthog_insight_variable` id, with `variableId` and `code_name`. " +
+					"Changing it creates a new version in place. A HogQL query references a SQL variable as `{variables.code_name}`. " +
+					"Declare it under `variables`, keyed by the `posthog_insight_variable` id, with `variableId` and `code_name`. " +
 					"PostHog fills in values from the variable's default and adds fields of its own, which the provider ignores.",
 			},
 			"description": schema.StringAttribute{
