@@ -79,9 +79,6 @@ func TestEndpoint_Basic(t *testing.T) {
 				ImportState:       true,
 				ImportStateId:     rName,
 				ImportStateVerify: true,
-				// Without a configuration to filter by, import keeps every field
-				// PostHog stored in the query, so it is checked by the plan below instead.
-				ImportStateVerifyIgnore: []string{"query_json"},
 			},
 		},
 	})
@@ -215,6 +212,12 @@ func TestEndpoint_Variables(t *testing.T) {
 			{
 				Config:   testAccEndpointWithVariable(rName),
 				PlanOnly: true,
+			},
+			{
+				ResourceName:      "posthog_endpoint.test",
+				ImportState:       true,
+				ImportStateId:     rName,
+				ImportStateVerify: true,
 			},
 		},
 	})
