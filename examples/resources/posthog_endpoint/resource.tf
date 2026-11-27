@@ -11,10 +11,11 @@ resource "posthog_endpoint" "daily_signups" {
 }
 
 # Endpoint with a SQL variable. The query names the variable as
-# {variables.code_name} and declares it under `variables`, keyed by the
-# variable's id. Building both from the posthog_insight_variable resource
-# also makes Terraform create the variable first. Callers override the
-# default in the run body: {"variables": {"event_name": "$pageview"}}.
+# {variables.code_name}. PostHog looks the variable up by code name, so
+# declaring it under `variables` is optional, but building the declaration
+# from the posthog_insight_variable resource makes Terraform create the
+# variable first. Callers override the default by code name in the run body:
+# POST .../endpoints/event-count/run/ {"variables": {"<code_name>": "$autocapture"}}
 resource "posthog_insight_variable" "event_name" {
   name               = "Event name"
   type               = "String"

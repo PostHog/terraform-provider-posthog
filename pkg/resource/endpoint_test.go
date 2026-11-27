@@ -222,6 +222,23 @@ func TestEndpointMapResponseToModel(t *testing.T) {
 			wantQuery: configuredQuery,
 			wantOver:  types.MapNull(types.StringType),
 		},
+		// PostHog fills in query.variables from the code names in the SQL when the
+		// configuration does not declare them.
+		"variables PostHog fills in for an undeclared code name are ignored": {
+			config:    core.NewNormalizedJSONValue(`{"kind":"HogQLQuery","query":"SELECT {variables.event_name}"}`),
+			materials: &httpclient.EndpointMaterialization{Enabled: util.BoolPtr(false)},
+			wantQuery: `{"kind":"HogQLQuery","query":"SELECT {variables.event_name}"}`,
+			wantOver:  types.MapNull(types.StringType),
+		},
+		// Clearing bucket overrides with {} leaves {} stored on the version.
+		"cleared bucket overrides on a materialized endpoint read as null": {
+			config:    core.NewNormalizedJSONValue(configuredQuery),
+			materials: &httpclient.EndpointMaterialization{Enabled: util.BoolPtr(true)},
+			overrides: map[string]string{},
+			wantQuery: configuredQuery,
+			wantMat:   true,
+			wantOver:  types.MapNull(types.StringType),
+		},
 	}
 
 	for name, tc := range tests {

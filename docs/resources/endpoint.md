@@ -26,10 +26,11 @@ resource "posthog_endpoint" "daily_signups" {
 }
 
 # Endpoint with a SQL variable. The query names the variable as
-# {variables.code_name} and declares it under `variables`, keyed by the
-# variable's id. Building both from the posthog_insight_variable resource
-# also makes Terraform create the variable first. Callers override the
-# default in the run body: {"variables": {"event_name": "$pageview"}}.
+# {variables.code_name}. PostHog looks the variable up by code name, so
+# declaring it under `variables` is optional, but building the declaration
+# from the posthog_insight_variable resource makes Terraform create the
+# variable first. Callers override the default by code name in the run body:
+# POST .../endpoints/event-count/run/ {"variables": {"<code_name>": "$autocapture"}}
 resource "posthog_insight_variable" "event_name" {
   name               = "Event name"
   type               = "String"
@@ -73,7 +74,7 @@ resource "posthog_endpoint" "weekly_active_users" {
 ### Required
 
 - `name` (String) URL-safe name, unique in the project. It must start with a letter and hold only letters, digits, hyphens and underscores, up to 128 characters. The name is part of the run URL and PostHog cannot rename an endpoint, so changing it replaces the endpoint.
-- `query_json` (String) JSON-encoded query the endpoint runs, for example a `HogQLQuery` or a `TrendsQuery`. Changing it creates a new version in place. A HogQL query references a SQL variable as `{variables.code_name}`. Declare it under `variables`, keyed by the `posthog_insight_variable` id, with `variableId` and `code_name`. PostHog fills in values from the variable's default and adds fields of its own, which the provider ignores.
+- `query_json` (String) JSON-encoded query the endpoint runs, for example a `HogQLQuery` or a `TrendsQuery`. Changing it creates a new version in place. A HogQL query references a SQL variable as `{variables.code_name}`. PostHog looks the variable up by code name and fills in `variables` itself, so the variable must exist first. Declaring it under `variables`, keyed by the `posthog_insight_variable` id with `variableId` and `code_name`, also makes Terraform create the variable before the endpoint. The values and other fields PostHog adds to the stored query do not show as drift. Callers pass variable values by code name when they run the endpoint: `{"variables": {"code_name": "value"}}`.
 
 ### Optional
 

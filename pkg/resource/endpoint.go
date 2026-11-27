@@ -97,8 +97,11 @@ func (o EndpointOps) Schema() schema.Schema {
 				CustomType: core.NormalizedJSONType{},
 				MarkdownDescription: "JSON-encoded query the endpoint runs, for example a `HogQLQuery` or a `TrendsQuery`. " +
 					"Changing it creates a new version in place. A HogQL query references a SQL variable as `{variables.code_name}`. " +
-					"Declare it under `variables`, keyed by the `posthog_insight_variable` id, with `variableId` and `code_name`. " +
-					"PostHog fills in values from the variable's default and adds fields of its own, which the provider ignores.",
+					"PostHog looks the variable up by code name and fills in `variables` itself, so the variable must exist first. " +
+					"Declaring it under `variables`, keyed by the `posthog_insight_variable` id with `variableId` and `code_name`, " +
+					"also makes Terraform create the variable before the endpoint. " +
+					"The values and other fields PostHog adds to the stored query do not show as drift. " +
+					"Callers pass variable values by code name when they run the endpoint: `{\"variables\": {\"code_name\": \"value\"}}`.",
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
