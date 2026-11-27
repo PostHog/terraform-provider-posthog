@@ -220,6 +220,84 @@ func TestEndpoint_Variables(t *testing.T) {
 	})
 }
 
+// TestEndpoint_UndeclaredVariable pins that a query may name a variable only in
+// its SQL. PostHog fills in query.variables from the code name, which must not
+// show as drift.
+func TestEndpoint_UndeclaredVariable(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := endpointTestName()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if err := testAccCheckEndpointDestroy(s); err != nil {
+				return err
+			}
+			return testAccCheckInsightVariableDestroy(s)
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: testAccEndpointWithUndeclaredVariable(rName),
+				Check:  resource.TestCheckResourceAttr("posthog_endpoint.test", "current_version", "1"),
+			},
+			{
+				Config:   testAccEndpointWithUndeclaredVariable(rName),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// TestEndpoint_Materialization turns materialization on with bucket overrides,
+// removes the overrides, then turns materialization off. is_materialized must
+// read true straight after the apply, before the first run has finished.
+func TestEndpoint_Materialization(t *testing.T) {
+	skipIfNotAcceptance(t)
+
+	rName := endpointTestName()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(s *terraform.State) error {
+			if err := testAccCheckEndpointDestroy(s); err != nil {
+				return err
+			}
+			return testAccCheckInsightVariableDestroy(s)
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: testAccEndpointMaterialized(rName, true, `{ day = "hour" }`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_endpoint.test", "is_materialized", "true"),
+					resource.TestCheckResourceAttr("posthog_endpoint.test", "bucket_overrides.day", "hour"),
+				),
+			},
+			{
+				Config:   testAccEndpointMaterialized(rName, true, `{ day = "hour" }`),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccEndpointMaterialized(rName, true, ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("posthog_endpoint.test", "is_materialized", "true"),
+					resource.TestCheckNoResourceAttr("posthog_endpoint.test", "bucket_overrides.%"),
+				),
+			},
+			{
+				Config:   testAccEndpointMaterialized(rName, true, ""),
+				PlanOnly: true,
+			},
+			{
+				Config: testAccEndpointMaterialized(rName, false, ""),
+				Check:  resource.TestCheckResourceAttr("posthog_endpoint.test", "is_materialized", "false"),
+			},
+		},
+	})
+}
+
 func testAccEndpointBasic(name, sql string) string {
 	return fmt.Sprintf(`
 provider "posthog" {}
@@ -276,4 +354,50 @@ resource "posthog_endpoint" "test" {
   })
 }
 `, name)
+}
+
+func testAccEndpointWithUndeclaredVariable(name string) string {
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight_variable" "event_name" {
+  name               = "%[1]s event"
+  type               = "String"
+  default_value_json = jsonencode("$pageview")
+}
+
+resource "posthog_endpoint" "test" {
+  name = %[1]q
+  query_json = jsonencode({
+    kind  = "HogQLQuery"
+    query = "SELECT count() FROM events WHERE event = {variables.${posthog_insight_variable.event_name.code_name}}"
+  })
+}
+`, name)
+}
+
+func testAccEndpointMaterialized(name string, materialized bool, overrides string) string {
+	overridesLine := ""
+	if overrides != "" {
+		overridesLine = "bucket_overrides = " + overrides
+	}
+	return fmt.Sprintf(`
+provider "posthog" {}
+
+resource "posthog_insight_variable" "since" {
+  name               = "%[1]s since"
+  type               = "String"
+  default_value_json = jsonencode("2026-01-01")
+}
+
+resource "posthog_endpoint" "test" {
+  name            = %[1]q
+  is_materialized = %[2]t
+  %[3]s
+  query_json = jsonencode({
+    kind  = "HogQLQuery"
+    query = "SELECT toStartOfDay(timestamp) AS day, count() AS c FROM events WHERE timestamp >= {variables.${posthog_insight_variable.since.code_name}} GROUP BY day"
+  })
+}
+`, name, materialized, overridesLine)
 }
