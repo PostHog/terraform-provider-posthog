@@ -195,11 +195,12 @@ func TestEndpointMapResponseToModel(t *testing.T) {
 			wantQuery: configuredQuery,
 			wantOver:  types.MapNull(types.StringType),
 		},
-		"import keeps every non-null query field": {
+		// An import must plan clean against the documented configuration, which
+		// declares only variableId and code_name.
+		"import keeps every non-null query field except filled-in variable values": {
 			config:    core.NewNormalizedJSONNull(),
 			materials: &httpclient.EndpointMaterialization{Enabled: util.BoolPtr(false)},
-			wantQuery: `{"kind":"HogQLQuery","query":"SELECT {variables.event_name}","variables":{"` + variableID +
-				`":{"variableId":"` + variableID + `","code_name":"event_name","value":"$pageview","isNull":false}}}`,
+			wantQuery: configuredQuery,
 			wantOver: types.MapNull(types.StringType),
 		},
 		"is_materialized follows materialization.enabled, not whether the first run finished": {

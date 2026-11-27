@@ -442,13 +442,35 @@ func endpointQueryChanged(ctx context.Context, plan, state core.NormalizedJSON) 
 
 // endpointQueryForState keeps only the query fields the configuration sets, so
 // the fields PostHog adds (null defaults, variable values) do not show as drift.
-// With no configuration, as on import, it keeps every field PostHog set to a
-// non-null value.
+// With no configuration, as on import, it keeps the fields a configuration
+// would write: every non-null field, without the variable values PostHog
+// filled in.
 func endpointQueryForState(apiQuery map[string]interface{}, userQueryJSON string) (string, error) {
 	if userQueryJSON == "" {
-		return marshalJSON(dropJSONNulls(apiQuery))
+		query, _ := dropJSONNulls(apiQuery).(map[string]interface{})
+		return marshalJSON(dropFilledVariableValues(query))
 	}
 	return normalizeQueryForState(apiQuery, userQueryJSON)
+}
+
+// endpointFilledVariableFields are the fields PostHog adds to each entry of a
+// HogQL query's variables from the variable's default.
+var endpointFilledVariableFields = map[string]struct{}{"value": {}, "isNull": {}}
+
+// dropFilledVariableValues removes the value PostHog filled in on each
+// declared variable, so an imported endpoint matches a configuration that
+// declares only variableId and code_name.
+func dropFilledVariableValues(query map[string]interface{}) map[string]interface{} {
+	variables, ok := query["variables"].(map[string]interface{})
+	if !ok {
+		return query
+	}
+	for id, entry := range variables {
+		if fields, ok := entry.(map[string]interface{}); ok {
+			variables[id] = util.StripFields(fields, endpointFilledVariableFields)
+		}
+	}
+	return query
 }
 
 // dropJSONNulls removes null object members at every depth. PostHog stores a
